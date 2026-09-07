@@ -547,20 +547,6 @@ export class TestCardRepository {
   }
 
   /**
-   * Creates a merge commit by merging a branch into the current branch.
-   *
-   * Constraint: merge conflicts are not handled; caller is responsible for
-   * ensuring the merge is clean.
-   *
-   * @param cardId Identifier of the card repository where the merge is performed
-   * @param branchToMerge Name of the branch to merge
-   */
-  async createMergeCommit(cardId: string, branchToMerge: string): Promise<void> {
-    const git = this.getCardGit(cardId);
-    await git.merge([branchToMerge]);
-  }
-
-  /**
    * Gets the current HEAD commit SHA.
    *
    * @param cardId Identifier of the card repository to inspect

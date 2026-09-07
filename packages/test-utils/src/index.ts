@@ -4,11 +4,9 @@
  * deterministic fixture factories. Helpers here interact with filesystems,
  * sockets, and timers, making them best suited to integration-style tests.
  *
- * @summary Provide reusable test harnesses, fixture factories, and constants for Cards integration tests
+ * @summary Provide reusable test harnesses and fixture factories for Cards integration tests
  */
 
-// --- Constants ---
-export { CARD_STATUSES, TEST_CONSTANTS } from './constants/index.js';
 // --- Fixture Factories ---
 export {
   // Types

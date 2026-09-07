@@ -121,11 +121,6 @@ export class TestGitWorkspace {
    * these calls every `git commit` in the helper will fail in those
    * environments regardless of what the test itself does.
    *
-   * Precondition for `getFirstCommitSha()`: when `initialCommit` is `false`,
-   * no commit is made and `getFirstCommitSha()` will throw because there is no
-   * HEAD to resolve. Only call `getFirstCommitSha()` after at least one commit
-   * exists in the repo.
-   *
    * @param options Optional configuration
    * @param options.remoteUrl Optional remote URL to set as origin
    * @param options.initialCommit When `false`, skip writing README/.gitignore
@@ -273,19 +268,6 @@ export class TestGitWorkspace {
     } else {
       await this.git.addRemote(name, url);
     }
-  }
-
-  /**
-   * Gets the first commit SHA of this repository.
-   *
-   * @returns Full SHA hash for the root commit in this workspace
-   */
-  async getFirstCommitSha(): Promise<string> {
-    if (!this.git) {
-      throw new Error('Workspace not created');
-    }
-    const output = await this.git.raw(['rev-list', '--max-parents=0', 'HEAD']);
-    return output.trim();
   }
 
   /**

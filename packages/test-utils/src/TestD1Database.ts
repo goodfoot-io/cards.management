@@ -157,10 +157,6 @@ export class TestD1Database {
     return this.d1;
   }
 
-  async seed(sql: string): Promise<void> {
-    this.db.exec(sql);
-  }
-
   close(): void {
     this.db.close();
   }
