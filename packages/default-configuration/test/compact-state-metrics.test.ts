@@ -115,7 +115,7 @@ describe('buildState — uuid de-duplication', () => {
     });
     // Each line appears twice — the flush-artifact double-write.
     const lines = [turnA, turnA, turnB, turnB, toolLine, toolLine];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
 
     expect(state.turnCount).toBe(2); // 2 turns from 4 turn_duration lines
     expect(state.toolCallCount).toBe(2); // Read + Agent, not 4
@@ -124,13 +124,13 @@ describe('buildState — uuid de-duplication', () => {
 
   it('counts a line without a uuid once (never skipped)', () => {
     const noUuid = JSON.stringify({ type: 'system', subtype: 'turn_duration', durationMs: 500 });
-    const state = buildState([noUuid], undefined, undefined);
+    const state = buildState([noUuid], undefined);
     expect(state.turnCount).toBe(1);
   });
 
   it('does not skip distinct uuids that share other fields', () => {
     const lines = [turnDurationLine('t1'), turnDurationLine('t2'), turnDurationLine('t3')];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(state.turnCount).toBe(3);
   });
 });
@@ -154,7 +154,7 @@ describe('buildState — tallies', () => {
         ]
       }
     });
-    const state = buildState([agentDispatch, progress], undefined, undefined);
+    const state = buildState([agentDispatch, progress], undefined);
     expect(state.subagentCount).toBe(1); // only the top-level Agent dispatch
     expect(state.toolCallCount).toBe(3); // top Agent + subagent Bash + subagent Agent
   });
@@ -168,7 +168,7 @@ describe('buildState — tallies', () => {
       // Read is not a write — must not be counted as a touched file.
       assistantLine({ uuid: 'e4', toolUses: [{ name: 'Read', input: { file_path: '/ignored.ts' } }] })
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect([...state.filesTouched].sort()).toEqual(['/host.ts', '/types.ts']);
   });
 
@@ -177,7 +177,7 @@ describe('buildState — tallies', () => {
       assistantLine({ uuid: 'm1', model: 'claude-sonnet-4-5', text: 'hi' }),
       assistantLine({ uuid: 'm2', model: 'claude-opus-4-8', text: 'later' })
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(state.model).toBe('opus-4-8');
   });
 
@@ -187,7 +187,7 @@ describe('buildState — tallies', () => {
       turnDurationLine('t2', 1000, '2026-06-01T03:43:36.000Z'), // earlier clock time, same day
       turnDurationLine('t3', 1000, '2026-06-02T03:43:36.000Z') // latest
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(state.firstTimestamp).toBe(Date.parse('2026-06-01T03:43:36.000Z'));
     expect(state.lastTimestamp).toBe(Date.parse('2026-06-02T03:43:36.000Z'));
   });
@@ -197,7 +197,7 @@ describe('buildState — tallies', () => {
       assistantLine({ uuid: 'u1', messageId: 'msg-1', text: 'a', outputTokens: 100, inputTokens: 40 }),
       assistantLine({ uuid: 'u2', messageId: 'msg-2', text: 'b', outputTokens: 200, inputTokens: 60 })
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(state.outputTokensTotal).toBe(300);
     expect(state.inputTokensTotal).toBe(100);
   });
@@ -231,7 +231,7 @@ describe('buildState — token de-duplication by message.id (real producer shape
       outputTokens: 105,
       inputTokens: 6
     });
-    const state = buildState([thinkingLine, textLine, toolLine], undefined, undefined);
+    const state = buildState([thinkingLine, textLine, toolLine], undefined);
 
     // Tokens counted ONCE for the message, not 3× (the inflation bug).
     expect(state.outputTokensTotal).toBe(105);
@@ -254,7 +254,7 @@ describe('buildState — token de-duplication by message.id (real producer shape
         inputTokens: 1
       })
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(state.outputTokensTotal).toBe(256 + 140);
     expect(state.inputTokensTotal).toBe(6 + 1);
   });
@@ -264,14 +264,14 @@ describe('buildState — token de-duplication by message.id (real producer shape
     // uuid guard must keep collapsing those (it would otherwise double tokens
     // even before the message-id guard sees them).
     const line = assistantLine({ uuid: 'dup-uuid', messageId: 'msg_dup', text: 'x', outputTokens: 50, inputTokens: 5 });
-    const state = buildState([line, line], undefined, undefined);
+    const state = buildState([line, line], undefined);
     expect(state.outputTokensTotal).toBe(50);
     expect(state.inputTokensTotal).toBe(5);
   });
 
   it('counts a usage line without a message.id once (legacy fallback)', () => {
     const noId = assistantLine({ uuid: 'n1', text: 'a', outputTokens: 70, inputTokens: 7 });
-    const state = buildState([noId], undefined, undefined);
+    const state = buildState([noId], undefined);
     expect(state.outputTokensTotal).toBe(70);
     expect(state.inputTokensTotal).toBe(7);
   });
@@ -283,7 +283,7 @@ describe('headline — fallback chain', () => {
       assistantLine({ uuid: 'h1', text: 'Assistant said something.' }),
       awaySummaryLine('The session merged the change into main.')
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(headline(state)).toBe('The session merged the change into main.');
   });
 
@@ -292,14 +292,14 @@ describe('headline — fallback chain', () => {
       assistantLine({ uuid: 'h1', text: 'First assistant message.' }),
       assistantLine({ uuid: 'h2', text: 'Latest assistant message wins.' })
     ];
-    const state = buildState(lines, undefined, undefined);
+    const state = buildState(lines, undefined);
     expect(headline(state)).toBe('Latest assistant message wins.');
   });
 
   it('falls back to the latest tail text event when there is neither summary nor assistant text', () => {
     // A genuine user line produces a role:'user' text event that lands in the tail
     // but is NOT recorded as lastAssistantText.
-    const state = buildState([userLine('A genuine human prompt.')], undefined, undefined);
+    const state = buildState([userLine('A genuine human prompt.')], undefined);
     expect(state.lastAssistantText).toBe('');
     expect(headline(state)).toBe('A genuine human prompt.');
   });
@@ -313,7 +313,7 @@ describe('headline — fallback chain', () => {
       uuid: 'a1',
       toolUses: [{ name: 'Agent', input: { description: 'Plan failure-mode review' } }]
     });
-    const state = buildState([bash, agent], undefined, undefined);
+    const state = buildState([bash, agent], undefined);
     expect(state.awaySummary).toBe('');
     expect(state.lastAssistantText).toBe('');
     // Latest renderable tail event is the Agent dispatch.
@@ -326,7 +326,7 @@ describe('headline — fallback chain', () => {
     // sanitizer, nothing enters the tail, and there is no prose. The headline
     // is legitimately empty and the caller renders nothing for line 2.
     const markupOnly = '<command-name>runtime:foo</command-name><command-message>runtime:foo</command-message>';
-    const state = buildState([userLine(markupOnly)], undefined, undefined);
+    const state = buildState([userLine(markupOnly)], undefined);
     expect(state.tail).toEqual([]);
     expect(headline(state)).toBe('');
   });
@@ -334,7 +334,7 @@ describe('headline — fallback chain', () => {
   it('never surfaces a slash-command-markup user line (markup-leak regression lock)', () => {
     const markup =
       '<command-message>runtime:card-developer</command-message><command-name>runtime:card-developer</command-name><skill-format>true</skill-format>Base directory for this skill: /home/node/foo';
-    const state = buildState([userLine(markup)], undefined, undefined);
+    const state = buildState([userLine(markup)], undefined);
     expect(headline(state)).toBe('');
     // The leak text must not even enter the rolling tail.
     expect(state.tail).toEqual([]);
@@ -385,31 +385,31 @@ describe('sanitizeHeadline', () => {
 
 describe('buildState — subagent labeling from sidecar role/agentId', () => {
   it('is not a subagent when role is main, regardless of filename shape', () => {
-    const state = buildState([], 'main', false, undefined);
+    const state = buildState([], 'main');
     expect(state.isSubagent).toBe(false);
     expect(state.agentId).toBeUndefined();
   });
 
   it('is a subagent when role is subagent, and carries the sidecar agentId', () => {
-    const state = buildState([], 'subagent', false, 'agent-42');
+    const state = buildState([], 'subagent', 'agent-42');
     expect(state.isSubagent).toBe(true);
     expect(state.agentId).toBe('agent-42');
   });
 
   it('is a subagent when role is auxiliary', () => {
-    const state = buildState([], 'auxiliary', false, 'agent-aux');
+    const state = buildState([], 'auxiliary', 'agent-aux');
     expect(state.isSubagent).toBe(true);
     expect(state.agentId).toBe('agent-aux');
   });
 
   it('is not a subagent when role is undefined (unknown sidecar)', () => {
-    const state = buildState([], undefined, false, undefined);
+    const state = buildState([], undefined);
     expect(state.isSubagent).toBe(false);
   });
 
   it('reconcileFolded preserves subagent labeling across a rebuild triggered by a shrink', () => {
-    const initial = { state: buildState(['line1'], 'subagent', true, 'agent-7'), lineCount: 1 };
-    const rebuilt = reconcileFolded(initial, [], 'subagent', false, 'agent-7');
+    const initial = { state: buildState(['line1'], 'subagent', 'agent-7'), lineCount: 1 };
+    const rebuilt = reconcileFolded(initial, [], 'subagent', 'agent-7');
     expect(rebuilt.state.isSubagent).toBe(true);
     expect(rebuilt.state.agentId).toBe('agent-7');
   });

@@ -189,8 +189,6 @@ export async function readAntigravityHookFailure(sessionId: string): Promise<str
 export interface AntigravityLifecycleEvidence {
   /** Conversation identity proven by PreInvocation and, in background mode, stdout. */
   conversationId: string;
-  /** Whether PostInvocation recorded an idle decision or an injected route. */
-  postInvocation: 'idle' | 'route';
 }
 
 /**
@@ -271,7 +269,7 @@ export async function requireAntigravityLifecycleEvidence(
     );
   }
 
-  return { conversationId, postInvocation: hasIdle ? 'idle' : 'route' };
+  return { conversationId };
 }
 
 /**

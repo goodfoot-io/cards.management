@@ -47,8 +47,8 @@ function readPrimary(): { lines: string[]; isActive: boolean; role: string | und
  */
 export function CompactView(): React.ReactElement | null {
   const [folded, setFolded] = useState<FoldedState>(() => {
-    const { lines, role, isActive, agentId } = readPrimary();
-    return { state: buildState(lines, role, isActive, agentId), lineCount: lines.length };
+    const { lines, role, agentId } = readPrimary();
+    return { state: buildState(lines, role, agentId), lineCount: lines.length };
   });
   const [isActive, setIsActive] = useState<boolean>(() => readPrimary().isActive);
   // `now` drives the live elapsed timer; it only advances while the stream is
@@ -67,7 +67,7 @@ export function CompactView(): React.ReactElement | null {
     const sync = (): void => {
       const { lines, role, isActive: active, agentId } = readPrimary();
       setIsActive(active);
-      setFolded((prev) => reconcileFolded(prev, lines, role, active, agentId));
+      setFolded((prev) => reconcileFolded(prev, lines, role, agentId));
     };
     sync();
     return streamStore.subscribe(sync);

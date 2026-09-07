@@ -65,7 +65,7 @@ function awaySummaryLine(content: string): string {
  * @returns A folded state wrapping an empty `CompactState` with a zero watermark.
  */
 function emptyFolded(): FoldedState {
-  return { state: buildState([], 'session.jsonl', false), lineCount: 0 };
+  return { state: buildState([], 'session.jsonl'), lineCount: 0 };
 }
 
 describe('reconcileFolded — empty-on-boot history fold (blank-card regression)', () => {
@@ -78,7 +78,7 @@ describe('reconcileFolded — empty-on-boot history fold (blank-card regression)
       assistantLine({ text: 'Then it summarized the work.', outputTokens: 120 })
     ];
 
-    const folded = reconcileFolded(emptyFolded(), lines, 'session.jsonl', false);
+    const folded = reconcileFolded(emptyFolded(), lines, 'session.jsonl');
 
     // The headline must surface — not the blank box the regression produced.
     expect(headline(folded.state)).toBe('Rebuilt the compact card and verified it in the EDH.');
@@ -91,8 +91,8 @@ describe('reconcileFolded — empty-on-boot history fold (blank-card regression)
       assistantLine({ uuid: 'a1', text: 'hello', tool: 'Read', outputTokens: 10 }),
       assistantLine({ uuid: 'a2', text: 'world', tool: 'Agent', outputTokens: 20 })
     ];
-    const folded = reconcileFolded(emptyFolded(), lines, 'session.jsonl', false);
-    const direct = buildState(lines, 'session.jsonl', false);
+    const folded = reconcileFolded(emptyFolded(), lines, 'session.jsonl');
+    const direct = buildState(lines, 'session.jsonl');
 
     expect(headline(folded.state)).toBe(headline(direct));
     expect(folded.state.toolCallCount).toBe(direct.toolCallCount);
@@ -106,11 +106,11 @@ describe('reconcileFolded — incremental growth and de-duplication', () => {
     const first = assistantLine({ uuid: 'g1', tool: 'Read', outputTokens: 10 });
     const second = assistantLine({ uuid: 'g2', tool: 'Agent', outputTokens: 30 });
 
-    const afterFirst = reconcileFolded(emptyFolded(), [first], 'session.jsonl', true);
+    const afterFirst = reconcileFolded(emptyFolded(), [first], 'session.jsonl');
     expect(afterFirst.lineCount).toBe(1);
     expect(afterFirst.state.toolCallCount).toBe(1);
 
-    const afterSecond = reconcileFolded(afterFirst, [first, second], 'session.jsonl', true);
+    const afterSecond = reconcileFolded(afterFirst, [first, second], 'session.jsonl');
     expect(afterSecond.lineCount).toBe(2);
     expect(afterSecond.state.toolCallCount).toBe(2); // Read + Agent
     expect(afterSecond.state.subagentCount).toBe(1);
@@ -123,9 +123,9 @@ describe('reconcileFolded — incremental growth and de-duplication', () => {
     const dup = assistantLine({ uuid: 'dup-1', tool: 'Read', outputTokens: 50 });
     const fresh = assistantLine({ uuid: 'fresh-1', tool: 'Write', outputTokens: 5 });
 
-    const afterFirst = reconcileFolded(emptyFolded(), [dup], 'session.jsonl', true);
+    const afterFirst = reconcileFolded(emptyFolded(), [dup], 'session.jsonl');
     // Next slice repeats `dup` (the double-write) and appends `fresh`.
-    const afterSecond = reconcileFolded(afterFirst, [dup, dup, fresh], 'session.jsonl', true);
+    const afterSecond = reconcileFolded(afterFirst, [dup, dup, fresh], 'session.jsonl');
 
     expect(afterSecond.lineCount).toBe(3);
     expect(afterSecond.state.toolCallCount).toBe(2); // dup's Read counted once, plus Write
@@ -136,8 +136,8 @@ describe('reconcileFolded — incremental growth and de-duplication', () => {
 describe('reconcileFolded — no-op and shrink', () => {
   it('returns the previous folded value by reference when the line count is unchanged', () => {
     const lines = [assistantLine({ uuid: 'n1', text: 'steady' })];
-    const folded = reconcileFolded(emptyFolded(), lines, 'session.jsonl', false);
-    const again = reconcileFolded(folded, lines, 'session.jsonl', false);
+    const folded = reconcileFolded(emptyFolded(), lines, 'session.jsonl');
+    const again = reconcileFolded(folded, lines, 'session.jsonl');
     expect(again).toBe(folded); // identical reference → React bails out of re-render
   });
 
@@ -147,11 +147,11 @@ describe('reconcileFolded — no-op and shrink', () => {
       assistantLine({ uuid: 's2', tool: 'Agent' }),
       assistantLine({ uuid: 's3', tool: 'Write' })
     ];
-    const folded = reconcileFolded(emptyFolded(), wide, 'session.jsonl', false);
+    const folded = reconcileFolded(emptyFolded(), wide, 'session.jsonl');
     expect(folded.state.toolCallCount).toBe(3);
 
     const narrower = [assistantLine({ uuid: 's1', tool: 'Read' })];
-    const rebuilt = reconcileFolded(folded, narrower, 'session.jsonl', false);
+    const rebuilt = reconcileFolded(folded, narrower, 'session.jsonl');
     expect(rebuilt.lineCount).toBe(1);
     expect(rebuilt.state.toolCallCount).toBe(1); // not 3 — full rebuild, no stale tally
   });

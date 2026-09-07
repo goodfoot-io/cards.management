@@ -15,7 +15,7 @@ import { buildState, processLine } from '../src/streams/claude-code-session/www/
 // We use buildState with an empty lines array as a factory to ensure the
 // shape stays in sync with the real interface.
 function makeState() {
-  return buildState([], 'session.jsonl', undefined);
+  return buildState([], 'session.jsonl');
 }
 
 function awaySummaryLine(content: unknown): string {
@@ -55,13 +55,13 @@ describe('buildState — away_summary propagation', () => {
       awaySummaryLine('Paused mid-refactor, resume from step 3.'),
       JSON.stringify({ type: 'result', subtype: 'success', num_turns: 1, duration_ms: 1000 })
     ];
-    const state = buildState(lines, 'session.jsonl', undefined);
+    const state = buildState(lines, 'session.jsonl');
     expect(state.awaySummary).toBe('Paused mid-refactor, resume from step 3.');
   });
 
   it('overwrites an earlier away_summary with a later one', () => {
     const lines = [awaySummaryLine('First summary.'), awaySummaryLine('Second summary, supersedes the first.')];
-    const state = buildState(lines, 'session.jsonl', undefined);
+    const state = buildState(lines, 'session.jsonl');
     expect(state.awaySummary).toBe('Second summary, supersedes the first.');
   });
 });

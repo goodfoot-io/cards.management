@@ -18,7 +18,6 @@ const FILE_TOUCH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit']);
 const TAIL_CAP = 6;
 
 export interface CompactState {
-  sessionStatus: string;
   hasErrors: boolean;
   isSubagent: boolean;
   /** Agent identifier for a subagent/auxiliary stream, from the sidecar `agentId` field. Absent for main streams. */
@@ -68,7 +67,6 @@ export interface CompactState {
  */
 export function makeInitialState(): CompactState {
   return {
-    sessionStatus: 'running',
     hasErrors: false,
     isSubagent: false,
     durationS: 0,
@@ -89,17 +87,6 @@ export function makeInitialState(): CompactState {
     lastTimestamp: 0,
     lastAssistantText: ''
   };
-}
-
-/**
- * Derives initial status from stream file meta.
- * @param isActive - Whether the stream is live (not yet committed).
- * @returns Normalized session status string.
- */
-export function deriveInitialStatus(isActive: boolean): string {
-  if (isActive) return 'running';
-  // Committed streams: treat as success by default; error status requires a result event
-  return 'success';
 }
 
 /**
@@ -255,7 +242,6 @@ export function processLine(state: CompactState, line: string): void {
         break;
       }
       case 'result':
-        state.sessionStatus = evt.status;
         state.turnCount = evt.turns;
         state.durationS = evt.durationS;
         break;
@@ -291,18 +277,11 @@ function collectTouchedFiles(state: CompactState, msg: Record<string, unknown>):
  * Builds the full compact state from an array of JSONL lines.
  * @param lines - Array of raw JSONL lines to process.
  * @param role - The primary stream's sidecar `role` (`'main'`/`'subagent'`/`'auxiliary'`), used to label subagent sessions instead of any filename shape.
- * @param isActive - Whether the stream is live (not yet committed).
  * @param agentId - The primary stream's sidecar `agentId`, present for subagent/auxiliary streams.
  * @returns Fully populated compact state derived from all lines.
  */
-export function buildState(
-  lines: string[],
-  role: string | undefined,
-  isActive: boolean,
-  agentId?: string
-): CompactState {
+export function buildState(lines: string[], role: string | undefined, agentId?: string): CompactState {
   const state = makeInitialState();
-  state.sessionStatus = deriveInitialStatus(isActive);
   state.isSubagent = role === 'subagent' || role === 'auxiliary';
   state.agentId = agentId;
   for (const line of lines) {
@@ -340,7 +319,6 @@ export interface FoldedState {
  * @param prev - The previously folded state and its line watermark.
  * @param lines - The authoritative current lines from the store.
  * @param role - Primary stream's sidecar `role` (subagent detection on rebuild).
- * @param isActive - Whether the stream is live (seeds initial status on rebuild).
  * @param agentId - Primary stream's sidecar `agentId` (subagent label on rebuild).
  * @returns The reconciled folded state; `prev` by reference when nothing changed.
  */
@@ -348,12 +326,11 @@ export function reconcileFolded(
   prev: FoldedState,
   lines: string[],
   role: string | undefined,
-  isActive: boolean,
   agentId?: string
 ): FoldedState {
   const n = lines.length;
   if (n === prev.lineCount) return prev;
-  if (n < prev.lineCount) return { state: buildState(lines, role, isActive, agentId), lineCount: n };
+  if (n < prev.lineCount) return { state: buildState(lines, role, agentId), lineCount: n };
   // Fold only the lines past the watermark onto a fresh state object (new `tail`
   // array so React sees a changed reference); the de-dup Sets carry forward.
   const state: CompactState = { ...prev.state, tail: [...prev.state.tail] };
