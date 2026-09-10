@@ -57,7 +57,7 @@
   "scripts": {
     "build": "build-unchanged --input src --input scripts --input package.json --input ../claude-code-sessions/src --output dist --output ../../claude/cards/scaffold --manifest dist/.build-unchanged.json -- node scripts/build.mjs",
     "typecheck": "tsgo --noEmit",
-    "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -l",
+    "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -l ./src ./test",
     "test": "vitest-unchanged"
   },
   "dependencies": {
@@ -71,6 +71,7 @@
     "minimatch": "^10.2.5",
     "puppeteer-core": "^24.42.0",
     "typescript": "^6.0.3",
+    "zod": "^4.4.3",
     "zustand": "^5.0.0"
   },
   "devDependencies": {

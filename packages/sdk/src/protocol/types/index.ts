@@ -180,6 +180,108 @@ export type {
 export type { NotificationCreateRequest, NotificationSeverity } from './notifications.js';
 // --- Response Envelope Types ---
 export type { ApiError, ApiSuccess, FieldError } from './response.js';
+// --- Runtime Protocol: Authorization and Delivery Table ---
+export {
+  type AuthorizationContext,
+  type AuthorizationOutcome,
+  type AuthorizationRefusalReason,
+  authorizeMessage,
+  deliveryClassFor,
+  type ExecutionRequirement,
+  type MessageContract,
+  type MessageDirection,
+  RUNTIME_MESSAGE_CONTRACTS
+} from './runtime-authorization.js';
+// --- Runtime Protocol: Delivery Classes ---
+export {
+  authorizeTermination,
+  canRetireDurableResult,
+  DELIVERY_CLASS_POLICIES,
+  DELIVERY_CLASSES,
+  type DeliveryClass,
+  type DeliveryClassPolicy,
+  type DeliveryDecision,
+  type DeliveryDisposition,
+  type DurableIntentRecord,
+  type DurableResultRecord,
+  deliveryClassSchema,
+  evaluateDisposableTelemetry,
+  evaluateDurableIntent,
+  evaluateDurableResult,
+  evaluateReadinessReceipt,
+  evaluateReconciledSnapshot,
+  type ReadinessRecord,
+  type SnapshotStamp,
+  type TelemetryBufferState,
+  type TerminationAuthorization,
+  type TerminationAuthorizationInput,
+  type TerminationRefusalReason
+} from './runtime-delivery.js';
+// --- Runtime Protocol: Envelope ---
+export {
+  type EnvelopeRejectionReason,
+  EnvelopeValidationError,
+  envelopeHeaderSchema,
+  parseEnvelope,
+  type RuntimeEnvelope
+} from './runtime-envelope.js';
+// --- Runtime Protocol: Identity and State ---
+export {
+  CONNECTION_STATES,
+  type ConnectionState,
+  compareOwnership,
+  connectionStateSchema,
+  EXECUTION_LIFECYCLE_STATES,
+  type ExecutionIdentity,
+  type ExecutionLifecycleState,
+  type ExecutionRef,
+  executionIdentitySchema,
+  executionLifecycleStateSchema,
+  executionRefSchema,
+  isAdmittedExecution,
+  type OwnershipComparison,
+  type OwnershipStamp,
+  ownershipStampSchema,
+  PRODUCER_ROLES,
+  type ProducerIdentity,
+  type ProducerRole,
+  producerIdentitySchema,
+  producerRoleSchema,
+  type RuntimeScope,
+  runtimeScopeSchema
+} from './runtime-identity.js';
+// --- Runtime Protocol: Message Catalogue ---
+export {
+  MAX_CONTROL_FRAME_BYTES,
+  RUNTIME_MESSAGE_PAYLOADS,
+  RUNTIME_MESSAGE_TYPES,
+  type RuntimeMessageType,
+  type RuntimePayload,
+  runtimeMessageTypeSchema
+} from './runtime-messages.js';
+// --- Runtime Protocol: Transition Tables ---
+export {
+  CONNECTION_TRANSITIONS,
+  CONNECTION_TRIGGERS,
+  type ConnectionTransition,
+  type ConnectionTrigger,
+  EXECUTION_LIFECYCLE_TRANSITIONS,
+  findConnectionTransition,
+  findLifecycleTransition,
+  LIFECYCLE_GUARDS,
+  type LifecycleGuard,
+  type LifecycleTransition,
+  type LifecycleTrigger,
+  TERMINAL_LIFECYCLE_STATES
+} from './runtime-transitions.js';
+// --- Runtime Protocol: Version Gate ---
+export {
+  assertSupportedProtocolVersion,
+  protocolVersionSchema,
+  RUNTIME_PROTOCOL_VERSION,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  UnsupportedProtocolVersionError
+} from './runtime-version.js';
 // --- Settings Types ---
 export type {
   Action,
