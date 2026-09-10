@@ -133,3 +133,59 @@ describe('authorizeMessage', () => {
     expect(refusal(envelope, contextOf())).toBe('authorized');
   });
 });
+
+describe('runtime.resumeAck', () => {
+  const contract = RUNTIME_MESSAGE_CONTRACTS['runtime.resumeAck'];
+
+  const ack = (overrides: Partial<RuntimeEnvelope> = {}): RuntimeEnvelope =>
+    envelopeOf({
+      type: 'runtime.resumeAck',
+      producer: { producerId: 'server-a', role: 'server' },
+      causationId: 'resume-1',
+      payload: { revision: 4, acceptedMessageIds: ['m-1'] },
+      ...overrides
+    } as Partial<RuntimeEnvelope>);
+
+  const serverContext = (overrides: Partial<AuthorizationContext> = {}): AuthorizationContext =>
+    contextOf({
+      authenticatedRole: 'server',
+      authenticatedProducerId: 'server-a',
+      peerDirection: 'server-to-client',
+      ...overrides
+    });
+
+  it('travels server-to-client and admits no other sender', () => {
+    expect(contract.direction).toBe('server-to-client');
+    expect(contract.allowedRoles).toEqual(['server']);
+  });
+
+  it('refuses a client forging an acknowledgment for its own outbox', () => {
+    // The whole point of the message is that the client prunes what it names.
+    // A client able to send one to itself could retire an obligation the server
+    // never accepted, which is exactly the message loss the ack exists to prevent.
+    const forged = ack({ producer: { producerId: 'wrapper-1', role: 'runtime-wrapper' } });
+    expect(refusal(forged, contextOf())).toBe('wrong-direction');
+  });
+
+  it('names the resume that caused it rather than a caller request id', () => {
+    // `runtime.resume` carries no requestId, so there is none to propagate.
+    expect(contract.requiresRequestId).toBe(false);
+    expect(contract.requiresCausationId).toBe(true);
+    const uncaused = ack({ causationId: undefined });
+    expect(refusal(uncaused, serverContext())).toBe('missing-causation-id');
+  });
+
+  it('is a reconciled snapshot, so nothing is retained or replayed for it', () => {
+    expect(contract.deliveryClass).toBe('reconciled-snapshot');
+  });
+
+  it('authorizes a well-formed acknowledgment from the server', () => {
+    expect(refusal(ack(), serverContext())).toBe('authorized');
+  });
+
+  it('refuses a stale owner acknowledging after being fenced out', () => {
+    const stale = ack({ ownership: { ownerId: 'server-a', generation: 1 } });
+    expect(contract.requiresOwnershipCurrent).toBe(true);
+    expect(refusal(stale, serverContext())).toBe('ownership-stale');
+  });
+});

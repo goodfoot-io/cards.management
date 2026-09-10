@@ -20,6 +20,7 @@
 
 import { z } from 'zod';
 import { connectionStateSchema, executionLifecycleStateSchema } from './runtime-identity.js';
+import { MAX_OUTSTANDING_MESSAGES } from './runtime-transport.js';
 
 /**
  * Maximum size of a single control frame. Payloads that can legitimately exceed
@@ -100,6 +101,26 @@ export const resumePayloadSchema = z
     lifecycleState: executionLifecycleStateSchema,
     workRevision: workRevisionSchema,
     outstandingMessageIds: z.array(z.string().min(1)).max(1000)
+  })
+  .strict();
+
+/**
+ * Payload of `runtime.resumeAck`, the server's answer to `runtime.resume`.
+ *
+ * `acceptedMessageIds` is intersected against the `outstandingMessageIds` the
+ * client just named rather than reporting everything the server holds. A client
+ * learns only about its own obligations, so the answer cannot be used to
+ * enumerate message IDs belonging to other producers.
+ *
+ * An obligation the server cannot confirm is simply absent, whether it was
+ * never held, is held by another authority, or is held but unreadable. All
+ * three leave the client with the same correct action — replay it — so naming
+ * them apart would disclose server-side storage state to no purpose.
+ */
+export const resumeAckPayloadSchema = z
+  .object({
+    revision: snapshotRevisionSchema,
+    acceptedMessageIds: z.array(z.string().min(1)).max(MAX_OUTSTANDING_MESSAGES)
   })
   .strict();
 
@@ -350,6 +371,7 @@ export const watcherTelemetryPayloadSchema = z
 export const RUNTIME_MESSAGE_PAYLOADS = {
   'runtime.register': registerPayloadSchema,
   'runtime.resume': resumePayloadSchema,
+  'runtime.resumeAck': resumeAckPayloadSchema,
   'runtime.capabilities': capabilitiesPayloadSchema,
   'runtime.liveness': livenessPayloadSchema,
   'runtime.log': logPayloadSchema,

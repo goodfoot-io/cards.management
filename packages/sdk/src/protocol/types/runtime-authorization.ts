@@ -89,6 +89,21 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
+  'runtime.resumeAck': {
+    type: 'runtime.resumeAck',
+    direction: 'server-to-client',
+    // Derivable from durable state at any time: if it is lost, the next resume
+    // regenerates it. Nothing is retained or replayed on its behalf.
+    deliveryClass: 'reconciled-snapshot',
+    allowedRoles: ['server'],
+    executionRequirement: 'admitted',
+    // The `runtime.resume` that causes this carries no caller request ID, so
+    // there is none to propagate; causation names the resume itself instead.
+    requiresRequestId: false,
+    requiresCausationId: true,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   'runtime.capabilities': {
     type: 'runtime.capabilities',
     direction: 'client-to-server',
