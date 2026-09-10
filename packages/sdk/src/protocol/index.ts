@@ -22,6 +22,9 @@
 // --- Custom Types ---
 // --- API Request/Response Types ---
 // --- Remote Programmatic API Types ---
+// --- Input Constraints ---
+// --- Card Gates ---
+// --- Runtime Protocol: Launch Admission ---
 export type {
   Action,
   ActionClientMessage,
@@ -36,6 +39,10 @@ export type {
   AddBranchRequest,
   AddBranchResponse,
   AddCommitRequest,
+  AdmissionRejectionReason,
+  AdmissionScope,
+  AdmissionUncertaintyReason,
+  AdmittedLaunchCredentials,
   ApiError,
   ApiRequestMessage,
   ApiResponseMessage,
@@ -48,6 +55,7 @@ export type {
   AttachmentInfoFile,
   AttachmentRemovedEvent,
   AttachmentResponse,
+  BoundExecution,
   BranchesResponse,
   BranchInfo,
   BranchRegistrationIntent,
@@ -84,6 +92,7 @@ export type {
   CardsAssistant,
   CardsMetadataEvent,
   CardUnsubscribeMessage,
+  ClientLaunchAdmission,
   CodingAgentId,
   CollectedResourceReference,
   Command,
@@ -106,6 +115,7 @@ export type {
   ConnectionsResponse,
   CreateAttachmentRequest,
   CreateCardRequest,
+  CredentialRefusalReason,
   DomainEvent,
   ElementSpan,
   Environment,
@@ -136,7 +146,12 @@ export type {
   HtmlIntrinsicLayoutInputs,
   HtmlStylesheetReference,
   HttpClient,
+  ImmutableActionParams,
+  IssuedRoleCredential,
+  LaunchAdmissionRefusal,
+  LaunchAdmissionRequest,
   LaunchClaudeAction,
+  LaunchOutcome,
   ListCardsRequest,
   ListFilesCallback,
   ListTagsRequest,
@@ -145,17 +160,22 @@ export type {
   NavigateMessage,
   NotificationCreateRequest,
   NotificationSeverity,
+  OriginalCallerRequestId,
   PlanDriftValue,
+  PresentedCredential,
   ProcessState,
   ReadFileCallback,
   RemoveBranchRequest,
   RemoveBranchResponse,
+  ReplayedLaunchAdmission,
   ResourceReferenceClass,
+  RetrievedAdmission,
   ScriptSpan,
   ServerChangedMessage,
   SessionBaseline,
   SessionType,
   Settings,
+  SpawnPhase,
   StateUpdateMessage,
   StreamDefinition,
   StreamEndedEvent,
@@ -196,8 +216,6 @@ export type {
   WrapperErrorResponse,
   WrapperResponse
 } from './types/index.js';
-// --- Input Constraints ---
-// --- Card Gates ---
 // --- Runtime Protocol ---
 export {
   type AuthorizationContext,
