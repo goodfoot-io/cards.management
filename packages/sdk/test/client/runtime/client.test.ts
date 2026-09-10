@@ -49,7 +49,7 @@ const intent = (messageId: string): OutboundMessage<'execution.cancelRequest'> =
 });
 
 describe('connecting', () => {
-  it.skip('presents the role credential in headers on the upgrade', async () => {
+  it('presents the role credential in headers on the upgrade', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
     await client.connect();
@@ -59,7 +59,7 @@ describe('connecting', () => {
     expect(headers?.[RUNTIME_CREDENTIAL_HEADERS.secret]).toBe('secret-1');
   });
 
-  it.skip('reports connected with the generation the server assigned', async () => {
+  it('reports connected with the generation the server assigned', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
     const result = await client.connect();
@@ -68,7 +68,7 @@ describe('connecting', () => {
     expect(client.state).toBe('connected');
   });
 
-  it.skip('treats a first connection in the slot as not resumed', async () => {
+  it('treats a first connection in the slot as not resumed', async () => {
     server = await FakeRuntimeServer.start({
       registration: { status: 'registered', generation: 1, fencedGeneration: null } as never
     });
@@ -78,7 +78,7 @@ describe('connecting', () => {
     expect(result).toMatchObject({ status: 'connected', resumed: false });
   });
 
-  it.skip('treats displacing its own earlier connection as a resume', async () => {
+  it('treats displacing its own earlier connection as a resume', async () => {
     server = await FakeRuntimeServer.start({
       registration: { status: 'registered', generation: 2, fencedGeneration: 1 } as never
     });
@@ -88,7 +88,7 @@ describe('connecting', () => {
     expect(result).toMatchObject({ status: 'connected', resumed: true });
   });
 
-  it.skip('surfaces a registration refusal with the server reason rather than a generic failure', async () => {
+  it('surfaces a registration refusal with the server reason rather than a generic failure', async () => {
     server = await FakeRuntimeServer.start({
       registration: { status: 'refused', reason: 'ownership-superseded' }
     });
@@ -97,7 +97,7 @@ describe('connecting', () => {
     await expect(client.connect()).resolves.toEqual({ status: 'refused', reason: 'ownership-superseded' });
   });
 
-  it.skip('reports unavailable rather than throwing when discovery finds no endpoint', async () => {
+  it('reports unavailable rather than throwing when discovery finds no endpoint', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server, { discover: async () => null }));
     const result = await client.connect();
@@ -105,7 +105,7 @@ describe('connecting', () => {
     expect(result.status).toBe('unavailable');
   });
 
-  it.skip('rediscovers the endpoint on every attempt instead of reusing a remembered address', async () => {
+  it('rediscovers the endpoint on every attempt instead of reusing a remembered address', async () => {
     server = await FakeRuntimeServer.start();
     let calls = 0;
     const target = server;
@@ -126,7 +126,7 @@ describe('connecting', () => {
     expect(server.handshakes.at(-1)?.['authorization']).toBe('Bearer token-2');
   });
 
-  it.skip('does not retry under a generation the server already fenced', async () => {
+  it('does not retry under a generation the server already fenced', async () => {
     server = await FakeRuntimeServer.start({
       registration: { status: 'refused', reason: 'stale-generation' }
     });
@@ -139,7 +139,7 @@ describe('connecting', () => {
 });
 
 describe('synchronization before new work', () => {
-  it.skip('opens with a register or resume frame before anything else', async () => {
+  it('opens with a register or resume frame before anything else', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
     await client.connect();
@@ -147,7 +147,7 @@ describe('synchronization before new work', () => {
     expect(server.received[0]?.type).toMatch(/^runtime\.(register|resume)$/);
   });
 
-  it.skip('reports the server work revision rather than a locally assumed one', async () => {
+  it('reports the server work revision rather than a locally assumed one', async () => {
     server = await FakeRuntimeServer.start({ workRevision: 12 });
     client = createRuntimeClient(optionsFor(server));
     const result = await client.connect();
@@ -155,7 +155,7 @@ describe('synchronization before new work', () => {
     expect(result).toMatchObject({ synchronization: { workRevision: 12 } });
   });
 
-  it.skip('refuses to send before the barrier has been cleared', async () => {
+  it('refuses to send before the barrier has been cleared', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
 
@@ -165,7 +165,7 @@ describe('synchronization before new work', () => {
     });
   });
 
-  it.skip('replays an obligation the server did not confirm', async () => {
+  it('replays an obligation the server did not confirm', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'unconfirmed' }));
     server = await FakeRuntimeServer.start({ acceptedMessageIds: [] });
@@ -175,7 +175,7 @@ describe('synchronization before new work', () => {
     expect(result).toMatchObject({ synchronization: { pendingMessageIds: ['unconfirmed'] } });
   });
 
-  it.skip('retires an obligation the server confirmed instead of sending it again', async () => {
+  it('retires an obligation the server confirmed instead of sending it again', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'already-there' }));
     server = await FakeRuntimeServer.start({ acceptedMessageIds: ['already-there'] });
@@ -187,7 +187,7 @@ describe('synchronization before new work', () => {
 });
 
 describe('sending', () => {
-  it.skip('persists a durable intent before reporting anything to the caller', async () => {
+  it('persists a durable intent before reporting anything to the caller', async () => {
     const outbox = new MemoryOutbox();
     outbox.failWrites = true;
     server = await FakeRuntimeServer.start();
@@ -199,7 +199,7 @@ describe('sending', () => {
     expect(server.received.some((envelope) => envelope.messageId === 'msg-1')).toBe(false);
   });
 
-  it.skip('reports acceptance only once the server has durably taken the message', async () => {
+  it('reports acceptance only once the server has durably taken the message', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
     await client.connect();
@@ -207,7 +207,7 @@ describe('sending', () => {
     await expect(client.send(intent('msg-1'))).resolves.toEqual({ status: 'accepted', messageId: 'msg-1' });
   });
 
-  it.skip('retires the outbox record once acceptance arrives', async () => {
+  it('retires the outbox record once acceptance arrives', async () => {
     const outbox = new MemoryOutbox();
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server, { outbox }));
@@ -217,7 +217,7 @@ describe('sending', () => {
     expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(false);
   });
 
-  it.skip('answers a resend of the same message id without duplicating the record', async () => {
+  it('answers a resend of the same message id without duplicating the record', async () => {
     const outbox = new MemoryOutbox();
     server = await FakeRuntimeServer.start({ withholdAcceptance: true });
     client = createRuntimeClient(optionsFor(server, { outbox }));
@@ -229,7 +229,7 @@ describe('sending', () => {
     expect(outbox.stored.filter((record) => record.messageId === 'msg-1')).toHaveLength(1);
   });
 
-  it.skip('reports uncertainty and keeps the record when the deadline expires', async () => {
+  it('reports uncertainty and keeps the record when the deadline expires', async () => {
     const outbox = new MemoryOutbox();
     server = await FakeRuntimeServer.start({ withholdAcceptance: true });
     client = createRuntimeClient(optionsFor(server, { outbox }));
@@ -241,7 +241,7 @@ describe('sending', () => {
     expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(true);
   });
 
-  it.skip('reports uncertainty rather than failure when the connection dies mid-flight', async () => {
+  it('reports uncertainty rather than failure when the connection dies mid-flight', async () => {
     const outbox = new MemoryOutbox();
     server = await FakeRuntimeServer.start({ withholdAcceptance: true });
     client = createRuntimeClient(optionsFor(server, { outbox }));
@@ -254,7 +254,7 @@ describe('sending', () => {
     expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(true);
   });
 
-  it.skip('never reports a deadline expiry as a rejection, since the server may still have it', async () => {
+  it('never reports a deadline expiry as a rejection, since the server may still have it', async () => {
     server = await FakeRuntimeServer.start({ withholdAcceptance: true });
     client = createRuntimeClient(optionsFor(server));
     await client.connect();
@@ -263,7 +263,7 @@ describe('sending', () => {
     expect(outcome.status).not.toBe('rejected');
   });
 
-  it.skip('rejects a frame larger than the control-frame cap without sending it', async () => {
+  it('rejects a frame larger than the control-frame cap without sending it', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
     await client.connect();
@@ -278,7 +278,7 @@ describe('sending', () => {
     expect(server.received).toHaveLength(before);
   });
 
-  it.skip('does not persist disposable telemetry to the durable outbox', async () => {
+  it('does not persist disposable telemetry to the durable outbox', async () => {
     const outbox = new MemoryOutbox();
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server, { outbox }));
@@ -296,7 +296,7 @@ describe('sending', () => {
 });
 
 describe('closing', () => {
-  it.skip('closes under its current generation so a successor is not evicted', async () => {
+  it('closes under its current generation so a successor is not evicted', async () => {
     server = await FakeRuntimeServer.start({
       registration: { status: 'registered', generation: 4, fencedGeneration: 3 } as never
     });
@@ -309,7 +309,7 @@ describe('closing', () => {
     expect(client.state).toBe('disconnected');
   });
 
-  it.skip('is safe to close a client that never connected', async () => {
+  it('is safe to close a client that never connected', async () => {
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
 

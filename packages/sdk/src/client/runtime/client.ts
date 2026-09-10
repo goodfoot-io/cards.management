@@ -1,4 +1,29 @@
-import type { RuntimeClient, RuntimeClientOptions } from './types.js';
+import type {
+  ConnectionGeneration,
+  ConnectionState,
+  RegistrationOutcome,
+  RuntimeEnvelope,
+  RuntimeMessageType
+} from '../../protocol/types/index.js';
+import {
+  deliveryClassFor,
+  parseEnvelope,
+  RUNTIME_MESSAGE_CONTRACTS,
+  RUNTIME_PROTOCOL_VERSION,
+  registrationOutcomeSchema
+} from '../../protocol/types/index.js';
+import { buildHandshakeRequest } from './handshake.js';
+import type { ClientOutbox } from './outbox/index.js';
+import { reconcileOutboxOnStartup } from './outbox/index.js';
+import { collectOutstandingMessageIds, synchronize } from './synchronization.js';
+import type {
+  ConnectResult,
+  OutboundMessage,
+  RuntimeClient,
+  RuntimeClientOptions,
+  SendOutcome,
+  SynchronizationReport
+} from './types.js';
 
 /**
  * The shared runtime client every producer connects through.
@@ -18,13 +43,414 @@ import type { RuntimeClient, RuntimeClientOptions } from './types.js';
  */
 
 /**
+ * What this client can do on behalf of its execution. Fixed for now: capability negotiation
+ * is the agent adapter's concern, and announcing a capability the adapter lacks is worse
+ * than announcing none.
+ */
+const DECLARED_CAPABILITIES = {
+  switchToInteractive: false,
+  agentShutdown: false,
+  strictDrainBarrier: false
+} as const;
+
+/**
+ * A view of the outbox holding only records this client does not speak for.
+ *
+ * Startup reconciliation and the resume barrier both want to settle a pending record, and
+ * only one of them is entitled to. For this execution's own obligations the server's
+ * `acceptedMessageIds` is the answer, and handing them to a recovery authority first would
+ * retire an obligation nobody has yet accepted. What is left — records written by an
+ * execution that has since exited — is what recovery exists for, so that is all it sees.
+ *
+ * @param outbox - The store shared by every execution under this outbox root.
+ * @param executionId - The execution this client speaks for.
+ * @returns The same store, with this execution's records hidden from `scanAll`.
+ */
+function orphansOf(outbox: ClientOutbox, executionId: string): ClientOutbox {
+  return {
+    enqueue: (input) => outbox.enqueue(input),
+    scan: (scope) => outbox.scan(scope),
+    scanAll: async () => {
+      const result = await outbox.scanAll();
+      return { ...result, records: result.records.filter((record) => record.executionId !== executionId) };
+    },
+    refFor: (record) => outbox.refFor(record),
+    retire: (ref, ack) => outbox.retire(ref, ack)
+  };
+}
+
+/** Delivery classes whose messages must survive this process dying. */
+const DURABLE_CLASSES = new Set(['durable-intent', 'durable-result']);
+
+/**
+ * Node's `WebSocket` accepts a non-standard `headers` option that the browser one does not.
+ * The runtime route requires credentials in headers rather than the URL, and `ws` is only a
+ * devDependency here, so this option is what lets the rule hold with no new dependency.
+ * Verified against Node 24; do not "fix" it into a spec-compliant two-argument call.
+ */
+type NodeWebSocketInit = { readonly headers: Readonly<Record<string, string>> };
+
+type SocketFactory = new (url: string, init: NodeWebSocketInit) => WebSocket;
+
+interface PendingFrame {
+  readonly matches: (envelope: RuntimeEnvelope) => boolean;
+  readonly settle: (envelope: RuntimeEnvelope) => void;
+}
+
+class RuntimeClientImpl implements RuntimeClient {
+  private readonly options: RuntimeClientOptions;
+  private socket: WebSocket | null = null;
+  private currentState: ConnectionState = 'disconnected';
+  private currentGeneration: ConnectionGeneration | null = null;
+  private synchronization: SynchronizationReport | null = null;
+  private hasRecovered = false;
+  private readonly waiters = new Set<PendingFrame>();
+  private connectionLost: (() => void)[] = [];
+
+  constructor(options: RuntimeClientOptions) {
+    this.options = options;
+  }
+
+  get state(): ConnectionState {
+    return this.currentState;
+  }
+
+  get generation(): ConnectionGeneration | null {
+    return this.currentGeneration;
+  }
+
+  async connect(): Promise<ConnectResult> {
+    if (this.currentState === 'fenced') {
+      return { status: 'unavailable', detail: 'connection is fenced under this generation' };
+    }
+    this.currentState = 'connecting';
+
+    const target = await this.options.discover();
+    if (target === null) {
+      this.currentState = 'disconnected';
+      return { status: 'unavailable', detail: 'no runtime endpoint was discovered' };
+    }
+
+    const request = buildHandshakeRequest(target, this.options.credential);
+    const Socket = globalThis.WebSocket as unknown as SocketFactory;
+    const socket = new Socket(request.url, { headers: request.headers });
+    this.socket = socket;
+    this.currentState = 'authenticating';
+
+    const registration = await this.openAndRegister(socket);
+    if (registration === null) {
+      this.currentState = 'disconnected';
+      return { status: 'unavailable', detail: 'the connection closed before registration' };
+    }
+    if (registration.status === 'refused') {
+      this.currentState = 'fenced';
+      this.closeSocket();
+      return { status: 'refused', reason: registration.reason };
+    }
+
+    this.currentGeneration = registration.generation;
+    const resumed = registration.fencedGeneration !== null;
+    this.currentState = 'synchronizing';
+
+    const synchronization = await this.runBarrier(socket, resumed);
+    if (synchronization === null) {
+      this.currentState = 'disconnected';
+      return { status: 'unavailable', detail: 'the connection closed during synchronization' };
+    }
+
+    this.synchronization = synchronization;
+    this.currentState = 'connected';
+    return { status: 'connected', generation: registration.generation, resumed, synchronization };
+  }
+
+  async send<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<SendOutcome> {
+    const socket = this.socket;
+    if (this.currentState !== 'connected' || socket === null || this.synchronization === null) {
+      return { status: 'rejected', messageId: message.messageId, reason: 'not-synchronized' };
+    }
+
+    const envelope = this.envelopeFor(message);
+    const frame = JSON.stringify(envelope);
+    if (frame.length > RUNTIME_MESSAGE_CONTRACTS[message.type].maxFrameBytes) {
+      return { status: 'rejected', messageId: message.messageId, reason: 'frame-too-large' };
+    }
+
+    const deliveryClass = deliveryClassFor(message.type);
+    const durable = DURABLE_CLASSES.has(deliveryClass);
+    if (durable) {
+      const persisted = await this.persist(message, envelope, deliveryClass);
+      if (persisted !== null) {
+        return persisted;
+      }
+    }
+
+    socket.send(frame);
+    if (!durable) {
+      return { status: 'accepted', messageId: message.messageId };
+    }
+
+    return this.awaitAcceptance(message);
+  }
+
+  async close(): Promise<void> {
+    this.closeSocket();
+    this.synchronization = null;
+    if (this.currentState !== 'fenced') {
+      this.currentState = 'disconnected';
+    }
+  }
+
+  private closeSocket(): void {
+    const socket = this.socket;
+    this.socket = null;
+    if (socket !== null && socket.readyState <= 1) {
+      // Closing under the generation we hold; a late close from a fenced socket must not
+      // evict the successor that displaced it, which is why the socket is dropped first.
+      socket.close(1000, `generation:${String(this.currentGeneration ?? 0)}`);
+    }
+  }
+
+  private envelopeFor<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): RuntimeEnvelope<TType> {
+    return {
+      protocolVersion: RUNTIME_PROTOCOL_VERSION,
+      messageId: message.messageId,
+      ...(message.requestId === undefined ? {} : { requestId: message.requestId }),
+      ...(message.causationId === undefined ? {} : { causationId: message.causationId }),
+      sentAt: (this.options.now?.() ?? new Date()).toISOString(),
+      execution: message.execution,
+      scope: this.options.identity.scope,
+      producer: this.options.identity.producer,
+      ownership: this.options.identity.ownership,
+      type: message.type,
+      payload: message.payload
+    };
+  }
+
+  private async persist<TType extends RuntimeMessageType>(
+    message: OutboundMessage<TType>,
+    envelope: RuntimeEnvelope<TType>,
+    deliveryClass: string
+  ): Promise<SendOutcome | null> {
+    const executionId = message.execution?.executionId;
+    if (executionId === undefined || executionId === null) {
+      return { status: 'rejected', messageId: message.messageId, reason: 'scope-mismatch' };
+    }
+    try {
+      await this.options.outbox.enqueue({
+        messageId: message.messageId,
+        executionId,
+        requestId: message.requestId ?? message.messageId,
+        role: this.options.identity.producer.role,
+        deliveryClass: deliveryClass as 'durable-intent' | 'durable-result',
+        envelope
+      });
+      return null;
+    } catch {
+      // The record is what makes a send recoverable. Without it the message must not reach
+      // the wire at all, or a crash leaves an effect the client has no memory of requesting.
+      return {
+        status: 'uncertain',
+        messageId: message.messageId,
+        reason: 'storage-unavailable',
+        requestId: message.requestId
+      };
+    }
+  }
+
+  private async awaitAcceptance<TType extends RuntimeMessageType>(
+    message: OutboundMessage<TType>
+  ): Promise<SendOutcome> {
+    const accepted = await this.waitForFrame(
+      (envelope) =>
+        envelope.type === 'runtime.accepted' &&
+        (envelope.payload as { acknowledgedMessageId?: string }).acknowledgedMessageId === message.messageId,
+      message.deadlineMs
+    );
+
+    if (accepted === 'timeout') {
+      return {
+        status: 'uncertain',
+        messageId: message.messageId,
+        reason: 'deadline-expired',
+        requestId: message.requestId
+      };
+    }
+    if (accepted === 'closed') {
+      return {
+        status: 'uncertain',
+        messageId: message.messageId,
+        reason: 'connection-lost',
+        requestId: message.requestId
+      };
+    }
+
+    await this.retire(message);
+    return { status: 'accepted', messageId: message.messageId };
+  }
+
+  private async retire<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<void> {
+    const { records } = await this.options.outbox.scanAll();
+    const record = records.find((candidate) => candidate.messageId === message.messageId);
+    if (record === undefined) {
+      return;
+    }
+    await this.options.outbox.retire(this.options.outbox.refFor(record), {
+      messageId: message.messageId,
+      acknowledgedAt: (this.options.now?.() ?? new Date()).toISOString()
+    });
+  }
+
+  private async openAndRegister(socket: WebSocket): Promise<RegistrationOutcome | null> {
+    const opened = await new Promise<boolean>((resolve) => {
+      socket.addEventListener('open', () => resolve(true), { once: true });
+      socket.addEventListener('error', () => resolve(false), { once: true });
+      socket.addEventListener('close', () => resolve(false), { once: true });
+    });
+    if (!opened) {
+      return null;
+    }
+
+    const registration = new Promise<RegistrationOutcome | null>((resolve) => {
+      const onMessage = (event: MessageEvent): void => {
+        socket.removeEventListener('message', onMessage);
+        const parsed = registrationOutcomeSchema.safeParse(JSON.parse(String(event.data)));
+        resolve(parsed.success ? parsed.data : null);
+      };
+      socket.addEventListener('message', onMessage);
+      socket.addEventListener('close', () => resolve(null), { once: true });
+    });
+
+    const outcome = await registration;
+    if (outcome !== null && outcome.status === 'registered') {
+      this.attachFrameRouter(socket);
+    }
+    return outcome;
+  }
+
+  private attachFrameRouter(socket: WebSocket): void {
+    socket.addEventListener('message', (event: MessageEvent) => {
+      let envelope: RuntimeEnvelope;
+      try {
+        envelope = parseEnvelope(JSON.parse(String(event.data)));
+      } catch {
+        return;
+      }
+      for (const waiter of [...this.waiters]) {
+        if (waiter.matches(envelope)) {
+          this.waiters.delete(waiter);
+          waiter.settle(envelope);
+        }
+      }
+    });
+    socket.addEventListener('close', () => {
+      this.waiters.clear();
+      const listeners = this.connectionLost;
+      this.connectionLost = [];
+      for (const listener of listeners) {
+        listener();
+      }
+      if (this.currentState === 'connected') {
+        this.currentState = 'disconnected';
+      }
+    });
+  }
+
+  private async waitForFrame(
+    matches: (envelope: RuntimeEnvelope) => boolean,
+    deadlineMs: number | undefined
+  ): Promise<RuntimeEnvelope | 'timeout' | 'closed'> {
+    return new Promise((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const waiter: PendingFrame = {
+        matches,
+        settle: (envelope) => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+          }
+          resolve(envelope);
+        }
+      };
+      this.waiters.add(waiter);
+      this.connectionLost.push(() => {
+        if (timer !== undefined) {
+          clearTimeout(timer);
+        }
+        resolve('closed');
+      });
+      if (deadlineMs !== undefined) {
+        timer = setTimeout(() => {
+          this.waiters.delete(waiter);
+          resolve('timeout');
+        }, deadlineMs);
+      }
+    });
+  }
+
+  private async runBarrier(socket: WebSocket, resumed: boolean): Promise<SynchronizationReport | null> {
+    const executionId = this.executionId();
+    const outstanding = resumed ? await collectOutstandingMessageIds(this.options.outbox, executionId) : [];
+
+    const execution = { executionId, launchRequestId: this.options.credential.requestId };
+    const base = {
+      revision: 0,
+      capabilities: DECLARED_CAPABILITIES,
+      lifecycleState: 'running',
+      workRevision: 0
+    } as const;
+
+    const opening: OutboundMessage<'runtime.register'> | OutboundMessage<'runtime.resume'> = resumed
+      ? {
+          type: 'runtime.resume',
+          payload: { ...base, outstandingMessageIds: [...outstanding] },
+          messageId: `resume-${String(this.currentGeneration ?? 0)}`,
+          execution
+        }
+      : {
+          type: 'runtime.register',
+          payload: base,
+          messageId: `register-${String(this.currentGeneration ?? 0)}`,
+          execution
+        };
+
+    const reply = this.waitForFrame((envelope) => envelope.type === 'runtime.resumeAck', undefined);
+    socket.send(JSON.stringify(this.envelopeFor(opening)));
+    const acknowledgment = await reply;
+    if (acknowledgment === 'timeout' || acknowledgment === 'closed') {
+      return null;
+    }
+
+    const payload = acknowledgment.payload as { workRevision: number; acceptedMessageIds: readonly string[] };
+    const report = await synchronize({
+      outbox: this.options.outbox,
+      authorities: this.options.authorities,
+      executionId,
+      acknowledgment: { workRevision: payload.workRevision, acceptedMessageIds: payload.acceptedMessageIds },
+      recoverOrphans: false
+    });
+
+    if (this.hasRecovered) {
+      return report;
+    }
+    this.hasRecovered = true;
+    const reconciliation = await reconcileOutboxOnStartup(
+      orphansOf(this.options.outbox, executionId),
+      this.options.authorities
+    );
+    return { ...report, reconciliation };
+  }
+
+  private executionId(): string {
+    const subject = this.options.identity.subject;
+    return subject.kind === 'execution' ? subject.executionId : subject.cardId;
+  }
+}
+
+/**
  * Creates a runtime client. The returned client is disconnected until {@link RuntimeClient.connect}.
  *
  * @param options - Identity, credential, outbox, authorities, and discovery.
  * @returns A client bound to those options.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function createRuntimeClient(options: RuntimeClientOptions): RuntimeClient {
-  void options;
-  throw new Error('Not Implemented');
+  return new RuntimeClientImpl(options);
 }
