@@ -14,35 +14,35 @@ import { compareOwnership, isAdmittedExecution } from '../../../src/protocol/typ
 const owner = (ownerId: string, generation: number): OwnershipStamp => ({ ownerId, generation });
 
 describe('ownership generation fencing', () => {
-  it.skip('treats the first stamp as newer when no ownership is recorded', () => {
+  it('treats the first stamp as newer when no ownership is recorded', () => {
     expect(compareOwnership(owner('server-a', 1), undefined)).toBe('newer');
   });
 
-  it.skip('accepts a higher generation from the same owner', () => {
+  it('accepts a higher generation from the same owner', () => {
     expect(compareOwnership(owner('server-a', 4), owner('server-a', 3))).toBe('newer');
   });
 
-  it.skip('rejects a lower generation as stale', () => {
+  it('rejects a lower generation as stale', () => {
     expect(compareOwnership(owner('server-a', 2), owner('server-a', 3))).toBe('stale');
   });
 
-  it.skip('reports an identical stamp as same rather than newer', () => {
+  it('reports an identical stamp as same rather than newer', () => {
     expect(compareOwnership(owner('server-a', 3), owner('server-a', 3))).toBe('same');
   });
 
-  it.skip('lets a different owner bearing a higher generation take over', () => {
+  it('lets a different owner bearing a higher generation take over', () => {
     expect(compareOwnership(owner('server-b', 4), owner('server-a', 3))).toBe('newer');
   });
 
-  it.skip('rejects a different owner bearing a lower generation as stale', () => {
+  it('rejects a different owner bearing a lower generation as stale', () => {
     expect(compareOwnership(owner('server-b', 2), owner('server-a', 3))).toBe('stale');
   });
 
-  it.skip('fails closed when two different owners claim the same generation', () => {
+  it('fails closed when two different owners claim the same generation', () => {
     expect(compareOwnership(owner('server-b', 3), owner('server-a', 3))).toBe('conflict');
   });
 
-  it.skip('compares on generation alone, never on owner identity ordering', () => {
+  it('compares on generation alone, never on owner identity ordering', () => {
     expect(compareOwnership(owner('aaa', 9), owner('zzz', 1))).toBe('newer');
     expect(compareOwnership(owner('zzz', 1), owner('aaa', 9))).toBe('stale');
   });

@@ -22,19 +22,19 @@ describe('runtime protocol version', () => {
     expect(SUPPORTED_PROTOCOL_VERSIONS).toHaveLength(1);
   });
 
-  it.skip('accepts the version this build speaks', () => {
+  it('accepts the version this build speaks', () => {
     expect(() => assertSupportedProtocolVersion(RUNTIME_PROTOCOL_VERSION)).not.toThrow();
   });
 
-  it.skip('rejects an older version instead of negotiating down to it', () => {
+  it('rejects an older version instead of negotiating down to it', () => {
     expect(() => assertSupportedProtocolVersion(RUNTIME_PROTOCOL_VERSION - 1)).toThrow(UnsupportedProtocolVersionError);
   });
 
-  it.skip('rejects a newer version instead of optimistically accepting it', () => {
+  it('rejects a newer version instead of optimistically accepting it', () => {
     expect(() => assertSupportedProtocolVersion(RUNTIME_PROTOCOL_VERSION + 1)).toThrow(UnsupportedProtocolVersionError);
   });
 
-  it.skip('names both the offered and the supported versions on rejection', () => {
+  it('names both the offered and the supported versions on rejection', () => {
     let caught: unknown;
     try {
       assertSupportedProtocolVersion(99);
@@ -48,13 +48,13 @@ describe('runtime protocol version', () => {
     expect(rejection.message).toContain('99');
   });
 
-  it.skip('rejects non-integer and non-numeric version values', () => {
+  it('rejects non-integer and non-numeric version values', () => {
     for (const value of [1.5, '1', null, undefined, {}, [], Number.NaN]) {
       expect(() => assertSupportedProtocolVersion(value)).toThrow(UnsupportedProtocolVersionError);
     }
   });
 
-  it.skip('narrows the value to a number once the assertion passes', () => {
+  it('narrows the value to a number once the assertion passes', () => {
     const received: unknown = RUNTIME_PROTOCOL_VERSION;
     assertSupportedProtocolVersion(received);
     expect(received.toFixed(0)).toBe(String(RUNTIME_PROTOCOL_VERSION));

@@ -75,6 +75,7 @@ export class UnsupportedProtocolVersionError extends Error {
  *   version, including when it is absent or not a number.
  */
 export function assertSupportedProtocolVersion(received: unknown): asserts received is number {
-  void received;
-  throw new Error('Not Implemented');
+  if (!protocolVersionSchema.safeParse(received).success) {
+    throw new UnsupportedProtocolVersionError(received);
+  }
 }

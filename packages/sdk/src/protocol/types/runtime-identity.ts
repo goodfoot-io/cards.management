@@ -238,10 +238,16 @@ export type OwnershipComparison = 'newer' | 'same' | 'stale' | 'conflict';
  *   `undefined` when no ownership has been established yet.
  * @returns How `incoming` relates to `current`; `newer` when no ownership was
  *   previously recorded.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function compareOwnership(incoming: OwnershipStamp, current: OwnershipStamp | undefined): OwnershipComparison {
-  void incoming;
-  void current;
-  throw new Error('Not Implemented');
+  if (current === undefined) {
+    return 'newer';
+  }
+  if (incoming.generation > current.generation) {
+    return 'newer';
+  }
+  if (incoming.generation < current.generation) {
+    return 'stale';
+  }
+  return incoming.ownerId === current.ownerId ? 'same' : 'conflict';
 }

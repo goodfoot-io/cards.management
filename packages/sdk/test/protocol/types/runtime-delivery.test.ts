@@ -51,38 +51,38 @@ describe('reconciled snapshot, via runtime.liveness', () => {
     revision
   });
 
-  it.skip('accepts the first snapshot when none is recorded', () => {
+  it('accepts the first snapshot when none is recorded', () => {
     expect(evaluateReconciledSnapshot(stamp(1, 1), undefined).disposition).toBe('accept');
   });
 
-  it.skip('accepts a higher revision within the same generation', () => {
+  it('accepts a higher revision within the same generation', () => {
     expect(evaluateReconciledSnapshot(stamp(1, 5), stamp(1, 4)).disposition).toBe('accept');
   });
 
-  it.skip('ignores a replayed snapshot rather than reapplying it', () => {
+  it('ignores a replayed snapshot rather than reapplying it', () => {
     expect(evaluateReconciledSnapshot(stamp(1, 4), stamp(1, 4)).disposition).toBe('ignore-stale');
   });
 
-  it.skip('ignores an older revision so the newest snapshot wins', () => {
+  it('ignores an older revision so the newest snapshot wins', () => {
     expect(evaluateReconciledSnapshot(stamp(1, 3), stamp(1, 4)).disposition).toBe('ignore-stale');
   });
 
-  it.skip('fences a stale generation even when it carries a higher revision', () => {
+  it('fences a stale generation even when it carries a higher revision', () => {
     expect(evaluateReconciledSnapshot(stamp(1, 99), stamp(2, 1)).disposition).toBe('reject-fenced');
   });
 });
 
 describe('durable intent, via execution.executeRequest', () => {
-  it.skip('accepts an intent never seen before', () => {
+  it('accepts an intent never seen before', () => {
     expect(evaluateDurableIntent('msg-1', undefined).disposition).toBe('accept');
   });
 
-  it.skip('accepts a replay persisted but not yet accepted, closing the crash window', () => {
+  it('accepts a replay persisted but not yet accepted, closing the crash window', () => {
     const record: DurableIntentRecord = { messageId: 'msg-1', persisted: true, accepted: false };
     expect(evaluateDurableIntent('msg-1', record).disposition).toBe('accept');
   });
 
-  it.skip('answers a replay of an accepted intent from the record instead of repeating the effect', () => {
+  it('answers a replay of an accepted intent from the record instead of repeating the effect', () => {
     const record: DurableIntentRecord = {
       messageId: 'msg-1',
       persisted: true,
@@ -94,17 +94,17 @@ describe('durable intent, via execution.executeRequest', () => {
 });
 
 describe('revocable readiness, via execution.shutdownReadiness', () => {
-  it.skip('accepts current readiness as durably stored evidence', () => {
+  it('accepts current readiness as durably stored evidence', () => {
     expect(evaluateReadinessReceipt({ shutdownRequestId: 'sd-1', workRevision: 7 }, 7).disposition).toBe('accept');
   });
 
-  it.skip('stores superseded readiness but requires revalidation before it authorizes anything', () => {
+  it('stores superseded readiness but requires revalidation before it authorizes anything', () => {
     expect(evaluateReadinessReceipt({ shutdownRequestId: 'sd-1', workRevision: 6 }, 7).disposition).toBe(
       'require-revalidation'
     );
   });
 
-  it.skip('authorizes termination only with current readiness and a held drain', () => {
+  it('authorizes termination only with current readiness and a held drain', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
@@ -115,7 +115,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     ).toEqual({ authorized: true });
   });
 
-  it.skip('refuses termination when no readiness was ever recorded', () => {
+  it('refuses termination when no readiness was ever recorded', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
@@ -126,7 +126,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     ).toEqual({ authorized: false, reason: 'no-readiness-recorded' });
   });
 
-  it.skip('refuses readiness recorded against a different shutdown request', () => {
+  it('refuses readiness recorded against a different shutdown request', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-2',
@@ -137,7 +137,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     ).toEqual({ authorized: false, reason: 'readiness-for-other-request' });
   });
 
-  it.skip('refuses a replayed readiness record once new work has started', () => {
+  it('refuses a replayed readiness record once new work has started', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
@@ -148,7 +148,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     ).toEqual({ authorized: false, reason: 'readiness-superseded' });
   });
 
-  it.skip('refuses termination when no drain is held', () => {
+  it('refuses termination when no drain is held', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
@@ -159,7 +159,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     ).toEqual({ authorized: false, reason: 'drain-missing' });
   });
 
-  it.skip('refuses a drain established for an earlier revision', () => {
+  it('refuses a drain established for an earlier revision', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
@@ -170,7 +170,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     ).toEqual({ authorized: false, reason: 'drain-stale' });
   });
 
-  it.skip('refuses a drain whose new-work barrier has been released', () => {
+  it('refuses a drain whose new-work barrier has been released', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
@@ -183,35 +183,35 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
 });
 
 describe('durable result, via execution.agentTermination', () => {
-  it.skip('accepts a result never seen before', () => {
+  it('accepts a result never seen before', () => {
     expect(evaluateDurableResult('msg-1', undefined).disposition).toBe('accept');
   });
 
-  it.skip('answers a replay of a persisted result from the record', () => {
+  it('answers a replay of a persisted result from the record', () => {
     const record: DurableResultRecord = { messageId: 'msg-1', serverPersisted: true };
     expect(evaluateDurableResult('msg-1', record).disposition).toBe('replay-recorded-outcome');
   });
 
-  it.skip('lets the producer retire its copy only once the journal has taken the obligation', () => {
+  it('lets the producer retire its copy only once the journal has taken the obligation', () => {
     expect(canRetireDurableResult({ messageId: 'msg-1', serverPersisted: true })).toBe(true);
   });
 
-  it.skip('keeps the producer copy when persistence is unconfirmed or the acknowledgment was lost', () => {
+  it('keeps the producer copy when persistence is unconfirmed or the acknowledgment was lost', () => {
     expect(canRetireDurableResult({ messageId: 'msg-1', serverPersisted: false })).toBe(false);
     expect(canRetireDurableResult(undefined)).toBe(false);
   });
 });
 
 describe('disposable telemetry, via watcher.telemetry', () => {
-  it.skip('accepts telemetry while the bounded buffer has room', () => {
+  it('accepts telemetry while the bounded buffer has room', () => {
     expect(evaluateDisposableTelemetry({ depth: 3, capacity: 10 }).disposition).toBe('accept');
   });
 
-  it.skip('drops telemetry once the buffer is full rather than growing without bound', () => {
+  it('drops telemetry once the buffer is full rather than growing without bound', () => {
     expect(evaluateDisposableTelemetry({ depth: 10, capacity: 10 }).disposition).toBe('drop-bounded');
   });
 
-  it.skip('gives a drop a stated reason so the loss is observable rather than silent', () => {
+  it('gives a drop a stated reason so the loss is observable rather than silent', () => {
     expect(evaluateDisposableTelemetry({ depth: 10, capacity: 10 }).reason).not.toHaveLength(0);
   });
 });

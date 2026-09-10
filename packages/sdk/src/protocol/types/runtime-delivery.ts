@@ -30,6 +30,7 @@
 
 import { z } from 'zod';
 import type { OwnershipStamp } from './runtime-identity.js';
+import { compareOwnership } from './runtime-identity.js';
 
 /** The five delivery classes, in the order the protocol contract lists them. */
 export const DELIVERY_CLASSES = [
@@ -164,15 +165,24 @@ export interface SnapshotStamp {
  * @returns `accept` when the snapshot is strictly newer, `ignore-stale` when it
  *   is equal or older within the same generation, and `reject-fenced` when its
  *   ownership generation is stale or conflicts with the recorded one.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function evaluateReconciledSnapshot(
   incoming: SnapshotStamp,
   current: SnapshotStamp | undefined
 ): DeliveryDecision {
-  void incoming;
-  void current;
-  throw new Error('Not Implemented');
+  if (current === undefined) {
+    return { disposition: 'accept', reason: 'No snapshot recorded yet' };
+  }
+  const ownership = compareOwnership(incoming.ownership, current.ownership);
+  if (ownership === 'stale' || ownership === 'conflict') {
+    return { disposition: 'reject-fenced', reason: `Snapshot ownership is ${ownership}` };
+  }
+  if (ownership === 'newer') {
+    return { disposition: 'accept', reason: 'Snapshot carries a newer ownership generation' };
+  }
+  return incoming.revision > current.revision
+    ? { disposition: 'accept', reason: 'Snapshot revision supersedes the recorded one' }
+    : { disposition: 'ignore-stale', reason: 'Snapshot revision is not newer than the recorded one' };
 }
 
 // --- Durable intent ---
@@ -201,12 +211,14 @@ export interface DurableIntentRecord {
  * @param record - Journal record for that ID, or `undefined` if unseen.
  * @returns `accept` when the intent is new or persisted-but-unaccepted, and
  *   `replay-recorded-outcome` when it has already been accepted.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function evaluateDurableIntent(messageId: string, record: DurableIntentRecord | undefined): DeliveryDecision {
-  void messageId;
-  void record;
-  throw new Error('Not Implemented');
+  if (record === undefined || record.messageId !== messageId) {
+    return { disposition: 'accept', reason: 'Intent has not been seen before' };
+  }
+  return record.accepted
+    ? { disposition: 'replay-recorded-outcome', reason: 'Intent was already accepted; returning its recorded outcome' }
+    : { disposition: 'accept', reason: 'Intent was persisted but never accepted; the effect still owes performing' };
 }
 
 // --- Revocable readiness evidence ---
@@ -271,12 +283,14 @@ export type TerminationAuthorization =
  * @param currentWorkRevision - Work revision the execution is on right now.
  * @returns `accept` when the evidence is current, and `require-revalidation`
  *   when it is stored but already superseded by a newer work revision.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function evaluateReadinessReceipt(incoming: ReadinessRecord, currentWorkRevision: number): DeliveryDecision {
-  void incoming;
-  void currentWorkRevision;
-  throw new Error('Not Implemented');
+  return incoming.workRevision === currentWorkRevision
+    ? { disposition: 'accept', reason: 'Readiness observed at the current work revision' }
+    : {
+        disposition: 'require-revalidation',
+        reason: 'Readiness was stored but its work revision has been superseded'
+      };
 }
 
 /**
@@ -288,11 +302,28 @@ export function evaluateReadinessReceipt(incoming: ReadinessRecord, currentWorkR
  *
  * @param input - Readiness, current revision, and the drain state.
  * @returns Authorization, or a refusal naming which invariant was not met.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function authorizeTermination(input: TerminationAuthorizationInput): TerminationAuthorization {
-  void input;
-  throw new Error('Not Implemented');
+  const { readiness, drain } = input;
+  if (readiness === undefined) {
+    return { authorized: false, reason: 'no-readiness-recorded' };
+  }
+  if (readiness.shutdownRequestId !== input.shutdownRequestId) {
+    return { authorized: false, reason: 'readiness-for-other-request' };
+  }
+  if (readiness.workRevision !== input.currentWorkRevision) {
+    return { authorized: false, reason: 'readiness-superseded' };
+  }
+  if (drain === undefined) {
+    return { authorized: false, reason: 'drain-missing' };
+  }
+  if (drain.workRevision !== input.currentWorkRevision) {
+    return { authorized: false, reason: 'drain-stale' };
+  }
+  if (!drain.barrierHeld) {
+    return { authorized: false, reason: 'barrier-not-held' };
+  }
+  return { authorized: true };
 }
 
 // --- Durable result ---
@@ -317,12 +348,14 @@ export interface DurableResultRecord {
  * @param record - Journal record for that ID, or `undefined` if unseen.
  * @returns `accept` when unseen, `replay-recorded-outcome` when already
  *   persisted so the producer can retire its copy.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function evaluateDurableResult(messageId: string, record: DurableResultRecord | undefined): DeliveryDecision {
-  void messageId;
-  void record;
-  throw new Error('Not Implemented');
+  if (record === undefined || record.messageId !== messageId) {
+    return { disposition: 'accept', reason: 'Result has not been seen before' };
+  }
+  return record.serverPersisted
+    ? { disposition: 'replay-recorded-outcome', reason: 'Result is already durably persisted' }
+    : { disposition: 'accept', reason: 'Result was recorded but persistence is unconfirmed' };
 }
 
 /**
@@ -332,11 +365,9 @@ export function evaluateDurableResult(messageId: string, record: DurableResultRe
  *   `undefined` when it has received none.
  * @returns True only when the authoritative journal has confirmed it holds the
  *   obligation; a lost acknowledgment keeps the copy.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function canRetireDurableResult(record: DurableResultRecord | undefined): boolean {
-  void record;
-  throw new Error('Not Implemented');
+  return record?.serverPersisted === true;
 }
 
 // --- Disposable telemetry ---
@@ -357,9 +388,9 @@ export interface TelemetryBufferState {
  *
  * @param buffer - Current occupancy of the destination buffer.
  * @returns `accept` when there is room, `drop-bounded` when there is not.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function evaluateDisposableTelemetry(buffer: TelemetryBufferState): DeliveryDecision {
-  void buffer;
-  throw new Error('Not Implemented');
+  return buffer.depth < buffer.capacity
+    ? { disposition: 'accept', reason: 'Telemetry buffer has room' }
+    : { disposition: 'drop-bounded', reason: 'Telemetry buffer is at capacity; the drop must be counted' };
 }
