@@ -294,6 +294,21 @@ export {
   type LifecycleTrigger,
   TERMINAL_LIFECYCLE_STATES
 } from './runtime-transitions.js';
+// --- Runtime Protocol: Transport and Connection Fencing ---
+export type {
+  ConnectionGeneration,
+  ConnectionSlotKey,
+  ConnectionSubject,
+  FrameRefusalReason,
+  RegistrationOutcome,
+  RegistrationRefusalReason
+} from './runtime-transport.js';
+export {
+  INITIAL_CONNECTION_GENERATION,
+  MAX_OUTSTANDING_MESSAGES,
+  RUNTIME_CREDENTIAL_HEADERS,
+  RUNTIME_UPGRADE_PATH
+} from './runtime-transport.js';
 // --- Runtime Protocol: Version Gate ---
 export {
   assertSupportedProtocolVersion,
