@@ -1,0 +1,52 @@
+<!-- agent-skills
+platforms: [claude-code]
+-->
+# Launch and Monitor a Card in the Cloud
+
+Use for requests such as "Launch card foo-123 in the cloud and monitor its progress." This is a local dispatch workflow: the cloud worker receives a document bundle and uses `cardless:captain`. Do not run the local `cards <id> action launch` flow, attach a local action worktree, or wait for a card status transition. A cloud session does not update local card status automatically.
+
+## Establish Scope and Monitoring
+
+1. Resolve the requested ID and its local directory, normally `~/.cards/cards-repos/<id>`. If the active installation uses another store, read only `reposPath` from its discovery file or the `repositoryPath` returned by `cards <id>`; never print or forward the discovery file's credentials. The binary accepts `--cards-repos <directory>` for that store.
+2. Read the task and relevant context. Verify its repository identity against the intended code checkout's Git remote, not the card repository's own Git history. Use an explicit code checkout and its already-pushed branch. If the repository is ambiguous, ask before launching. Do not change branches, commit or push local work just to pass preflight without authorization.
+3. Confirm cloud GitHub access, the preloaded `cardless` plugin, and project agent-team settings. User-only plugin installation/settings are not evidence of cloud availability. Cloud workers must be able to load the captain plus its developer and TDD bootstrap resources. Follow the project's existing deployment setup; do not rewrite it as a side effect of launching.
+4. The launch prompt requests implementation, validation/review, commits, a push to the host-assigned branch, and PR creation/update, never a merge. Confirm that this is within the user's requested scope and any host publication-approval rules. Read approval gates in `CARD.meta.json` and the task context: resolve any required missing approval before a development launch, or obtain an explicitly planning-only brief instead. All regular text files, including hidden/ignored files and metadata, are sent: check for unexpected sensitive material. Binary attachments are excluded; if essential evidence exists only in a screenshot, PDF or another omitted file, resolve that dependency before launch. The worker has no local task-management capabilities.
+5. **When monitoring is requested, establish an actual read-only observation channel before launch.** Inspect the local host's available tools for remote-session inspection, for example `mcp__Claude_Code_Remote__get_session` / `list_sessions` when exposed. Use their live schemas, not an assumed API. The documented CLI alternative is interactive `/tasks`; there is no documented standalone `claude cloud status` command. If only a human can access that view, explain the limitation and ask whether to launch with user-observed monitoring or wait for a usable monitoring tool. Do not promise unattended monitoring without one.
+
+There is no documented `settings.json` flag that provides the cloud host's remote-session MCP tools locally. `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS` enables teammates, not an MCP connection. `/mcp` or `claude mcp list` can inspect connected servers; enabling a connection requires a real server and its supported configuration. Do not invent an endpoint, set cloud-environment markers, or change settings to manufacture missing tools. Without a verified read channel, hand off monitoring through `/tasks` or the web session.
+
+## Preview and Launch Once
+
+Resolve the binary from this installed skill's root (the directory containing its `SKILL.md`), not from the workspace or a hard-coded plugin-cache version:
+
+```bash
+bash "<installed-skill-root>/bin/cloud.sh" --dry-run foo-123
+```
+
+Preview prints the exact prompt, including `CARD.md`, notes, comments, plans, text attachments and metadata, labeled with relative file paths. It recursively includes regular text files, even when hidden or ignored. `.git`, nonempty binary files and symlinks are excluded. Empty supporting files are included; recognized text encodings are converted to UTF-8 using `file` and `iconv`. Unknown encodings and read/traversal errors block the entire bundle. The preview does not launch or require a clean source checkout.
+
+From the verified code checkout, invoke:
+
+```bash
+bash "<installed-skill-root>/bin/cloud.sh" foo-123
+```
+
+For an alternate local store, add `--cards-repos "/absolute/path/to/cards-repos"` to either command. The helper needs Bash, `file`, `iconv`, `find`, NUL-capable `sort`, `wc`, and, for launch, Git and the authenticated `claude` CLI. It requires a clean, attached source branch with a same-named upstream whose remote SHA equals local HEAD. It does not push or modify the local checkout.
+
+The helper runs only `claude --cloud "<complete prompt>"` and preserves its stdin/output. Do not add `-p`, `--output-format`, permission bypass flags, or remove inherited nested-session markers. If the CLI refuses nested invocation or requires interaction the host cannot provide, report that error; use a user-run terminal launch rather than bypassing the restriction. Bundles exceeding 98,304 UTF-8 bytes are rejected before dispatch because the CLI accepts the initial description as one argument. Do not silently drop files or truncate a large bundle to make it fit.
+
+Capture the actual cloud session ID/link from the launch output or the supported session listing, along with card ID, code repository, dispatch branch/SHA and launch time in the lead's task record. The helper does not invent a JSON creation response or parse terminal output as a stable API. If the command remains attached, keep its command-session handle and consume meaningful output. CLI exit is not proof that remote work completed.
+
+**Never automatically repeat a launch.** An error or lost output can follow successful remote creation. Inspect recent remote sessions or `/tasks` and match the exact repository, time and task; if the result is ambiguous, ask the user rather than selecting an arbitrary session or spawning another worker.
+
+## Monitor the Same Session
+
+Use the captured remote identity with the established read-only observation channel. Prefer supported completion events or a genuine wait/subscription tool. If the only available channel is a read-only status query, use the local host's recurring-monitoring mechanism or scheduled wakeups (typically 30–60 seconds between reads), keeping the user informed on meaningful changes. Do not busy-poll, leave an unobserved background loop, or end a requested monitoring task immediately after launch. If the host cannot continue monitoring, say so and hand off the exact session link.
+
+Inspect actual session state and available progress/summary/transcript evidence. Distinguish provisioning, active work, waiting for input, idle, failure, and a completed outcome; use the meanings documented by the live tool. Idle, archive status, a returned session ID, or an absence of new output is not implementation success. If clarification or new authority is needed, bring the question to the user without inventing an answer. Read-only inspection does not authorize interrupting, archiving, restarting, sending instructions, or merging a PR.
+
+`claude -p "message" --cloud <session-id>` **sends a follow-up**, not a status query. `claude agents`, `logs`, and `attach` operate on local background agents, not this cloud session. `--teleport` changes local Git state and creates a local continuation; it is not monitoring. Do not use `cards <id> watch` or poll local card status as evidence of remote progress.
+
+At a reported successful delivery, verify the intended open PR and its head commit against the worker's delivered SHA, and report the remote session link, branch/commit, PR URL, actual validation/review evidence and any unverified limits. Missing evidence remains explicit. For a blocker or failure, preserve the remote identity and report its concrete cause and next needed action. Do not mark the local card done, post a comment, archive the session, or merge unless separately requested.
+
+[Cloud creation and interactive monitoring](https://code.claude.com/docs/en/claude-code-on-the-web#from-terminal-to-web), [follow-up messages](https://code.claude.com/docs/en/claude-code-on-the-web#send-follow-up-messages), [cloud configuration](https://code.claude.com/docs/en/cloud-environments), [MCP connections](https://code.claude.com/docs/en/mcp#managing-your-servers), [agent-team settings](https://code.claude.com/docs/en/agent-teams#enable-agent-teams).

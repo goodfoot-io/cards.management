@@ -1,6 +1,6 @@
 ---
 name: cards
-description: You must load this skill whenever the user asks to create, read, comment on, or modify a card
+description: You must load this skill whenever the user asks to create, read, comment on, or modify a card, or launch a card in the cloud and monitor it
 ---
 
 # Cards
@@ -12,7 +12,7 @@ Card Repository below.
 For controlling VS Code (opening files, running commands, sending notifications,
 managing panels, controlling the debugger, etc.), load `./references/extension-cli.md`.
 
-For launching individual cards to implement the work they describe, load `./references/launch-cards.md`.
+For launching a card in the cloud or monitoring a cloud launch, load `./references/cloud.md`. This route takes precedence over the local launch action. For local launches, load `./references/launch-cards.md`.
 
 To file a GitHub issue with the Cards extension developer, use `cards-extension issue`
 (see `./references/extension-cli.md`).
