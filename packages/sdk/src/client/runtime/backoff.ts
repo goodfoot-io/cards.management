@@ -23,10 +23,13 @@ export const DEFAULT_BACKOFF_POLICY: BackoffPolicy = {
  * @param attempt - Zero-based retry count.
  * @param policy - Timing policy; defaults to {@link DEFAULT_BACKOFF_POLICY}.
  * @returns Milliseconds to wait, never below zero and never above the cap.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function nextBackoffDelayMs(attempt: number, policy: BackoffPolicy = DEFAULT_BACKOFF_POLICY): number {
-  void attempt;
-  void policy;
-  throw new Error('Not Implemented');
+  const steps = Math.min(Math.max(0, Math.floor(attempt)), 53);
+  const ceiling = Math.min(policy.initialMs * 2 ** steps, policy.capMs);
+  // Jitter subtracts from the ceiling rather than adding to a floor, so the spread survives
+  // at the cap. Adding to a capped delay would clamp every client back onto the same value
+  // after a few attempts, reviving the synchronized retry wave the jitter exists to break.
+  const spread = policy.jitter(ceiling - policy.initialMs);
+  return Math.min(Math.max(ceiling - spread, 0), policy.capMs);
 }

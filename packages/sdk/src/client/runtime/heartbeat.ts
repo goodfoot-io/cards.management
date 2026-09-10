@@ -43,15 +43,18 @@ export type HeartbeatDecision =
  * @param nowMs - Current epoch milliseconds.
  * @param policy - Cadence policy; defaults to {@link DEFAULT_HEARTBEAT_POLICY}.
  * @returns The action to take.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function evaluateHeartbeat(
   state: HeartbeatState,
   nowMs: number,
   policy: HeartbeatPolicy = DEFAULT_HEARTBEAT_POLICY
 ): HeartbeatDecision {
-  void state;
-  void nowMs;
-  void policy;
-  throw new Error('Not Implemented');
+  if (state.lastSentAtMs !== null) {
+    const missedIntervals = Math.floor((nowMs - state.lastSentAtMs) / policy.intervalMs) + 1;
+    if (missedIntervals >= policy.missedLimit) {
+      return { action: 'expired', missedIntervals };
+    }
+    return { action: 'idle' };
+  }
+  return nowMs - state.lastAcknowledgedAtMs >= policy.intervalMs ? { action: 'send' } : { action: 'idle' };
 }

@@ -1,4 +1,5 @@
 import type { PresentedCredential } from '../../protocol/types/index.js';
+import { RUNTIME_CREDENTIAL_HEADERS, RUNTIME_UPGRADE_PATH } from '../../protocol/types/index.js';
 import type { RuntimeConnectTarget } from './types.js';
 
 /**
@@ -28,13 +29,18 @@ export interface RuntimeHandshakeRequest {
  * @param target - Freshly discovered host, port, and access token.
  * @param credential - Role credential proving the admitted execution.
  * @returns URL and headers for the WebSocket upgrade.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function buildHandshakeRequest(
   target: RuntimeConnectTarget,
   credential: PresentedCredential
 ): RuntimeHandshakeRequest {
-  void target;
-  void credential;
-  throw new Error('Not Implemented');
+  return {
+    url: `ws://${target.host}:${target.port}${RUNTIME_UPGRADE_PATH}`,
+    headers: {
+      Authorization: `Bearer ${target.accessToken}`,
+      [RUNTIME_CREDENTIAL_HEADERS.requestId]: credential.requestId,
+      [RUNTIME_CREDENTIAL_HEADERS.credentialId]: credential.credentialId,
+      [RUNTIME_CREDENTIAL_HEADERS.secret]: credential.secret
+    }
+  };
 }

@@ -19,11 +19,11 @@ const ackFor = (workRevision: number, acceptedMessageIds: readonly string[] = []
 });
 
 describe('collecting outstanding obligations', () => {
-  it.skip('reports nothing when the outbox is empty', async () => {
+  it('reports nothing when the outbox is empty', async () => {
     await expect(collectOutstandingMessageIds(new MemoryOutbox(), 'exec-1')).resolves.toEqual([]);
   });
 
-  it.skip('reports the ids this execution still owes', async () => {
+  it('reports the ids this execution still owes', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'msg-1' }));
     await outbox.enqueue(makeRecordInput({ messageId: 'msg-2' }));
@@ -32,7 +32,7 @@ describe('collecting outstanding obligations', () => {
     );
   });
 
-  it.skip('does not report another execution obligations', async () => {
+  it('does not report another execution obligations', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'mine', executionId: 'exec-1' }));
     await outbox.enqueue(makeRecordInput({ messageId: 'theirs', executionId: 'exec-2' }));
@@ -41,17 +41,18 @@ describe('collecting outstanding obligations', () => {
 });
 
 describe('synchronization', () => {
-  it.skip('adopts the server work revision rather than a locally remembered one', async () => {
+  it('adopts the server work revision rather than a locally remembered one', async () => {
     const report = await synchronize({
       outbox: new MemoryOutbox(),
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(42)
+      acknowledgment: ackFor(42),
+      recoverOrphans: false
     });
     expect(report.workRevision).toBe(42);
   });
 
-  it.skip('retires exactly the obligations the server confirmed it accepted', async () => {
+  it('retires exactly the obligations the server confirmed it accepted', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'accepted-1' }));
     await outbox.enqueue(makeRecordInput({ messageId: 'still-owed' }));
@@ -60,14 +61,15 @@ describe('synchronization', () => {
       outbox,
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7, ['accepted-1'])
+      acknowledgment: ackFor(7, ['accepted-1']),
+      recoverOrphans: false
     });
 
     expect(report.acceptedMessageIds).toEqual(['accepted-1']);
     expect(report.pendingMessageIds).toEqual(['still-owed']);
   });
 
-  it.skip('keeps an unconfirmed obligation on disk rather than assuming it landed', async () => {
+  it('keeps an unconfirmed obligation on disk rather than assuming it landed', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'still-owed' }));
 
@@ -75,13 +77,14 @@ describe('synchronization', () => {
       outbox,
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7, [])
+      acknowledgment: ackFor(7, []),
+      recoverOrphans: false
     });
 
     expect(outbox.stored.map((record) => record.messageId)).toEqual(['still-owed']);
   });
 
-  it.skip('reconciles records left behind by a process that exited before acknowledgment', async () => {
+  it('reconciles records left behind by a process that exited before acknowledgment', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'orphan', deliveryClass: 'durable-result' }));
 
@@ -89,14 +92,15 @@ describe('synchronization', () => {
       outbox,
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7)
+      acknowledgment: ackFor(7),
+      recoverOrphans: true
     });
 
     expect(report.reconciliation.scanned).toBeGreaterThan(0);
     expect(report.reconciliation.ok).toBe(true);
   });
 
-  it.skip('reports rather than hides an unreachable recovery authority', async () => {
+  it('reports rather than hides an unreachable recovery authority', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'orphan', deliveryClass: 'durable-result' }));
 
@@ -104,14 +108,15 @@ describe('synchronization', () => {
       outbox,
       authorities: makeUnavailableAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7)
+      acknowledgment: ackFor(7),
+      recoverOrphans: true
     });
 
     expect(report.reconciliation.ok).toBe(false);
     expect(report.reconciliation.blocked.length).toBeGreaterThan(0);
   });
 
-  it.skip('never treats a missing authority as an empty set of obligations', async () => {
+  it('never treats a missing authority as an empty set of obligations', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'orphan', deliveryClass: 'durable-result' }));
 
@@ -119,7 +124,8 @@ describe('synchronization', () => {
       outbox,
       authorities: makeUnavailableAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7)
+      acknowledgment: ackFor(7),
+      recoverOrphans: true
     });
 
     expect(outbox.stored).toHaveLength(1);

@@ -15,12 +15,12 @@ import { makeCredential, makeTarget } from './index.js';
  */
 
 describe('handshake request', () => {
-  it.skip('targets the runtime upgrade path on the discovered endpoint', () => {
+  it('targets the runtime upgrade path on the discovered endpoint', () => {
     const request = buildHandshakeRequest(makeTarget({ host: '127.0.0.1', port: 4321 }), makeCredential());
     expect(request.url).toBe(`ws://127.0.0.1:4321${RUNTIME_UPGRADE_PATH}`);
   });
 
-  it.skip('carries the role credential in the three contract headers', () => {
+  it('carries the role credential in the three contract headers', () => {
     const request = buildHandshakeRequest(
       makeTarget(),
       makeCredential({ requestId: 'req-9', credentialId: 'cred-9', secret: 'shh' })
@@ -30,24 +30,24 @@ describe('handshake request', () => {
     expect(request.headers[RUNTIME_CREDENTIAL_HEADERS.secret]).toBe('shh');
   });
 
-  it.skip('carries the rotatable access token separately from the role credential', () => {
+  it('carries the rotatable access token separately from the role credential', () => {
     const request = buildHandshakeRequest(makeTarget({ accessToken: 'token-9' }), makeCredential());
     expect(request.headers['Authorization']).toBe('Bearer token-9');
   });
 
-  it.skip('puts no credential material in the URL at all', () => {
+  it('puts no credential material in the URL at all', () => {
     const request = buildHandshakeRequest(makeTarget({ accessToken: 'token-9' }), makeCredential({ secret: 'shh' }));
     expect(request.url).not.toContain('shh');
     expect(request.url).not.toContain('token-9');
     expect(request.url).not.toContain('cred-1');
   });
 
-  it.skip('produces a URL with no query string whatsoever', () => {
+  it('produces a URL with no query string whatsoever', () => {
     const request = buildHandshakeRequest(makeTarget(), makeCredential());
     expect(new URL(request.url).search).toBe('');
   });
 
-  it.skip('rebuilds against a rotated endpoint and token rather than a remembered one', () => {
+  it('rebuilds against a rotated endpoint and token rather than a remembered one', () => {
     const credential = makeCredential();
     const first = buildHandshakeRequest(makeTarget({ port: 1111, accessToken: 'old' }), credential);
     const second = buildHandshakeRequest(makeTarget({ port: 2222, accessToken: 'new' }), credential);
