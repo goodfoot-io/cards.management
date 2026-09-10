@@ -111,6 +111,28 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
+  'runtime.resumeAck': {
+    type: 'runtime.resumeAck',
+    direction: 'server-to-client',
+    deliveryClass: 'reconciled-snapshot',
+    allowedRoles: ['server'],
+    executionRequirement: 'admitted',
+    requiresRequestId: false,
+    requiresCausationId: true,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
+  'runtime.accepted': {
+    type: 'runtime.accepted',
+    direction: 'server-to-client',
+    deliveryClass: 'durable-result',
+    allowedRoles: ['server'],
+    executionRequirement: 'admitted',
+    requiresRequestId: false,
+    requiresCausationId: true,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   'runtime.log': {
     type: 'runtime.log',
     direction: 'client-to-server',

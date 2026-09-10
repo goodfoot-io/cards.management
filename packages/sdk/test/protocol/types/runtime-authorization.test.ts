@@ -133,3 +133,22 @@ describe('authorizeMessage', () => {
     expect(refusal(envelope, contextOf())).toBe('authorized');
   });
 });
+
+describe('acknowledgment messages', () => {
+  it('lets only the server acknowledge, so a peer cannot forge a receipt', () => {
+    for (const type of ['runtime.resumeAck', 'runtime.accepted'] as const) {
+      expect(RUNTIME_MESSAGE_CONTRACTS[type].allowedRoles).toEqual(['server']);
+      expect(RUNTIME_MESSAGE_CONTRACTS[type].direction).toBe('server-to-client');
+    }
+  });
+
+  it('makes a durable receipt completion evidence and a resume reply merely current', () => {
+    expect(deliveryClassFor('runtime.accepted')).toBe('durable-result');
+    expect(deliveryClassFor('runtime.resumeAck')).toBe('reconciled-snapshot');
+  });
+
+  it('requires a causation id so a receipt names what it acknowledges', () => {
+    expect(RUNTIME_MESSAGE_CONTRACTS['runtime.accepted'].requiresCausationId).toBe(true);
+    expect(RUNTIME_MESSAGE_CONTRACTS['runtime.resumeAck'].requiresCausationId).toBe(true);
+  });
+});

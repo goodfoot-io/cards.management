@@ -339,6 +339,40 @@ export const watcherTelemetryPayloadSchema = z
   })
   .strict();
 
+// --- Acknowledgment payloads ---
+
+/**
+ * Payload of `runtime.resumeAck`, the server's half of the resume barrier.
+ *
+ * `runtime.resume` states which durable obligations the client still holds; this states
+ * which of them the server already accepted. The client retires exactly those and replays
+ * exactly the rest, which is why the barrier has to complete before any new command goes
+ * out — until it does, the client cannot tell a lost message from a delivered one, and
+ * guessing either way is a duplicated effect or a silent loss.
+ */
+export const resumeAckPayloadSchema = z
+  .object({
+    revision: snapshotRevisionSchema,
+    workRevision: workRevisionSchema,
+    acceptedMessageIds: z.array(z.string().min(1)).max(1000)
+  })
+  .strict();
+
+/**
+ * Payload of `runtime.accepted`, the durable receipt for one client message.
+ *
+ * This is what lets a producer retire an outbox record. It is deliberately its own message
+ * rather than a field on some other reply: the record exists precisely because the process
+ * may die before the receipt arrives, so the receipt cannot be tied to the liveness of the
+ * request that produced it.
+ */
+export const acceptedPayloadSchema = z
+  .object({
+    acknowledgedMessageId: z.string().min(1),
+    acknowledgedAt: z.string().datetime()
+  })
+  .strict();
+
 // --- Catalogue ---
 
 /**
@@ -352,6 +386,8 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'runtime.resume': resumePayloadSchema,
   'runtime.capabilities': capabilitiesPayloadSchema,
   'runtime.liveness': livenessPayloadSchema,
+  'runtime.resumeAck': resumeAckPayloadSchema,
+  'runtime.accepted': acceptedPayloadSchema,
   'runtime.log': logPayloadSchema,
   'runtime.heartbeat': heartbeatPayloadSchema,
   'execution.launchRequest': launchRequestPayloadSchema,

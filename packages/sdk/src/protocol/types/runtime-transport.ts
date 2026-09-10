@@ -190,6 +190,13 @@ export type RegistrationOutcome =
  * union is discriminated on `status` so a refusal can never be read as a
  * registration missing its generation — the shape that would let a fenced client
  * believe it holds a slot.
+ *
+ * This travels as a bare control frame, deliberately outside the envelope catalogue, and
+ * it is the only server-to-client message that does. An envelope carries an ownership
+ * stamp and an execution reference the receiver is expected to check, but this frame is
+ * what establishes the generation those checks would be made against — a client reading it
+ * has not yet been told which generation it holds. Wrapping it in an envelope would make
+ * the frame depend on the very fact it exists to deliver, so do not "fix" it into one.
  */
 export const registrationOutcomeSchema: z.ZodType<RegistrationOutcome> = z.discriminatedUnion('status', [
   z
