@@ -177,6 +177,40 @@ describe('outbox store', () => {
     });
   });
 
+  describe('record identity', () => {
+    it('refuses to enqueue a record whose identity disagrees with its envelope', async () => {
+      const input = makeRecordInput({ messageId: 'msg-a' });
+
+      await expect(outbox.enqueue({ ...input, messageId: 'msg-different' })).rejects.toThrow(/disagrees/);
+    });
+
+    it('stores nothing at all when the two identities disagree', async () => {
+      const input = makeRecordInput({ messageId: 'msg-a' });
+
+      await outbox.enqueue({ ...input, messageId: 'msg-different' }).catch(() => undefined);
+
+      expect(countRecordFiles(root)).toBe(0);
+    });
+
+    it('treats a record tampered into disagreement as corrupt rather than reconcilable', async () => {
+      await outbox.enqueue(makeRecordInput({ messageId: 'msg-a' }));
+      const [file] = listRecordFiles(root);
+      const parsed = JSON.parse(fs.readFileSync(file as string, 'utf-8'));
+      fs.writeFileSync(
+        file as string,
+        JSON.stringify({ ...parsed, envelope: { ...parsed.envelope, messageId: 'msg-other' } })
+      );
+
+      const scan = await outbox.scan({ executionId: 'exec-1', role: 'runtime-wrapper' });
+
+      // Every authority checks the record against the identity its envelope was
+      // admitted under, so a disagreeing record could never be retired. Naming it
+      // corrupt stops it accumulating as a permanent silent refusal.
+      expect(scan.records).toEqual([]);
+      expect(scan.corrupt[0]?.detail).toContain('disagrees');
+    });
+  });
+
   describe('corruption', () => {
     it('reports an unparseable record instead of returning it', async () => {
       await outbox.enqueue(makeRecordInput({ messageId: 'msg-a' }));

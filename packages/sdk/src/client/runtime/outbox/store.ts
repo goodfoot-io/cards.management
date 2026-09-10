@@ -135,6 +135,9 @@ export async function enqueueRecord(root: string, input: OutboxRecordInput, now:
   if (!OUTBOX_DELIVERY_CLASSES.includes(input.deliveryClass)) {
     throw new Error(`Outbox refuses delivery class: ${String(input.deliveryClass)}`);
   }
+  if (input.messageId !== input.envelope.messageId) {
+    throw new Error(`Record identity ${input.messageId} disagrees with its envelope's ${input.envelope.messageId}`);
+  }
 
   const target = recordPath(root, input.executionId, input.role, input.messageId);
   const dir = path.dirname(target);
@@ -196,6 +199,17 @@ function parseRecord(text: string, filePath: string): OutboxRecord | OutboxCorru
   }
   if (candidate.envelope === undefined || candidate.envelope === null) {
     return { path: filePath, detail: 'missing field: envelope' };
+  }
+  // The record's identity and its envelope's must be the same message. Every
+  // authority that answers for a recovered record checks it against the identity
+  // the envelope was admitted under, so a record whose two identities disagree
+  // can never be retired — it would be refused forever rather than reconciled.
+  // Better to name it as untrustworthy now than to let it accumulate silently.
+  if (candidate.envelope.messageId !== candidate.messageId) {
+    return {
+      path: filePath,
+      detail: `record identity ${String(candidate.messageId)} disagrees with envelope's ${String(candidate.envelope.messageId)}`
+    };
   }
   return candidate as OutboxRecord;
 }
