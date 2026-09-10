@@ -28,11 +28,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { forceRemoveSync } from '../helpers/forceRemove.js';
 
 // Mock outfitWorktreeForCard so we can assert the bind gate refused before
-// any outfit (re-bind) attempt was made.
+// any outfit (re-bind) attempt was made. cardsSharedHooksDir stays REAL: the
+// bind gate's durable-evidence probe must compare against the same shared
+// hooks dir outfit installs, resolved from the test's HOME.
 const outfitWorktreeForCard = vi.fn<(...args: unknown[]) => Promise<unknown>>(() => Promise.resolve());
-vi.mock('@cards.management/sdk/worktree-for-card', () => ({
-  outfitWorktreeForCard: (...args: unknown[]) => outfitWorktreeForCard(...args)
-}));
+vi.mock('@cards.management/sdk/worktree-for-card', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cards.management/sdk/worktree-for-card')>();
+  return {
+    ...actual,
+    outfitWorktreeForCard: (...args: unknown[]) => outfitWorktreeForCard(...args)
+  };
+});
 
 const readUnboundCandidates = vi.fn<
   (...args: unknown[]) => Promise<{ worktreeDir: string; sessionId: string; transcriptPath: string }[]>
@@ -88,7 +94,11 @@ describe('attachCard bind gate with cards hooks present but marker missing', () 
   /** Spy on process.exit so exits throw instead of killing the process. */
   let exitSpy: ReturnType<typeof vi.spyOn>;
 
-  /** Absolute path of the cards shared hooks dir under the mocked home. */
+  /**
+   * Absolute path of the cards shared hooks dir under the mocked home.
+   *
+   * @returns The shared hooks dir path the bind gate compares against.
+   */
   function sharedHooksDir(): string {
     return join(testDir, '.cards', 'workspace-hooks');
   }
@@ -100,6 +110,9 @@ describe('attachCard bind gate with cards hooks present but marker missing', () 
    * at the cards shared hooks dir — the durable state outfitWorktreeForCard
    * installs on a card-bound worktree. Deliberately does NOT write
    * `.cards/CARD_ID` (the marker whose loss leaves this state behind).
+   *
+   * @param branchName - Branch to check out in the new linked worktree.
+   * @returns Absolute (realpath'd) worktree root.
    */
   function makeOutfittedWorktree(branchName: string): string {
     const mainRepo = join(base, 'main');
@@ -271,6 +284,30 @@ describe('attachCard bind gate with cards hooks present but marker missing', () 
       const diagnostic = errSpy.mock.calls.map((c) => String(c[0])).join('\n');
       expect(diagnostic).toContain('already bound');
       expect(outfitWorktreeForCard).not.toHaveBeenCalled();
+      expect(requestCount).toBe(0);
+    } finally {
+      errSpy.mockRestore();
+    }
+  });
+
+  it('refuses a marker-bound worktree locally, before any API request', async () => {
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const linkedWorktree = makeOutfittedWorktree('cards/main-007/1');
+      // The primary bind record: a marker naming the bound card.
+      mkdirSync(join(linkedWorktree, '.cards'), { recursive: true });
+      writeFileSync(join(linkedWorktree, '.cards', 'CARD_ID'), 'main-007\n');
+      process.chdir(linkedWorktree);
+      process.env['CARDS_SESSION_ID'] = 'sess-marker-pin';
+
+      await expect(attachCard('main-001')).rejects.toThrow('process.exit(1)');
+      const diagnostic = errSpy.mock.calls.map((c) => String(c[0])).join('\n');
+      expect(diagnostic).toContain('already bound to card main-007');
+      expect(outfitWorktreeForCard).not.toHaveBeenCalled();
+      // The bind refusal must stay pre-network: zero requests to the API.
+      // If a refactor ever moves the bind gate behind connectClient(), a
+      // server-side error (e.g. "Workspace not registered") could substitute
+      // for the local already-bound message — this assertion fails first.
       expect(requestCount).toBe(0);
     } finally {
       errSpy.mockRestore();

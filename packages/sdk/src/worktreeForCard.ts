@@ -39,6 +39,22 @@ import { createWorktreePerf } from './worktreePerf.js';
 const execFileAsync = promisify(execFile);
 
 /**
+ * Resolves the shared hooks dispatcher directory every card-bound worktree's
+ * per-worktree `core.hooksPath` points at.
+ *
+ * Single source of truth for the durable bind artifact: {@link outfitWorktreeForCard}
+ * installs it and {@link releaseWorktreeForCard} restores the original value, so
+ * a worktree whose effective `core.hooksPath` equals this path carries cards
+ * binding machinery even when the `.cards/CARD_ID` marker was lost. The bind
+ * gates in the CLI consult this so "already bound" survives marker loss.
+ *
+ * @returns Absolute path of the shared hooks dispatcher dir.
+ */
+export function cardsSharedHooksDir(): string {
+  return join(resolveHomeDir(), '.cards', 'workspace-hooks');
+}
+
+/**
  * Minimal stderr logger shared by the outfit/release attribution path.
  *
  * The orchestrators have no structured logger, but {@link spawnAdhocAttribution}
@@ -220,7 +236,7 @@ export async function outfitWorktreeForCard(
 
   const { repoRoot } = await perf.measure('outfit:findGitRoots', () => findGitRoots(worktreeDir));
 
-  const sharedHooksDir = join(resolveHomeDir(), '.cards', 'workspace-hooks');
+  const sharedHooksDir = cardsSharedHooksDir();
   const originalHookPathFile = join(worktreeDir, '.cards', 'CARD_ORIGINAL_HOOK_PATH');
 
   // 1. Write .cards/CARD_ID first — this mkdir -p's .cards, which the hooks-path

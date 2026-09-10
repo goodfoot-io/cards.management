@@ -47,7 +47,7 @@ import {
 import { DERIVED_TAGS, filterCardsByTags, parseSearchQuery } from '@cards.management/sdk/search-utils';
 import { resolveRuntime, resolveSessionId, resolveTranscriptPath } from '@cards.management/sdk/session-resolver';
 import { readUnboundCandidates, removeUnboundCandidate } from '@cards.management/sdk/unbound-worktree-candidates';
-import { outfitWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
+import { cardsSharedHooksDir, outfitWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 import { appendCommitToSession, getSessionCommits, readSessionHeadSha } from '@cards.management/sessions/card-repo';
 import { JSONPath } from 'jsonpath-plus';
 import { minimatch } from 'minimatch';
@@ -1282,6 +1282,93 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
 }
 
 /**
+ * The result of probing a worktree for card-bind evidence.
+ */
+interface BindDetection {
+  /** Whether the worktree carries any card-bind evidence. */
+  bound: boolean;
+  /** The bound card's id, when it could be attributed; null otherwise. */
+  cardId: string | null;
+}
+
+/**
+ * Extracts the card id embedded in a cards-managed branch name.
+ *
+ * Card-bound worktrees check out branches named `cards/<cardId>/<n>` (the
+ * workspace branch scheme), so the checked-out branch itself identifies the
+ * card the worktree was bound to — the durable fallback when the
+ * `.cards/CARD_ID` marker is lost or empty.
+ *
+ * @param branchName - The worktree's checked-out branch name.
+ * @returns The embedded card id, or null when the branch is not cards-named.
+ */
+function cardIdFromBranchName(branchName: string): string | null {
+  const match = /^cards\/([^\s/]+)\/\d+$/.exec(branchName);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Probes a linked worktree for card-bind evidence and resolves the bound id.
+ *
+ * Evidence, in priority order:
+ *
+ * 1. The `.cards/CARD_ID` marker — the primary record
+ *    {@link outfitWorktreeForCard} writes first.
+ * 2. A per-worktree `core.hooksPath` equal to the cards shared hooks dir —
+ *    the durable artifact outfit installs and `releaseWorktreeForCard`
+ *    removes, which survives loss of the git-ignored `.cards/` marker
+ *    (e.g. `git clean -fdx`).
+ *
+ * When the marker is missing or empty, the bound card id is derived from the
+ * `cards/<cardId>/<n>` branch name. A bound-but-unattributable worktree is
+ * still reported as bound (fail closed) with `cardId: null` — attaching a
+ * different card over it would overwrite the surviving binding.
+ *
+ * Runs before `connectClient()` opens any socket, so the refusal it drives
+ * stays synchronous and local: no server-side error (e.g. a
+ * workspace-registration failure) can ever substitute for the already-bound
+ * message.
+ *
+ * @param worktreeDir - Absolute path of the linked worktree.
+ * @returns The bind detection result; `{ bound: false }` when no evidence exists.
+ */
+async function detectBoundCard(worktreeDir: string): Promise<BindDetection> {
+  const cardIdFile = join(worktreeDir, '.cards', 'CARD_ID');
+  if (existsSync(cardIdFile)) {
+    const markerId = readFileSync(cardIdFile, 'utf-8').trim();
+    if (markerId.length > 0) {
+      return { bound: true, cardId: markerId };
+    }
+  } else {
+    let hooksPath: string | null = null;
+    try {
+      const { stdout } = await execFileAsync('git', ['-C', worktreeDir, 'config', 'core.hooksPath'], {
+        timeout: 5_000
+      });
+      hooksPath = stdout.trim() || null;
+    } catch {
+      // `git config` exits 1 when the key is unset — expected. Any other
+      // failure means the directory is not a readable repo (gate 1 has
+      // already ruled that out); treat it as no evidence rather than crash.
+      hooksPath = null;
+    }
+    if (!hooksPath || resolvePath(hooksPath) !== resolvePath(cardsSharedHooksDir())) {
+      return { bound: false, cardId: null };
+    }
+  }
+
+  // Bound without a usable marker id — derive from the checked-out branch.
+  try {
+    const { stdout } = await execFileAsync('git', ['-C', worktreeDir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+      timeout: 5_000
+    });
+    return { bound: true, cardId: cardIdFromBranchName(stdout.trim()) };
+  } catch {
+    return { bound: true, cardId: null };
+  }
+}
+
+/**
  * Attaches an existing card to the current worktree.
  *
  * Applies four fail-closed gates before any state change:
@@ -1314,13 +1401,21 @@ export async function attachCard(cardId: string, parentBranchFlag?: string): Pro
     process.exit(1);
   }
 
-  // Gate 2: worktree must not already be bound.
-  const cardIdFile = join(worktreeDir, '.cards', 'CARD_ID');
-  if (existsSync(cardIdFile)) {
-    const existingId = readFileSync(cardIdFile, 'utf-8').trim();
+  // Gate 2: worktree must not already be bound. The bind probe consults the
+  // `.cards/CARD_ID` marker and, when it is missing or empty, the durable
+  // per-worktree hooks evidence outfit leaves behind — a bound worktree must
+  // always refuse LOCALLY, before any client connection, so no server-side
+  // error (e.g. a workspace-registration failure) can ever substitute for
+  // this message.
+  const bound = await detectBoundCard(worktreeDir);
+  if (bound.bound) {
     console.error(
-      `cards attach: this worktree is already bound to card ${existingId}. ` +
-        `To attach a different card, remove this worktree and create a new one.`
+      bound.cardId !== null
+        ? `cards attach: this worktree is already bound to card ${bound.cardId}. ` +
+            `To attach a different card, remove this worktree and create a new one.`
+        : 'cards attach: this worktree is already bound to a card (its id could not be determined — ' +
+            'the .cards/CARD_ID marker is missing or empty). To attach a different card, remove this ' +
+            'worktree and create a new one.'
     );
     process.exit(1);
   }
