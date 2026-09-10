@@ -304,10 +304,18 @@ export type {
   RegistrationRefusalReason
 } from './runtime-transport.js';
 export {
+  connectionGenerationSchema,
+  connectionSlotKeySchema,
+  connectionSubjectSchema,
+  FRAME_REFUSAL_REASONS,
+  frameRefusalReasonSchema,
   INITIAL_CONNECTION_GENERATION,
   MAX_OUTSTANDING_MESSAGES,
+  REGISTRATION_REFUSAL_REASONS,
   RUNTIME_CREDENTIAL_HEADERS,
-  RUNTIME_UPGRADE_PATH
+  RUNTIME_UPGRADE_PATH,
+  registrationOutcomeSchema,
+  registrationRefusalReasonSchema
 } from './runtime-transport.js';
 // --- Runtime Protocol: Version Gate ---
 export {

@@ -22,7 +22,8 @@
  * @module runtime-transport
  */
 
-import type { ProducerRole } from './runtime-identity.js';
+import { z } from 'zod';
+import { type ProducerRole, producerRoleSchema } from './runtime-identity.js';
 
 /**
  * Path the runtime upgrade is served on.
@@ -88,6 +89,16 @@ export type ConnectionGeneration = number & { readonly __connectionGeneration: u
 export const INITIAL_CONNECTION_GENERATION = 0 as ConnectionGeneration;
 
 /**
+ * Validates a connection generation arriving from the server.
+ *
+ * Non-negative integers only. A fractional or negative generation cannot have
+ * been allocated by the registry, and accepting one would let a client compare
+ * it against a real generation and reach a confident wrong answer about which
+ * socket is current.
+ */
+export const connectionGenerationSchema = z.int().nonnegative() as unknown as z.ZodType<ConnectionGeneration>;
+
+/**
  * Identity of one connection slot.
  *
  * The `producerId` is part of the key, and that is the whole of the same-role
@@ -105,20 +116,49 @@ export interface ConnectionSlotKey {
   readonly producerId: string;
 }
 
-/** Why a connection was refused admission to its slot. */
-export type RegistrationRefusalReason =
+/**
+ * Why a connection was refused admission to its slot.
+ *
+ * The two families are not interchangeable. `stale-generation` means a newer
+ * connection for this same producer already exists, so retrying is pointless
+ * until that one goes away. The ownership refusals mean another server owner
+ * holds control, and the client's own reconnection cannot fix it.
+ */
+export const REGISTRATION_REFUSAL_REASONS = [
   /** A connection at or above this generation already holds the slot. */
-  | 'stale-generation'
+  'stale-generation',
   /** The execution has reached a terminal state; it cannot be restored. */
-  | 'execution-terminal'
+  'execution-terminal',
   /** Registration claimed a scope the credential does not cover. */
-  | 'scope-mismatch'
+  'scope-mismatch',
   /** Control ownership is held at a higher generation by another owner. */
-  | 'ownership-superseded'
+  'ownership-superseded',
   /** Two owners claim the same ownership generation. */
-  | 'ownership-conflict'
+  'ownership-conflict',
   /** The slot's outstanding-obligation budget is already exhausted. */
-  | 'outstanding-limit-exceeded';
+  'outstanding-limit-exceeded'
+] as const;
+
+/** Validates a connection subject arriving from the server. */
+export const connectionSubjectSchema: z.ZodType<ConnectionSubject> = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('execution'), executionId: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal('card'), cardId: z.string().min(1) }).strict()
+]);
+
+/** Validates a connection slot key arriving from the server. */
+export const connectionSlotKeySchema: z.ZodType<ConnectionSlotKey> = z
+  .object({
+    subject: connectionSubjectSchema,
+    role: producerRoleSchema,
+    producerId: z.string().min(1)
+  })
+  .strict();
+
+/** Why a connection was refused admission to its slot. */
+export type RegistrationRefusalReason = (typeof REGISTRATION_REFUSAL_REASONS)[number];
+
+/** Validates a registration refusal reason arriving from the server. */
+export const registrationRefusalReasonSchema = z.enum(REGISTRATION_REFUSAL_REASONS);
 
 /**
  * Outcome of registering a connection into its slot.
@@ -142,15 +182,42 @@ export type RegistrationOutcome =
     }
   | { readonly status: 'refused'; readonly reason: RegistrationRefusalReason };
 
+/**
+ * Validates a registration outcome arriving from the server.
+ *
+ * This is the one moved type a client genuinely deserializes off a socket it
+ * does not otherwise trust, which is why it is parsed rather than asserted. The
+ * union is discriminated on `status` so a refusal can never be read as a
+ * registration missing its generation — the shape that would let a fenced client
+ * believe it holds a slot.
+ */
+export const registrationOutcomeSchema: z.ZodType<RegistrationOutcome> = z.discriminatedUnion('status', [
+  z
+    .object({
+      status: z.literal('registered'),
+      generation: connectionGenerationSchema,
+      fencedGeneration: connectionGenerationSchema.nullable()
+    })
+    .strict(),
+  z.object({ status: z.literal('refused'), reason: registrationRefusalReasonSchema }).strict()
+]);
+
 /** Why an inbound frame was refused by the transport, before protocol authorization. */
-export type FrameRefusalReason =
+export const FRAME_REFUSAL_REASONS = [
   /** The frame exceeded the control-frame cap. */
-  | 'frame-too-large'
+  'frame-too-large',
   /** The frame was not decodable JSON. */
-  | 'malformed-frame'
+  'malformed-frame',
   /** The sending connection has been fenced by a newer generation. */
-  | 'connection-fenced'
+  'connection-fenced',
   /** The connection has not finished synchronizing; commands cannot be delivered yet. */
-  | 'not-synchronized'
+  'not-synchronized',
   /** Accepting the frame would exceed the outstanding-obligation budget. */
-  | 'outstanding-limit-exceeded';
+  'outstanding-limit-exceeded'
+] as const;
+
+/** Why an inbound frame was refused by the transport, before protocol authorization. */
+export type FrameRefusalReason = (typeof FRAME_REFUSAL_REASONS)[number];
+
+/** Validates a frame refusal reason arriving from the server. */
+export const frameRefusalReasonSchema = z.enum(FRAME_REFUSAL_REASONS);
