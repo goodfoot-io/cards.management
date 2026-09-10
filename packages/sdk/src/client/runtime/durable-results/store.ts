@@ -74,6 +74,20 @@ function digest(value: string): string {
 }
 
 /**
+ * Computes the directory holding one execution's custody records.
+ *
+ * The execution ID becomes a digest here, which is the only place it is allowed
+ * to influence a path at all.
+ *
+ * @param root - Absolute custody root.
+ * @param executionId - Execution the results belong to.
+ * @returns Absolute path of that execution's shard.
+ */
+export function custodyShardDir(root: string, executionId: string): string {
+  return path.join(root, digest(executionId));
+}
+
+/**
  * Computes the one path a custody record may occupy.
  *
  * @param root - Absolute custody root.
@@ -82,7 +96,7 @@ function digest(value: string): string {
  * @returns Absolute path of the custody file.
  */
 function custodyPath(root: string, executionId: string, messageId: string): string {
-  return path.join(root, digest(executionId), `${digest(messageId)}.json`);
+  return path.join(custodyShardDir(root, executionId), `${digest(messageId)}.json`);
 }
 
 /**

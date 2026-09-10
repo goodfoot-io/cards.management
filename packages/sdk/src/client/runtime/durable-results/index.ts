@@ -16,6 +16,13 @@
  */
 
 export {
+  createDurableResultReader,
+  type DurableResultInventory,
+  type DurableResultReader,
+  describeDurableResult,
+  listDurableResults
+} from './read.js';
+export {
   createFileResultCustodian,
   type FileResultCustodianOptions,
   readResultCustody,
