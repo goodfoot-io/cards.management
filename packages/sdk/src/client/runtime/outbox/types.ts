@@ -1,0 +1,288 @@
+/**
+ * Contract types for the client outbox: the recovery storage a producer writes
+ * an obligation into before it has been durably acknowledged.
+ *
+ * The outbox exists because of one asymmetry. A short-lived producer — an agent
+ * hook, a CLI invocation, a detached wrapper finishing after its editor window is
+ * gone — can form a durable obligation and then exit before anything authoritative
+ * has accepted it. Without a durable local copy that obligation is simply lost. So
+ * the producer writes it here first, and only deletes it once the authoritative
+ * journal has confirmed it holds it instead. That handoff is the whole point: at
+ * every instant exactly one party is responsible for the obligation, never zero
+ * and never two.
+ *
+ * Three boundaries are deliberate and load-bearing.
+ *
+ * **This is not a transport.** There is no send, deliver, or flush in this module.
+ * Live delivery is the runtime protocol's job; the outbox only makes a record
+ * survive a process exit. A future caller reaching for the outbox to move a
+ * message between two live parties is using the wrong thing, and the absence of a
+ * delivery API is the guardrail.
+ *
+ * **This is not authority.** A record here is a producer's claim, not a decision.
+ * Reconciliation may only retire a record once the authoritative journal has said
+ * it durably accepted the obligation; a journal that is missing or corrupt blocks
+ * reconciliation rather than being read as an empty journal that trivially accepts
+ * everything. Retiring on unverified authority would delete the last copy of an
+ * obligation nobody holds.
+ *
+ * **This never ingests a client-supplied path.** The root comes from server or SDK
+ * configuration, and every caller-supplied identifier reaches the filesystem only
+ * as a SHA-256 digest. Message IDs and execution IDs come from callers, and a
+ * caller-supplied string must never reach a path join.
+ *
+ * @summary Types describing outbox records, role-scoped drain, and startup reconciliation
+ */
+
+import type { ProducerRole, RuntimeEnvelope } from '../../../protocol/index.js';
+
+/** Schema version stamped into every record this build writes. */
+export const OUTBOX_SCHEMA_VERSION = 1;
+
+/**
+ * Delivery classes the outbox will store.
+ *
+ * Only durable intents and durable results are retained until acknowledged, which
+ * is exactly what makes a local copy meaningful. Revocable readiness is excluded
+ * on purpose even though it shares the retain-until-acknowledged flag: readiness
+ * is evidence about a moment, and replaying it from disk after a crash would
+ * re-assert that an agent was idle at a revision that has since advanced — the
+ * false-idle claim the drain barrier exists to refuse. Readiness is re-established
+ * on reconnect, never recovered.
+ */
+export const OUTBOX_DELIVERY_CLASSES = ['durable-intent', 'durable-result'] as const;
+
+/** A delivery class the outbox will store. */
+export type OutboxDeliveryClass = (typeof OUTBOX_DELIVERY_CLASSES)[number];
+
+/**
+ * One durable obligation a producer has formed but not yet had acknowledged.
+ *
+ * `messageId` is the identity everything here keys on, because the protocol
+ * already defines it as stable across retransmissions of the same logical
+ * message. A producer that never learned whether its first write landed writes
+ * again under the same ID and gets `exists`, not a duplicate obligation.
+ */
+export interface OutboxRecord {
+  /** Version of this schema, so an older build's record is refused, not misread. */
+  readonly schemaVersion: number;
+  /** Stable message identity; the deduplication key and the file name's preimage. */
+  readonly messageId: string;
+  /** Execution this obligation belongs to; scopes both drain and reconciliation. */
+  readonly executionId: string;
+  /**
+   * Original caller request ID the execution was admitted under.
+   *
+   * Carried even though `executionId` identifies the execution, because this is
+   * the key the admission journal indexes by, and reconciliation must be able to
+   * ask about a record without first resolving one identity into the other.
+   */
+  readonly requestId: string;
+  /** Role that produced this record; drain is scoped to a single role. */
+  readonly role: ProducerRole;
+  /** Delivery class governing acceptance, restricted per {@link OUTBOX_DELIVERY_CLASSES}. */
+  readonly deliveryClass: OutboxDeliveryClass;
+  /** The message itself, as the protocol will decode it. */
+  readonly envelope: RuntimeEnvelope;
+  /** When the producer enqueued it, ISO 8601. Advisory; never used for ordering decisions. */
+  readonly enqueuedAt: string;
+}
+
+/** The fields a producer supplies; the store stamps the rest. */
+export type OutboxRecordInput = Omit<OutboxRecord, 'schemaVersion' | 'enqueuedAt'>;
+
+/**
+ * Where one record lives, without exposing its content.
+ *
+ * Carries the path so that a corrupt or blocked record can be named in an
+ * operator-facing report; the path is produced by this module, never accepted
+ * from a caller.
+ */
+export interface OutboxRecordRef {
+  readonly messageId: string;
+  readonly executionId: string;
+  readonly role: ProducerRole;
+  /** Absolute path of the record file, for evidence and diagnostics. */
+  readonly path: string;
+}
+
+/** A record that exists but cannot be trusted, left exactly as found. */
+export interface OutboxCorruption {
+  /** Absolute path of the unreadable file. */
+  readonly path: string;
+  /** Why it could not be trusted — parse failure, unknown schema, missing field. */
+  readonly detail: string;
+}
+
+/** Result of an exclusive enqueue attempt. */
+export type EnqueueResult = 'created' | 'exists';
+
+/** Which records a caller is entitled to see. */
+export interface OutboxDrainScope {
+  /** Execution whose records are being drained. */
+  readonly executionId: string;
+  /**
+   * Role the caller authenticated as.
+   *
+   * A producer drains only what it produced. This is not a filter for
+   * convenience: two roles on one execution hold independent obligations, and a
+   * wrapper retiring a hook's record would delete a copy it never had the
+   * acknowledgment for.
+   */
+  readonly role: ProducerRole;
+}
+
+/**
+ * What one scan found.
+ *
+ * Readable records and corruption are reported together rather than the scan
+ * failing on the first bad file, because one unreadable record must not strand
+ * every healthy obligation beside it — and must not be silently skipped either.
+ */
+export interface OutboxScanResult {
+  /** Records that parsed and are eligible for the requested scope. */
+  readonly records: readonly OutboxRecord[];
+  /** Files that could not be trusted. Non-empty means the caller must not report clean. */
+  readonly corrupt: readonly OutboxCorruption[];
+}
+
+/**
+ * Proof that the authoritative journal has durably taken an obligation.
+ *
+ * Retirement requires one of these rather than a boolean, so that a caller
+ * cannot retire a record on the strength of a value it invented.
+ */
+export interface JournalAcknowledgment {
+  /** Message the journal accepted; must match the record being retired. */
+  readonly messageId: string;
+  /** When the journal confirmed durable acceptance, ISO 8601. */
+  readonly acknowledgedAt: string;
+}
+
+/** Outcome of attempting to retire one record. */
+export type RetirementResult =
+  | { readonly kind: 'retired' }
+  /** No record for that ID — a retirement replayed after the first one succeeded. */
+  | { readonly kind: 'already-retired' }
+  /** The acknowledgment did not name this record; nothing was deleted. */
+  | { readonly kind: 'refused'; readonly detail: string };
+
+/**
+ * Durable storage port for outbox records.
+ *
+ * Deliberately narrow: create, scan, retire. There is no update-in-place, because
+ * a record's content is the obligation and rewriting it would let a producer
+ * change what it promised after the fact; and no read-by-id, because every
+ * legitimate consumer works from a scope, not from an ID it guessed.
+ */
+export interface ClientOutbox {
+  /**
+   * Writes one record, atomically and idempotently on its message ID.
+   *
+   * @param input - The obligation to persist.
+   * @returns `created` on first write, `exists` when this message ID is already stored.
+   */
+  enqueue(input: OutboxRecordInput): Promise<EnqueueResult>;
+
+  /**
+   * Lists the records visible to one execution-and-role scope.
+   *
+   * @param scope - Execution and authenticated role of the caller.
+   * @returns Readable records plus any corruption found while scanning.
+   */
+  scan(scope: OutboxDrainScope): Promise<OutboxScanResult>;
+
+  /**
+   * Lists every record in the store, for server startup reconciliation.
+   *
+   * Unscoped because the originating producers have exited and no longer speak
+   * for themselves; this is the only caller entitled to that view.
+   *
+   * @returns Every readable record plus any corruption found while scanning.
+   */
+  scanAll(): Promise<OutboxScanResult>;
+
+  /**
+   * Names where one record lives, so a report can cite it as evidence.
+   *
+   * The store computes the path; a caller never supplies one. This is the only
+   * way to obtain an {@link OutboxRecordRef}, which is what keeps the retirement
+   * path from ever being handed a location a caller invented.
+   *
+   * @param record - A record this store returned.
+   * @returns Its identifiers together with its computed path.
+   */
+  refFor(record: OutboxRecord): OutboxRecordRef;
+
+  /**
+   * Deletes one record, and only against an acknowledgment naming it.
+   *
+   * Deletion is correct here, unlike in the admission journal: an outbox record
+   * is the producer's copy, and the handoff is complete precisely when it is
+   * gone. Retiring without acknowledgment would leave the obligation held by
+   * nobody.
+   *
+   * @param ref - The record to retire.
+   * @param ack - Journal acknowledgment that must name the same message.
+   * @returns Whether the record was retired, already gone, or refused.
+   */
+  retire(ref: OutboxRecordRef, ack: JournalAcknowledgment): Promise<RetirementResult>;
+}
+
+/**
+ * What the authoritative journal said about one recovered record.
+ *
+ * `authority-unavailable` is separate from `not-admitted` on purpose. An
+ * unadmitted execution is a definite answer — the record is untrusted and stays
+ * put. An unavailable authority is no answer at all, and collapsing the two would
+ * turn a corrupt journal into a licence to retire every obligation it failed to
+ * recognise.
+ */
+export type OutcomeAcceptance =
+  | { readonly kind: 'accepted'; readonly acknowledgment: JournalAcknowledgment }
+  | { readonly kind: 'not-admitted'; readonly detail: string }
+  | { readonly kind: 'authority-unavailable'; readonly detail: string };
+
+/**
+ * The seam into the admission authority's outcome-acceptance path.
+ *
+ * Kept as a one-method port so this module can be built and proven before that
+ * path exists, and so reconciliation never reaches into admission internals.
+ */
+export interface OutcomeAcceptor {
+  /**
+   * Offers one recovered record to the authoritative journal.
+   *
+   * @param record - A trusted, parsed record whose producer has exited.
+   * @returns Acceptance carrying an acknowledgment, a definite refusal, or the
+   *   statement that authority could not be consulted at all.
+   */
+  acceptRecovered(record: OutboxRecord): Promise<OutcomeAcceptance>;
+}
+
+/** One record reconciliation could not complete, and why. */
+export interface ReconciliationFailure {
+  readonly ref: OutboxRecordRef;
+  readonly detail: string;
+}
+
+/**
+ * What one startup reconciliation pass did.
+ *
+ * `ok` is false whenever anything was corrupt or blocked, so a caller cannot
+ * report a clean startup while evidence of an unheld obligation sits on disk.
+ */
+export interface ReconciliationReport {
+  /** Records read, including ones that were then refused. */
+  readonly scanned: number;
+  /** Records the journal accepted and that were consequently retired. */
+  readonly retired: readonly OutboxRecordRef[];
+  /** Records for executions the journal does not recognise. Left in place. */
+  readonly untrusted: readonly ReconciliationFailure[];
+  /** Records left in place because authority could not be consulted. */
+  readonly blocked: readonly ReconciliationFailure[];
+  /** Unreadable files, left exactly as found. */
+  readonly corrupt: readonly OutboxCorruption[];
+  /** True only when every record was reconciled and nothing was corrupt. */
+  readonly ok: boolean;
+}

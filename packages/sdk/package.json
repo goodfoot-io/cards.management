@@ -9,6 +9,7 @@
     ".": "./src/index.ts",
     "./protocol": "./src/protocol/index.ts",
     "./client": "./src/client/index.ts",
+    "./client/runtime/outbox": "./src/client/runtime/outbox/index.ts",
     "./client/discovery": "./src/client/api-discovery.ts",
     "./config": "./src/config/index.ts",
     "./config/factories": "./src/config/factories/index.ts",
