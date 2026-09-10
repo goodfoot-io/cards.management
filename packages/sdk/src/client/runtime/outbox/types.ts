@@ -230,34 +230,101 @@ export interface ClientOutbox {
 }
 
 /**
- * What the authoritative journal said about one recovered record.
+ * Message types that are an execution's original launch intent.
  *
- * `authority-unavailable` is separate from `not-admitted` on purpose. An
- * unadmitted execution is a definite answer — the record is untrusted and stays
- * put. An unavailable authority is no answer at all, and collapsing the two would
- * turn a corrupt journal into a licence to retire every obligation it failed to
- * recognise.
+ * These are the durable intents whose durable copy is already held elsewhere:
+ * admission's own record of the request. Reconciliation may therefore retire one
+ * on a validator's say-so, because it is confirming legitimacy rather than taking
+ * custody — the copy it is vouching for already exists.
+ *
+ * Every other durable intent — cancels, shutdown requests, watcher stops — has no
+ * durable owner yet. Routing keys on this list rather than on `deliveryClass`
+ * alone precisely so that a type nobody holds a copy of cannot be retired by
+ * accident when a new intent is added to the protocol.
+ */
+export const LAUNCH_INTENT_MESSAGE_TYPES = ['execution.launchRequest'] as const;
+
+/** A durable intent whose durable copy admission already holds. */
+export type LaunchIntentMessageType = (typeof LAUNCH_INTENT_MESSAGE_TYPES)[number];
+
+/**
+ * What an authority said about one recovered record.
+ *
+ * The three refusals are distinct on purpose, and collapsing any pair would hide
+ * a different failure.
+ *
+ * `not-admitted` is a definite answer: the record is untrusted and stays put.
+ * `authority-unavailable` is no answer at all, and reading it as `not-admitted`
+ * would turn a corrupt journal into a licence to retire every obligation it
+ * failed to recognise. `no-custodian` is neither — the authority was reachable
+ * and the record may be perfectly valid, but nothing in this build durably holds
+ * this kind of obligation, so there is no one to hand it to. That is a gap in the
+ * system rather than a fault in the record, and it must not read as a refusal of
+ * the record itself.
  */
 export type OutcomeAcceptance =
   | { readonly kind: 'accepted'; readonly acknowledgment: JournalAcknowledgment }
   | { readonly kind: 'not-admitted'; readonly detail: string }
-  | { readonly kind: 'authority-unavailable'; readonly detail: string };
+  | { readonly kind: 'authority-unavailable'; readonly detail: string }
+  | { readonly kind: 'no-custodian'; readonly detail: string };
 
 /**
- * The seam into the admission authority's outcome-acceptance path.
+ * The seam into whatever durably persists a recovered result envelope.
  *
- * Kept as a one-method port so this module can be built and proven before that
- * path exists, and so reconciliation never reaches into admission internals.
+ * A `durable-result` record carries the only surviving copy of its envelope, so
+ * the party that authorises its retirement must be the party that has written a
+ * copy of its own and flushed it. Naming this port for custody rather than for
+ * acceptance is the whole correction: an implementation that merely recognises a
+ * record and returns `accepted` satisfies an acceptance-shaped interface while
+ * leaving the obligation held by nobody.
  */
-export interface OutcomeAcceptor {
+export interface RecoveredResultCustodian {
   /**
-   * Offers one recovered record to the authoritative journal.
+   * Takes durable custody of one recovered result, then acknowledges it.
    *
-   * @param record - A trusted, parsed record whose producer has exited.
-   * @returns Acceptance carrying an acknowledgment, a definite refusal, or the
-   *   statement that authority could not be consulted at all.
+   * An implementation must not return `accepted` until its own copy of
+   * {@link OutboxRecord.envelope} is durable — flushed, not merely queued. The
+   * caller deletes the last other copy on the strength of that answer.
+   *
+   * @param record - A trusted, parsed `durable-result` record whose producer has exited.
+   * @returns Acknowledgment of durable custody, a definite refusal, or the
+   *   statement that the custodian could not be consulted at all.
    */
-  acceptRecovered(record: OutboxRecord): Promise<OutcomeAcceptance>;
+  takeCustody(record: OutboxRecord): Promise<OutcomeAcceptance>;
+}
+
+/**
+ * The seam into admission's validation of a recovered launch intent.
+ *
+ * Unlike {@link RecoveredResultCustodian} this port takes no custody, and does
+ * not need to: admission's own record of the launch request is already the
+ * durable copy. It answers only whether the obligation is legitimate — admitted,
+ * matching the execution it names, and neither revoked nor already retired.
+ */
+export interface RecoveredIntentValidator {
+  /**
+   * Confirms one recovered launch intent is legitimate and already durably held.
+   *
+   * @param record - A trusted, parsed launch-intent record whose producer has exited.
+   * @returns Acknowledgment that admission holds it, a definite refusal, or the
+   *   statement that admission could not be consulted at all.
+   */
+  validateRecoveredObligation(record: OutboxRecord): Promise<OutcomeAcceptance>;
+}
+
+/**
+ * The authorities reconciliation routes to, one per kind of obligation.
+ *
+ * There is deliberately no single acceptor. The two ports answer different
+ * questions — one takes custody, one attests that custody already exists — and a
+ * single method would have to mean both, which is exactly the ambiguity that let
+ * a recognition-only implementation authorise deletion of the only copy.
+ */
+export interface ReconciliationAuthorities {
+  /** Takes custody of recovered `durable-result` records. */
+  readonly resultCustodian: RecoveredResultCustodian;
+  /** Validates recovered launch intents, whose copy admission already holds. */
+  readonly launchIntentValidator: RecoveredIntentValidator;
 }
 
 /** One record reconciliation could not complete, and why. */
@@ -269,18 +336,29 @@ export interface ReconciliationFailure {
 /**
  * What one startup reconciliation pass did.
  *
- * `ok` is false whenever anything was corrupt or blocked, so a caller cannot
- * report a clean startup while evidence of an unheld obligation sits on disk.
+ * `ok` is false whenever anything was left behind, so a caller cannot report a
+ * clean startup while evidence of an unheld obligation sits on disk. That
+ * includes `unowned`: an obligation no component can discharge is a real gap,
+ * and a build that reports clean while carrying one is lying about its state.
  */
 export interface ReconciliationReport {
   /** Records read, including ones that were then refused. */
   readonly scanned: number;
-  /** Records the journal accepted and that were consequently retired. */
+  /** Records an authority took or attested custody of, and that were consequently retired. */
   readonly retired: readonly OutboxRecordRef[];
   /** Records for executions the journal does not recognise. Left in place. */
   readonly untrusted: readonly ReconciliationFailure[];
   /** Records left in place because authority could not be consulted. */
   readonly blocked: readonly ReconciliationFailure[];
+  /**
+   * Records of a kind nothing durably holds yet. Left in place.
+   *
+   * Separate from `blocked` because the cause is structural rather than
+   * operational: nothing is broken and retrying will not help until the owning
+   * component exists. An operator reading a report needs to tell "the journal is
+   * down" apart from "this obligation has no home in this build".
+   */
+  readonly unowned: readonly ReconciliationFailure[];
   /** Unreadable files, left exactly as found. */
   readonly corrupt: readonly OutboxCorruption[];
   /** True only when every record was reconciled and nothing was corrupt. */

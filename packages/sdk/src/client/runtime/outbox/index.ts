@@ -32,6 +32,8 @@ export {
   type ClientOutbox,
   type EnqueueResult,
   type JournalAcknowledgment,
+  LAUNCH_INTENT_MESSAGE_TYPES,
+  type LaunchIntentMessageType,
   OUTBOX_DELIVERY_CLASSES,
   OUTBOX_SCHEMA_VERSION,
   type OutboxCorruption,
@@ -42,8 +44,10 @@ export {
   type OutboxRecordRef,
   type OutboxScanResult,
   type OutcomeAcceptance,
-  type OutcomeAcceptor,
+  type ReconciliationAuthorities,
   type ReconciliationFailure,
   type ReconciliationReport,
+  type RecoveredIntentValidator,
+  type RecoveredResultCustodian,
   type RetirementResult
 } from './types.js';

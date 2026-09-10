@@ -6,7 +6,26 @@
  * closed, a detached wrapper that finished after its editor window was gone. Its
  * obligation is still real, and nothing else will ever speak for it.
  *
- * Two refusals here are the substance of the module.
+ * Which authority a record goes to depends on what the record is, because the
+ * question that has to be answered before deleting the producer's copy differs
+ * by kind.
+ *
+ * A `durable-result` record carries the only surviving copy of its envelope, so
+ * something must take real custody of it. That goes to
+ * {@link ReconciliationAuthorities.resultCustodian}, which writes and flushes its
+ * own copy before acknowledging.
+ *
+ * A launch intent is different: admission's own record of the request is already
+ * a durable copy, so the question is legitimacy, not custody, and
+ * {@link ReconciliationAuthorities.launchIntentValidator} answers it.
+ *
+ * Every other durable intent — cancels, shutdown requests, watcher stops — has no
+ * durable owner in this build. Those are refused as `unowned` and left on disk.
+ * Routing them to either port would be asking a component to vouch for a copy it
+ * does not have, which is precisely how the only copy of an obligation gets
+ * deleted.
+ *
+ * Three refusals here are the substance of the module.
  *
  * A record for an execution the authority does not recognise is *untrusted*, not
  * garbage. It stays on disk and is reported. Deleting it would destroy the only
@@ -20,40 +39,75 @@
  * "no" from "no answer", and why {@link ReconciliationReport.ok} is false the
  * moment anything blocks.
  *
+ * A record nothing owns is *unowned*, which is neither. Nothing is broken and
+ * the record may be entirely valid; there is simply no component in this build
+ * that can hold it. Retrying will not help, so it is reported apart from
+ * `blocked` — but it still keeps `ok` false, because an obligation with no home
+ * is not a clean startup.
+ *
  * @summary Startup reconciliation of exited producers' outbox records
  * @module runtime/outbox/reconcile
  */
 
 import type {
   ClientOutbox,
+  OutboxRecord,
   OutboxRecordRef,
-  OutcomeAcceptor,
+  OutcomeAcceptance,
+  ReconciliationAuthorities,
   ReconciliationFailure,
   ReconciliationReport
 } from './types.js';
+import { LAUNCH_INTENT_MESSAGE_TYPES } from './types.js';
+
+const LAUNCH_INTENT_TYPES: ReadonlySet<string> = new Set(LAUNCH_INTENT_MESSAGE_TYPES);
+
+/**
+ * Asks the authority that is entitled to answer for this particular record.
+ *
+ * @param record - A trusted, parsed record whose producer has exited.
+ * @param authorities - The custody and validation ports.
+ * @returns That authority's answer, or `no-custodian` when none is entitled.
+ */
+async function routeToAuthority(
+  record: OutboxRecord,
+  authorities: ReconciliationAuthorities
+): Promise<OutcomeAcceptance> {
+  if (record.deliveryClass === 'durable-result') {
+    return authorities.resultCustodian.takeCustody(record);
+  }
+  if (LAUNCH_INTENT_TYPES.has(record.envelope.type)) {
+    return authorities.launchIntentValidator.validateRecoveredObligation(record);
+  }
+  return {
+    kind: 'no-custodian',
+    detail: `no component durably holds '${record.envelope.type}' obligations in this build`
+  };
+}
 
 /**
  * Reconciles every record left by an exited producer.
  *
- * Retires a record only when the authoritative journal returns an acknowledgment
- * for it. Everything else is preserved and reported.
+ * Retires a record only when the authority entitled to answer for it returns an
+ * acknowledgment. Everything else is preserved and reported.
  *
  * @param outbox - The store to reconcile.
- * @param acceptor - Seam into the authoritative journal's acceptance path.
+ * @param authorities - Custody and validation seams, routed to per record kind.
  * @returns What was retired, what was left, and whether startup may report clean.
  */
 export async function reconcileOutboxOnStartup(
   outbox: ClientOutbox,
-  acceptor: OutcomeAcceptor
+  authorities: ReconciliationAuthorities
 ): Promise<ReconciliationReport> {
   const scan = await outbox.scanAll();
   const retired: OutboxRecordRef[] = [];
   const untrusted: ReconciliationFailure[] = [];
   const blocked: ReconciliationFailure[] = [];
+  const unowned: ReconciliationFailure[] = [];
 
   for (const record of scan.records) {
     const ref = outbox.refFor(record);
-    const acceptance = await acceptor.acceptRecovered(record);
+    const acceptance = await routeToAuthority(record, authorities);
 
     if (acceptance.kind === 'not-admitted') {
       untrusted.push({ ref, detail: acceptance.detail });
@@ -63,14 +117,18 @@ export async function reconcileOutboxOnStartup(
       blocked.push({ ref, detail: acceptance.detail });
       continue;
     }
+    if (acceptance.kind === 'no-custodian') {
+      unowned.push({ ref, detail: acceptance.detail });
+      continue;
+    }
 
     const result = await outbox.retire(ref, acceptance.acknowledgment);
     if (result.kind === 'retired' || result.kind === 'already-retired') {
       retired.push(ref);
     } else {
-      // The journal accepted it but the store would not release it. The
-      // obligation is now held twice, which is safe, and leaving the record is
-      // the only option that keeps it that way rather than risking zero.
+      // The authority took custody but the store would not release the record.
+      // The obligation is now held twice, which is safe, and leaving the record
+      // is the only option that keeps it that way rather than risking zero.
       blocked.push({ ref, detail: `retirement refused: ${result.detail}` });
     }
   }
@@ -80,7 +138,8 @@ export async function reconcileOutboxOnStartup(
     retired,
     untrusted,
     blocked,
+    unowned,
     corrupt: scan.corrupt,
-    ok: untrusted.length === 0 && blocked.length === 0 && scan.corrupt.length === 0
+    ok: untrusted.length === 0 && blocked.length === 0 && unowned.length === 0 && scan.corrupt.length === 0
   };
 }

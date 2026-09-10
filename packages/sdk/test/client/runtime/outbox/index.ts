@@ -23,7 +23,7 @@ import type {
   OutboxRecordInput,
   OutboxRecordRef,
   OutcomeAcceptance,
-  OutcomeAcceptor
+  ReconciliationAuthorities
 } from '../../../../src/client/runtime/outbox/index.js';
 import { RUNTIME_PROTOCOL_VERSION } from '../../../../src/protocol/index.js';
 
@@ -76,6 +76,53 @@ export function makeRecordInput(overrides: RecordInputOverrides = {}): OutboxRec
 }
 
 /**
+ * Builds a record input carrying a real `execution.launchRequest` envelope.
+ *
+ * This is the one durable intent reconciliation may retire on a validator's
+ * word, because admission's own record of the request is already a durable copy.
+ *
+ * @param overrides - Fields to vary; everything else is canonical.
+ * @returns A launch-intent record input the store will accept.
+ */
+export function makeLaunchIntentInput(overrides: RecordInputOverrides = {}): OutboxRecordInput {
+  const base = makeRecordInput({ ...overrides, deliveryClass: 'durable-intent' });
+  return {
+    ...base,
+    envelope: {
+      ...base.envelope,
+      type: 'execution.launchRequest',
+      payload: {
+        actionId: 'action-1',
+        environmentName: 'default',
+        mode: 'background',
+        exitWhenDone: true
+      }
+    }
+  };
+}
+
+/**
+ * Builds a record input carrying a durable intent nothing durably holds yet.
+ *
+ * `execution.cancelRequest` stands in for the whole unowned bucket — cancels,
+ * shutdown requests, watcher stops — whose custodian milestone 3 builds.
+ *
+ * @param overrides - Fields to vary; everything else is canonical.
+ * @returns An unowned-intent record input the store will accept.
+ */
+export function makeUnownedIntentInput(overrides: RecordInputOverrides = {}): OutboxRecordInput {
+  const base = makeRecordInput({ ...overrides, deliveryClass: 'durable-intent' });
+  return {
+    ...base,
+    envelope: {
+      ...base.envelope,
+      type: 'execution.cancelRequest',
+      payload: { reason: 'user', overridesIdleRequirement: false }
+    }
+  };
+}
+
+/**
  * Builds an acknowledgment naming one message.
  *
  * @param messageId - Message the journal is said to have accepted.
@@ -86,22 +133,37 @@ export function ackFor(messageId: string): JournalAcknowledgment {
 }
 
 /**
- * An acceptor that answers every record the same way.
+ * Authorities that answer every record the same way, recording which port ran.
+ *
+ * Keeping the two offer logs separate is the point: routing is the behaviour
+ * under test, so a check has to be able to say not just what was decided but
+ * which authority was asked.
  *
  * @param answer - Builds the answer for one record.
- * @returns An acceptor plus the records it was offered, in order.
+ * @returns The authorities plus the records each port was offered, in order.
  */
-export function scriptedAcceptor(answer: (record: OutboxRecord) => OutcomeAcceptance): {
-  acceptor: OutcomeAcceptor;
-  offered: OutboxRecord[];
+export function scriptedAuthorities(answer: (record: OutboxRecord) => OutcomeAcceptance): {
+  authorities: ReconciliationAuthorities;
+  custodied: OutboxRecord[];
+  validated: OutboxRecord[];
 } {
-  const offered: OutboxRecord[] = [];
+  const custodied: OutboxRecord[] = [];
+  const validated: OutboxRecord[] = [];
   return {
-    offered,
-    acceptor: {
-      acceptRecovered: (record) => {
-        offered.push(record);
-        return Promise.resolve(answer(record));
+    custodied,
+    validated,
+    authorities: {
+      resultCustodian: {
+        takeCustody: (record) => {
+          custodied.push(record);
+          return Promise.resolve(answer(record));
+        }
+      },
+      launchIntentValidator: {
+        validateRecoveredObligation: (record) => {
+          validated.push(record);
+          return Promise.resolve(answer(record));
+        }
       }
     }
   };
