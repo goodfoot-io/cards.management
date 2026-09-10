@@ -95,21 +95,24 @@ describe('durable intent, via execution.executeRequest', () => {
 
 describe('revocable readiness, via execution.shutdownReadiness', () => {
   it('accepts current readiness as durably stored evidence', () => {
-    expect(evaluateReadinessReceipt({ shutdownRequestId: 'sd-1', workRevision: 7 }, 7).disposition).toBe('accept');
+    expect(
+      evaluateReadinessReceipt({ evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 }, 7).disposition
+    ).toBe('accept');
   });
 
   it('stores superseded readiness but requires revalidation before it authorizes anything', () => {
-    expect(evaluateReadinessReceipt({ shutdownRequestId: 'sd-1', workRevision: 6 }, 7).disposition).toBe(
-      'require-revalidation'
-    );
+    expect(
+      evaluateReadinessReceipt({ evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 6 }, 7).disposition
+    ).toBe('require-revalidation');
   });
 
   it('authorizes termination only with current readiness and a held drain', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
-        readiness: { shutdownRequestId: 'sd-1', workRevision: 7 },
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
         currentWorkRevision: 7,
+        consumedEvidenceIds: [],
         drain: { workRevision: 7, barrierHeld: true }
       })
     ).toEqual({ authorized: true });
@@ -121,6 +124,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
         shutdownRequestId: 'sd-1',
         readiness: undefined,
         currentWorkRevision: 7,
+        consumedEvidenceIds: [],
         drain: { workRevision: 7, barrierHeld: true }
       })
     ).toEqual({ authorized: false, reason: 'no-readiness-recorded' });
@@ -130,19 +134,45 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-2',
-        readiness: { shutdownRequestId: 'sd-1', workRevision: 7 },
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
         currentWorkRevision: 7,
+        consumedEvidenceIds: [],
         drain: { workRevision: 7, barrierHeld: true }
       })
     ).toEqual({ authorized: false, reason: 'readiness-for-other-request' });
+  });
+
+  it('refuses evidence already spent authorizing a termination, even with no new work', () => {
+    expect(
+      authorizeTermination({
+        shutdownRequestId: 'sd-1',
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
+        consumedEvidenceIds: ['ev-1'],
+        currentWorkRevision: 7,
+        drain: { workRevision: 7, barrierHeld: true }
+      })
+    ).toEqual({ authorized: false, reason: 'readiness-already-consumed' });
+  });
+
+  it('authorizes fresh evidence even when earlier evidence was already consumed', () => {
+    expect(
+      authorizeTermination({
+        shutdownRequestId: 'sd-1',
+        readiness: { evidenceId: 'ev-2', shutdownRequestId: 'sd-1', workRevision: 7 },
+        consumedEvidenceIds: ['ev-1'],
+        currentWorkRevision: 7,
+        drain: { workRevision: 7, barrierHeld: true }
+      })
+    ).toEqual({ authorized: true });
   });
 
   it('refuses a replayed readiness record once new work has started', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
-        readiness: { shutdownRequestId: 'sd-1', workRevision: 7 },
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
         currentWorkRevision: 8,
+        consumedEvidenceIds: [],
         drain: { workRevision: 8, barrierHeld: true }
       })
     ).toEqual({ authorized: false, reason: 'readiness-superseded' });
@@ -152,8 +182,9 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
-        readiness: { shutdownRequestId: 'sd-1', workRevision: 7 },
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
         currentWorkRevision: 7,
+        consumedEvidenceIds: [],
         drain: undefined
       })
     ).toEqual({ authorized: false, reason: 'drain-missing' });
@@ -163,8 +194,9 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
-        readiness: { shutdownRequestId: 'sd-1', workRevision: 7 },
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
         currentWorkRevision: 7,
+        consumedEvidenceIds: [],
         drain: { workRevision: 6, barrierHeld: true }
       })
     ).toEqual({ authorized: false, reason: 'drain-stale' });
@@ -174,8 +206,9 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
     expect(
       authorizeTermination({
         shutdownRequestId: 'sd-1',
-        readiness: { shutdownRequestId: 'sd-1', workRevision: 7 },
+        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
         currentWorkRevision: 7,
+        consumedEvidenceIds: [],
         drain: { workRevision: 7, barrierHeld: false }
       })
     ).toEqual({ authorized: false, reason: 'barrier-not-held' });

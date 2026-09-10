@@ -223,8 +223,16 @@ export function evaluateDurableIntent(messageId: string, record: DurableIntentRe
 
 // --- Revocable readiness evidence ---
 
-/** Stored readiness evidence, keyed by shutdown request and work revision. */
+/**
+ * Stored readiness evidence. Identity is explicit because this evidence is
+ * single-use: a work revision alone cannot distinguish a fresh observation of
+ * idleness from a replay of an earlier one taken at the same revision, and
+ * treating those alike is what would let one observation authorize two
+ * terminations.
+ */
 export interface ReadinessRecord {
+  /** Identity of this observation, unique per reported idleness. */
+  readonly evidenceId: string;
   /** Shutdown request the readiness was reported against. */
   readonly shutdownRequestId: string;
   /** Work revision current at the moment idleness was observed. */
@@ -244,6 +252,12 @@ export interface TerminationAuthorizationInput {
   readonly shutdownRequestId: string;
   /** Stored readiness evidence, or `undefined` when none was recorded. */
   readonly readiness: ReadinessRecord | undefined;
+  /**
+   * Evidence IDs already spent authorizing a termination. Membership is what
+   * makes readiness single-use, so a replayed record cannot authorize a second
+   * termination even when no new work has raised the revision.
+   */
+  readonly consumedEvidenceIds: readonly string[];
   /** Work revision the execution is on right now. */
   readonly currentWorkRevision: number;
   /** Freshly established strict drain, or `undefined` if none is held. */
@@ -261,6 +275,7 @@ export interface TerminationAuthorizationInput {
 export type TerminationRefusalReason =
   | 'no-readiness-recorded'
   | 'readiness-for-other-request'
+  | 'readiness-already-consumed'
   | 'readiness-superseded'
   | 'drain-missing'
   | 'drain-stale'
@@ -310,6 +325,9 @@ export function authorizeTermination(input: TerminationAuthorizationInput): Term
   }
   if (readiness.shutdownRequestId !== input.shutdownRequestId) {
     return { authorized: false, reason: 'readiness-for-other-request' };
+  }
+  if (input.consumedEvidenceIds.includes(readiness.evidenceId)) {
+    return { authorized: false, reason: 'readiness-already-consumed' };
   }
   if (readiness.workRevision !== input.currentWorkRevision) {
     return { authorized: false, reason: 'readiness-superseded' };
