@@ -43,7 +43,7 @@ Each contains a `.claude-plugin/plugin.json` or `.codex-plugin/plugin.json` with
 
 **Path**: `{globalStorage}/marketplace` → `{ext}/dist/marketplace`.
 
-**Created by**: `ensureMarketplaceSymlink()` in `packages/extension/src/services/marketplaceSymlink.ts`. On POSIX: native symlink. On Windows: directory junction. Removed and recreated on every extension activation so upgrades point to the latest version.
+**Created by**: `ensureMarketplaceSymlink()`. On POSIX: native symlink. On Windows: directory junction. Removed and recreated on every extension activation so upgrades point to the latest version.
 
 VS Code installs each extension version to a versioned directory, but this `globalStorage` symlink survives upgrades — so the path agent settings reference never changes. The `MARKETPLACE_PATH` env var injected into agent processes holds it.
 
@@ -93,7 +93,7 @@ Two entry points write the Codex plugin cache; both stage through the same routi
 
 | Entry point | Caller | Triggered by |
 |---|---|---|
-| Setup wizard / repair | [`CodexInstaller`](/packages/extension/src/agents/install/CodexInstaller.ts) transaction methods | **Cards: Configure Coding Agent**, or one-shot activation repair after freshness detects drift |
+| Setup wizard / repair | `CodexInstaller` transaction methods | **Cards: Configure Coding Agent**, or one-shot activation repair after freshness detects drift |
 | Session launch | `populateCodexPluginCache()` | Every Cards-spawned Codex session, before spawn |
 
 `installPluginToCache(pluginName, marketplaceDir, sourceDir, version)`:
@@ -128,8 +128,8 @@ The `cards-sdk` plugin is NOT staged — it's only consumed at build time.
 Based on cache state:
 - **Claude cache has old versions**: Managed by Claude Code's own plugin system — 7-day orphan GC on unused versions.
 - **Codex cache has old versions**: `pruneSupersededPluginVersions()` deletes all but the highest semver at each cache population.
-- **Codex slot stale despite an extension rebuild** (same `version`, different bytes): the slot is content-addressed via `.cards-content-hash`, so a rebuilt bundle restages even when its declared `version` did not change. A slot from before this fix has no stamp and is stale (fail-closed). On activation, the initial warm capability probe performs one freshness read; stale or absent user-scope plugins trigger one background [`CodexInstaller.repairInstalled()`](/packages/extension/src/agents/install/CodexInstaller.ts). Installer transactions share a Codex-home lock across VS Code windows, and repair rechecks the install manifest while holding it so a concurrent user uninstall is never revived. A successful repair is not re-probed or retried. If repair fails, Cards writes one warning to the activation log and shows one VS Code warning notification. Every Cards-spawned Codex session also stages before launch.
-- **Inspecting staleness manually**: [`probeCodexFreshness()`](/packages/extension/src/agents/codexFreshness.ts) reads the highest-semver slot per plugin, compares its `.cards-content-hash` against a digest of the shipped bundle, and returns `current` / `stale` / `absent`. It runs only when activation explicitly opts its warm capability probe into freshness; later service probes do not repeat the check. Manual equivalent:
+- **Codex slot stale despite an extension rebuild** (same `version`, different bytes): the slot is content-addressed via `.cards-content-hash`, so a rebuilt bundle restages even when its declared `version` did not change. A slot from before this fix has no stamp and is stale (fail-closed). On activation, the initial warm capability probe performs one freshness read; stale or absent user-scope plugins trigger one background `CodexInstaller.repairInstalled()`. Installer transactions share a Codex-home lock across VS Code windows, and repair rechecks the install manifest while holding it so a concurrent user uninstall is never revived. A successful repair is not re-probed or retried. If repair fails, Cards writes one warning to the activation log and shows one VS Code warning notification. Every Cards-spawned Codex session also stages before launch.
+- **Inspecting staleness manually**: `probeCodexFreshness()` reads the highest-semver slot per plugin, compares its `.cards-content-hash` against a digest of the shipped bundle, and returns `current` / `stale` / `absent`. It runs only when activation explicitly opts its warm capability probe into freshness; later service probes do not repeat the check. Manual equivalent:
   ```bash
   find ~/.codex/plugins/cache/local -name '.cards-content-hash' -exec sh -c 'echo "$1: $(cat "$1")"' _ {} \;
   ```

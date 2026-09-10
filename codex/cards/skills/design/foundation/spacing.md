@@ -60,7 +60,7 @@ Every extension webview receives `padding: 0 20px` on `body` from VS Code's defa
 
 ## Cards conventions
 
-Source: `packages/cards/web/SPACING.md`.
+Source: the shared web-styles package's spacing reference.
 
 | Context | Value |
 |---|---|

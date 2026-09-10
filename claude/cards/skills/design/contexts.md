@@ -58,9 +58,9 @@ Reference vscode vars via Tailwind arbitrary values (`bg-[var(--vscode-editor-ba
 
 ## Context B — extension webview development
 
-React 19 + Tailwind v4 apps in `packages/extension/src/webviews` and `packages/cards/web`.
+React 19 + Tailwind v4 apps that make up the extension's own webviews.
 
-**Token bridge:** `@cards.management/web/styles` (`packages/cards/web/src/styles/tailwind.css`, built with `@theme inline`) aliases ~60 vscode vars to named Tailwind classes — `bg-vscode-editor-background`, `text-vscode-descriptionForeground`, `border-vscode-panel-border`. Prefer these named classes over arbitrary values. For a var not yet bridged, use the escape hatch `bg-[var(--vscode-sideBar-background)]` rather than adding a bridge entry ad hoc.
+**Token bridge:** `@cards.management/web/styles` (built with `@theme inline`) aliases ~60 vscode vars to named Tailwind classes — `bg-vscode-editor-background`, `text-vscode-descriptionForeground`, `border-vscode-panel-border`. Prefer these named classes over arbitrary values. For a var not yet bridged, use the escape hatch `bg-[var(--vscode-sideBar-background)]` rather than adding a bridge entry ad hoc.
 
 **vscode-elements components** (`<vscode-button>`, `<vscode-textfield>`, `<vscode-textarea>`, …) render via shadow DOM, so Tailwind classes can't reach their internals. Override their look with inline `style` setting `--vscode-*` vars on the host element:
 
@@ -72,7 +72,7 @@ React 19 + Tailwind v4 apps in `packages/extension/src/webviews` and `packages/c
 
 **Scrollbars:** width comes from the host-injected `--cards-scrollbar-width` var (not a fixed px value); colors from `--vscode-scrollbarSlider-*` per `foundation/colors.md`.
 
-**Status colors:** import helpers from `packages/cards/web/src/utils/statusColors.ts` (`STATUS_HEX_COLORS` and friends) — never re-hardcode the status hexes in component code. See `foundation/colors.md` for the token → hex mapping.
+**Status colors:** import the `STATUS_HEX_COLORS` helpers (and friends) from the shared web-styles package — never re-hardcode the status hexes in component code. See `foundation/colors.md` for the token → hex mapping.
 
 ---
 

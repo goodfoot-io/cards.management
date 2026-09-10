@@ -14,7 +14,7 @@ Node's `os.homedir()` is the canonical resolver throughout the codebase.
 
 **Critical**: `os.homedir()` ignores `$HOME` on Windows. Code that sets only `process.env.HOME` works on POSIX but silently reads the real `%USERPROFILE%` on Windows. Tests and demo infrastructure that override home must set BOTH `HOME` and `USERPROFILE`.
 
-**Source**: `packages/cards/git-hooks/test/helpers/home.ts`::`overrideHome()`.
+Internal git-hook tests rely on this dual-override to point `os.homedir()` at a temporary directory regardless of host OS.
 
 ## Path Tables
 
@@ -86,7 +86,7 @@ Resolution: `$CODEX_HOME` → `~/.codex`.
 
 **Cleanup**: On POSIX, stale `.sock` files in `~/.cards/` are cleaned up during ActionDispatcher startup. On Windows, named pipes auto-cleanup on process exit.
 
-**Source**: `packages/extension/src/runtime/ActionDispatcher.ts` (socket creation), `public/packages/sdk/src/config/ipc-endpoint.ts` (IPC endpoint format).
+**Source**: `public/packages/sdk/src/config/ipc-endpoint.ts` (IPC endpoint format).
 
 ### SDK IPC Endpoints (POSIX)
 
@@ -100,7 +100,7 @@ Path: `os.tmpdir()/{name}.sock`. Same `sun_path` constraint applies.
 | macOS | `process.execPath` (Electron binary) | Same. Path contains spaces (`/Applications/Visual Studio Code.app/.../Code Helper (Plugin)`) — always double-quote it |
 | Windows | Console-subsystem `node.exe` from PATH | `Code.exe` is a GUI-subsystem image that cannot attach to a ConPTY |
 
-**Source**: `packages/extension/src/utils/nodeRuntime.ts` (line ~67). The resolved interpreter is persisted to `~/.cards/VSCODE_NODE` on every extension activation.
+The resolved interpreter is persisted to `~/.cards/VSCODE_NODE` on every extension activation.
 
 ## Shell Variable Syntax
 
@@ -123,8 +123,6 @@ Double-quote the interpreter reference on both — the macOS path has spaces.
 
 Used for marketplace and codex symlinks in `globalStorage`. The `'junction'` type is silently ignored on POSIX.
 
-**Source**: `packages/extension/src/services/marketplaceSymlink.ts` (line ~60).
-
 ## Temp Directories
 
 | Platform | `os.tmpdir()` | Demo anchor | Why different |
@@ -132,8 +130,6 @@ Used for marketplace and codex symlinks in `globalStorage`. The `'junction'` typ
 | Linux | `/tmp` | `/tmp` | Same |
 | macOS | `/var/folders/{x}/{y}/T` (~54 chars) | `/tmp` (realpath → `/private/tmp`) | `sun_path` limit (above) |
 | Windows | `%TEMP%` (expanded to long form via `GetLongPathName`) | `%TEMP%` | No `/tmp` on Windows |
-
-**Source**: `packages/demo-scripter/src/kernel/paths.ts` (line ~54).
 
 ## OneDrive (Windows)
 

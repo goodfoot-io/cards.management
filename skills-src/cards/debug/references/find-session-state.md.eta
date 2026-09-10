@@ -151,8 +151,6 @@ Written once, on first successful sync of a matched source, and never rewritten 
 
 Plain text stderr capture from session processes. Sanitized card ID: characters unsafe for filesystem paths are replaced.
 
-**Source**: `packages/extension/src/utils/paths.ts`::`getSessionStderrLogPath()`.
-
 ## Session End Cleanup
 
 Sessions end through two equivalent paths: a natural exit, or an agent-initiated `cards "$CARD_ID" shutdown --outcome ...` whose `agentShutdown` relay makes the action handler SIGTERM the agent CLI gracefully. Both feed the same cascade:

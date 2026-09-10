@@ -10,7 +10,7 @@ Scope: the Cards API server's discovery file schema, database settings, liveness
 
 **Resolution**: `discoverApiInfo()` → `$CARDS_DISCOVERY_PATH` → `{resolveGlobalCardsConfigDir()}/cards-api.json`.
 
-**Written by**: `startCardsApi()` in `packages/extension/src/lifecycle/cardsApiLifecycle.ts`. Atomic write: temp file at `{path}.{6rand}.tmp` with `'wx'` + `0o600`, then `fs.rename`.
+**Written by**: the extension's Cards API startup routine, on the window that owns the server. Atomic write: temp file at `{path}.{6rand}.tmp` with `'wx'` + `0o600`, then `fs.rename`.
 
 ### Schema
 
@@ -40,7 +40,7 @@ Scope: the Cards API server's discovery file schema, database settings, liveness
 
 ### Lifecycle Watcher
 
-**Source**: `packages/extension/src/lifecycle/cardsApiLifecycle.ts`::`watchDiscoveryFile()`.
+**Source**: the extension's discovery-file watcher (`watchDiscoveryFile()`), run by every window connected to the server.
 
 A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes and:
 
@@ -59,7 +59,7 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes a
 | Hung port | present | alive | timeout | fails within 200ms | Port hung — treated as stale |
 | No server | absent | — | — | — | Server never started or crashed |
 
-**Source**: `packages/extension/src/lifecycle/cardsApiLifecycle.ts`::`checkExistingServer()`, `checkPortTcp()`, `checkPortHealth()`.
+**Source**: the extension's server-liveness check, which combines a PID check, a TCP pre-probe, and an HTTP health check.
 
 ## Database Settings
 
@@ -67,7 +67,7 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes a
 
 **Auxiliary files**: `cards.db-wal`, `cards.db-shm`, `cards.db-journal`.
 
-**Source**: `packages/extension/src/lifecycle/cardsApiLifecycle.ts`::`openDatabase()`.
+**Source**: the extension's database-open routine, run once by the server owner on startup.
 
 | Pragma | Value | Purpose |
 |--------|-------|---------|
@@ -80,13 +80,13 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes a
 
 On `SQLITE_CORRUPT`, `SQLITE_NOTADB`, `SQLITE_IOERR`, or FTS corruption (`vtable constructor failed`), the database is deleted and rebuilt from card repositories (Git repos are the source of truth). WAL/SHM/journal files are also cleaned up.
 
-**Source**: `packages/extension/src/lifecycle/cardsApiLifecycle.ts`::`isDatabaseMalformed()`.
+**Source**: the extension's database-corruption check, run whenever opening the database fails.
 
 ### Lock Conflicts
 
 `SQLITE_BUSY` / `SQLITE_LOCKED` are NOT treated as corruption — they indicate a live server holds the write lock. The caller re-runs discovery and connects as client.
 
-**Source**: `packages/extension/src/lifecycle/cardsApiLifecycle.ts`::`isDatabaseLocked()`.
+**Source**: the extension's database-lock check, run whenever opening the database fails.
 
 ## Recovery Constants
 

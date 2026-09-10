@@ -34,7 +34,7 @@
 
 ## `--cards-status-*` registry
 
-Source of truth: `packages/cards/web/src/utils/statusColors.ts` `STATUS_HEX_COLORS`. Theme-invariant — same hex in light and dark. Never re-hardcode these hexes in a component; only this file may state them.
+Source of truth: the `STATUS_HEX_COLORS` export from the shared web-styles package. Theme-invariant — same hex in light and dark. Never re-hardcode these hexes in a component; only this file may state them.
 
 | Variable | Current hex | Label |
 |---|---|---|

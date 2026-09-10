@@ -30,7 +30,7 @@ find ~/.config/Code/logs ~/Library/Application\ Support/Code/logs -name "Cards.l
 | **Persisted** | `{vscode-userdata}/logs/{date}/window{N}/exthost/goodfoot.cards/Cards.log` |
 | **Format** | Plain text (VS Code manages persistence, not the extension) |
 | **Child channels** | `Cards.Git`, `Cards.Router`, `Cards.Runtime`, `Cards.Server` |
-| **Source** | `packages/vscode-logging/src/logger.ts`::`createLogger()` — `window.createOutputChannel(name, { log: true })` |
+| **Implementation** | Built on VS Code's `window.createOutputChannel(name, { log: true })` API |
 | **Note** | The extension does NOT write this channel to disk — VS Code persists it depending on log level and user settings. An in-memory ring buffer (last 500 entries, `logBuffer.ts`) is pre-filled into `cards-extension issue` reports automatically. |
 
 ### Claude API Hooks
@@ -53,8 +53,7 @@ find ~/.config/Code/logs ~/Library/Application\ Support/Code/logs -name "Cards.l
 | **Path** | `{workspace}/.cards/logs/claude-code-cards-runtime-hooks.log` |
 | **Format** | JSON Lines |
 | **Env var** | `CLAUDE_CODE_RUNTIME_HOOKS_LOG_FILE` |
-| **Set by** | `ActionDispatcher` (line ~1361) |
-| **Source** | `packages/extension/src/runtime/ActionDispatcher.ts` (line ~1361) |
+| **Set by** | The Cards extension's runtime action dispatcher |
 | **Note** | `{workspace}` is the **VS Code window's** workspace folder, resolved at activation — not the session's cwd and not a git root. A window opened on the main repo logs every session it dispatches, including ones running in worktrees, to the main repo root; a window opened on a worktree logs to that worktree. So this log can sit under either root and neither `WORKSPACE` nor `MAIN_REPO_ROOT` reliably names it — locate it with the Quick Discovery `find` above rather than composing a path. |
 
 ### Claude Assistant Hook
@@ -98,7 +97,7 @@ find ~/.config/Code/logs ~/Library/Application\ Support/Code/logs -name "Cards.l
 | **Default path** | `{main-repo-root}/.cards/logs/cards-detached-child-stderr.log` |
 | **Format** | Append-only plain text containing the combined, verbatim stdout and stderr of detached cleanup children, plus versioned attribution records described below. This is **not JSON Lines**. |
 | **Resolution order** | 1. A nonempty `$CARDS_DETACHED_STDERR_LOG_FILE` selects that exact file. 2. Otherwise, a nonempty `$CARDS_LOG_DIR` selects `$CARDS_LOG_DIR/cards-detached-child-stderr.log`. 3. Otherwise, the main repository is resolved using nonempty `REPO_ROOT`, then `git rev-parse --path-format=absolute --git-common-dir`, and the default path above is used. 4. If no main repository can be resolved, capture is disabled (`null`) and the child is spawned with ignored output. Empty override values are skipped. `$CARDS_HOOKS_LOG_FILE` is never consulted. |
-| **Sources** | [`prepareDetachedChildOutputCapture()`](./public/packages/sdk/src/config/detached-child-output.ts#L126), used by [`spawnBranchCleanupWatcher()`](./public/packages/default-configuration/src/lib/branch-cleanup-watcher.ts#L91) and [`spawnDetachedCleanup()`](./packages/cards/server/src/runtime/wrapper.ts#L305) |
+| **Sources** | [`prepareDetachedChildOutputCapture()`](./public/packages/sdk/src/config/detached-child-output.ts#L126), used by [`spawnBranchCleanupWatcher()`](./public/packages/default-configuration/src/lib/branch-cleanup-watcher.ts#L91) and by the extension's own detached-cleanup spawn path |
 | **No file?** | Path-resolution, directory-creation, open, or initial-write failure produces a warning through the caller's existing logging channel, then leaves cleanup fail-open with ignored output. A healthy child normally adds only the two small attribution records below. |
 
 Each attribution record occupies one physical line and starts with the magic prefix `@@CARDS_DETACHED_CHILD_V1@@`, immediately followed by a JSON object. The parent writes a `spawn` record before launching the child. If Node reaches the generated preload, the child writes a `started` record before loading the existing cleanup entry module. Both records carry the same correlation ID, card ID, nullable session ID, and child kind; the second also records the runtime PID. Card, session, and child-kind values are bounded to 512 Unicode code points and visibly end in `...[truncated]` when shortened. JSON serialization keeps embedded newlines and other identity delimiters inside the physical record line.
@@ -126,7 +125,6 @@ This diagnostic may contain filesystem paths, command arguments, environment-der
 |-------|-------|
 | **Path** | `~/.cards/sessions/{sanitizedCardId}/stderr.log` |
 | **Format** | Plain text |
-| **Source** | `packages/extension/src/utils/paths.ts`::`getSessionStderrLogPath()` |
 
 ## Reading JSON Lines Logs
 

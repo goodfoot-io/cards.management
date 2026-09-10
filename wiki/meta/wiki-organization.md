@@ -31,7 +31,7 @@ This repository uses two parallel systems for wiki content: a central `wiki/` di
 
 **Centralize in `wiki/`** when the content is cross-cutting — when it synthesizes across packages, describes how components interact, or would be needed by someone who doesn't know which package to look in. Cross-cutting content has no natural home in the source tree, and burying it in one package would make it hard to find from another.
 
-**Embed as `*.wiki.md`** when the content is primarily about a single component — its design decisions, internal constraints, or rebuild logic. Co-locating documentation with code has well-established benefits: it is found by whoever is working on the component, it is maintained by the same person who maintains the code, and it signals ownership clearly. A `DESIGN.wiki.md` file in `packages/cards/` is less likely to drift than the same content in `wiki/architecture/` because the person changing `packages/cards/` will encounter it directly.
+**Embed as `*.wiki.md`** when the content is primarily about a single component — its design decisions, internal constraints, or rebuild logic. Co-locating documentation with code has well-established benefits: it is found by whoever is working on the component, it is maintained by the same person who maintains the code, and it signals ownership clearly. A `DESIGN.wiki.md` file next to the component it documents is less likely to drift than the same content in `wiki/architecture/` because the person changing that component will encounter it directly.
 
 The `*.wiki.md` extension is what allows embedded pages to participate in the same wiki index, default `wiki [query]` lookup, and `wiki stale` infrastructure as centralized pages. Co-location does not mean isolation.
 
