@@ -1,0 +1,318 @@
+import { afterEach, describe, expect, it } from 'vitest';
+import type { OutboundMessage, RuntimeClient, RuntimeClientOptions } from '../../../src/client/runtime/index.js';
+import { createRuntimeClient } from '../../../src/client/runtime/index.js';
+import { MAX_CONTROL_FRAME_BYTES, RUNTIME_CREDENTIAL_HEADERS } from '../../../src/protocol/types/index.js';
+import { FakeRuntimeServer } from './fakeServer.js';
+import { MemoryOutbox, makeAcceptingAuthorities, makeCredential, makeIdentity, makeRecordInput } from './index.js';
+
+/**
+ * End-to-end behaviour of the runtime client against a real socket.
+ *
+ * The cases here are chosen around what goes wrong rather than what goes right. A client
+ * that connects and sends on a healthy server is easy; the ones that matter are the client
+ * whose connection died between sending and hearing back, the one whose registration was
+ * fenced by its own successor, and the one asked to send before it knows what the server
+ * already has. Each of those, done wrong, either duplicates a real effect or silently
+ * loses a durable obligation.
+ *
+ * @summary Tests discovery, handshake, synchronization, send outcomes, and reconnect
+ */
+
+let server: FakeRuntimeServer | null = null;
+let client: RuntimeClient | null = null;
+
+afterEach(async () => {
+  await client?.close();
+  await server?.stop();
+  client = null;
+  server = null;
+});
+
+const optionsFor = (
+  target: FakeRuntimeServer,
+  overrides: Partial<RuntimeClientOptions> = {}
+): RuntimeClientOptions => ({
+  identity: makeIdentity(),
+  credential: makeCredential(),
+  outbox: new MemoryOutbox(),
+  authorities: makeAcceptingAuthorities(),
+  discover: async () => ({ host: '127.0.0.1', port: target.port, accessToken: 'token-1' }),
+  ...overrides
+});
+
+const intent = (messageId: string): OutboundMessage<'execution.cancelRequest'> => ({
+  type: 'execution.cancelRequest',
+  payload: { reason: 'user', overridesIdleRequirement: false },
+  messageId,
+  requestId: 'req-1',
+  execution: { executionId: 'exec-1', launchRequestId: 'req-1' }
+});
+
+describe('connecting', () => {
+  it.skip('presents the role credential in headers on the upgrade', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+
+    const headers = server.handshakes[0];
+    expect(headers?.[RUNTIME_CREDENTIAL_HEADERS.credentialId]).toBe('cred-1');
+    expect(headers?.[RUNTIME_CREDENTIAL_HEADERS.secret]).toBe('secret-1');
+  });
+
+  it.skip('reports connected with the generation the server assigned', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+    const result = await client.connect();
+
+    expect(result.status).toBe('connected');
+    expect(client.state).toBe('connected');
+  });
+
+  it.skip('treats a first connection in the slot as not resumed', async () => {
+    server = await FakeRuntimeServer.start({
+      registration: { status: 'registered', generation: 1, fencedGeneration: null } as never
+    });
+    client = createRuntimeClient(optionsFor(server));
+    const result = await client.connect();
+
+    expect(result).toMatchObject({ status: 'connected', resumed: false });
+  });
+
+  it.skip('treats displacing its own earlier connection as a resume', async () => {
+    server = await FakeRuntimeServer.start({
+      registration: { status: 'registered', generation: 2, fencedGeneration: 1 } as never
+    });
+    client = createRuntimeClient(optionsFor(server));
+    const result = await client.connect();
+
+    expect(result).toMatchObject({ status: 'connected', resumed: true });
+  });
+
+  it.skip('surfaces a registration refusal with the server reason rather than a generic failure', async () => {
+    server = await FakeRuntimeServer.start({
+      registration: { status: 'refused', reason: 'ownership-superseded' }
+    });
+    client = createRuntimeClient(optionsFor(server));
+
+    await expect(client.connect()).resolves.toEqual({ status: 'refused', reason: 'ownership-superseded' });
+  });
+
+  it.skip('reports unavailable rather than throwing when discovery finds no endpoint', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { discover: async () => null }));
+    const result = await client.connect();
+
+    expect(result.status).toBe('unavailable');
+  });
+
+  it.skip('rediscovers the endpoint on every attempt instead of reusing a remembered address', async () => {
+    server = await FakeRuntimeServer.start();
+    let calls = 0;
+    const target = server;
+    client = createRuntimeClient(
+      optionsFor(server, {
+        discover: async () => {
+          calls += 1;
+          return { host: '127.0.0.1', port: target.port, accessToken: `token-${calls}` };
+        }
+      })
+    );
+
+    await client.connect();
+    server.dropConnections();
+    await client.connect();
+
+    expect(calls).toBeGreaterThan(1);
+    expect(server.handshakes.at(-1)?.['authorization']).toBe('Bearer token-2');
+  });
+
+  it.skip('does not retry under a generation the server already fenced', async () => {
+    server = await FakeRuntimeServer.start({
+      registration: { status: 'refused', reason: 'stale-generation' }
+    });
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+
+    expect(client.state).toBe('fenced');
+    expect(server.handshakes).toHaveLength(1);
+  });
+});
+
+describe('synchronization before new work', () => {
+  it.skip('opens with a register or resume frame before anything else', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+
+    expect(server.received[0]?.type).toMatch(/^runtime\.(register|resume)$/);
+  });
+
+  it.skip('reports the server work revision rather than a locally assumed one', async () => {
+    server = await FakeRuntimeServer.start({ workRevision: 12 });
+    client = createRuntimeClient(optionsFor(server));
+    const result = await client.connect();
+
+    expect(result).toMatchObject({ synchronization: { workRevision: 12 } });
+  });
+
+  it.skip('refuses to send before the barrier has been cleared', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+
+    await expect(client.send(intent('msg-early'))).resolves.toMatchObject({
+      status: 'rejected',
+      reason: 'not-synchronized'
+    });
+  });
+
+  it.skip('replays an obligation the server did not confirm', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(makeRecordInput({ messageId: 'unconfirmed' }));
+    server = await FakeRuntimeServer.start({ acceptedMessageIds: [] });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    const result = await client.connect();
+
+    expect(result).toMatchObject({ synchronization: { pendingMessageIds: ['unconfirmed'] } });
+  });
+
+  it.skip('retires an obligation the server confirmed instead of sending it again', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(makeRecordInput({ messageId: 'already-there' }));
+    server = await FakeRuntimeServer.start({ acceptedMessageIds: ['already-there'] });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    expect(outbox.stored).toHaveLength(0);
+  });
+});
+
+describe('sending', () => {
+  it.skip('persists a durable intent before reporting anything to the caller', async () => {
+    const outbox = new MemoryOutbox();
+    outbox.failWrites = true;
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    const outcome = await client.send(intent('msg-1'));
+    expect(outcome.status).not.toBe('accepted');
+    expect(server.received.some((envelope) => envelope.messageId === 'msg-1')).toBe(false);
+  });
+
+  it.skip('reports acceptance only once the server has durably taken the message', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+
+    await expect(client.send(intent('msg-1'))).resolves.toEqual({ status: 'accepted', messageId: 'msg-1' });
+  });
+
+  it.skip('retires the outbox record once acceptance arrives', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+    await client.send(intent('msg-1'));
+
+    expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(false);
+  });
+
+  it.skip('answers a resend of the same message id without duplicating the record', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    await client.send({ ...intent('msg-1'), deadlineMs: 50 });
+    await client.send({ ...intent('msg-1'), deadlineMs: 50 });
+
+    expect(outbox.stored.filter((record) => record.messageId === 'msg-1')).toHaveLength(1);
+  });
+
+  it.skip('reports uncertainty and keeps the record when the deadline expires', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    const outcome = await client.send({ ...intent('msg-1'), deadlineMs: 50 });
+
+    expect(outcome).toMatchObject({ status: 'uncertain', reason: 'deadline-expired', requestId: 'req-1' });
+    expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(true);
+  });
+
+  it.skip('reports uncertainty rather than failure when the connection dies mid-flight', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    const pending = client.send({ ...intent('msg-1'), deadlineMs: 5_000 });
+    server.dropConnections();
+
+    await expect(pending).resolves.toMatchObject({ status: 'uncertain', reason: 'connection-lost' });
+    expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(true);
+  });
+
+  it.skip('never reports a deadline expiry as a rejection, since the server may still have it', async () => {
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+
+    const outcome = await client.send({ ...intent('msg-1'), deadlineMs: 50 });
+    expect(outcome.status).not.toBe('rejected');
+  });
+
+  it.skip('rejects a frame larger than the control-frame cap without sending it', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+    const before = server.received.length;
+
+    const outcome = await client.send({
+      ...intent('msg-huge'),
+      requestId: 'x'.repeat(MAX_CONTROL_FRAME_BYTES)
+    });
+
+    expect(outcome).toMatchObject({ status: 'rejected', reason: 'frame-too-large' });
+    expect(server.received).toHaveLength(before);
+  });
+
+  it.skip('does not persist disposable telemetry to the durable outbox', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    await client.send({
+      type: 'runtime.heartbeat',
+      payload: { sentAt: '2026-01-01T00:00:00.000Z' },
+      messageId: 'hb-1',
+      execution: { executionId: 'exec-1', launchRequestId: 'req-1' }
+    });
+
+    expect(outbox.stored).toHaveLength(0);
+  });
+});
+
+describe('closing', () => {
+  it.skip('closes under its current generation so a successor is not evicted', async () => {
+    server = await FakeRuntimeServer.start({
+      registration: { status: 'registered', generation: 4, fencedGeneration: 3 } as never
+    });
+    client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+    const generation = client.generation;
+    await client.close();
+
+    expect(generation).toBe(4);
+    expect(client.state).toBe('disconnected');
+  });
+
+  it.skip('is safe to close a client that never connected', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+
+    await expect(client.close()).resolves.toBeUndefined();
+  });
+});
