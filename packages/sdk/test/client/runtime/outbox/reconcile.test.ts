@@ -14,7 +14,9 @@
  */
 
 import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { createFileResultCustodian, readResultCustody } from '../../../../src/client/runtime/durable-results/index.js';
 import {
   type ClientOutbox,
   createFileClientOutbox,
@@ -32,6 +34,59 @@ import {
   makeUnownedIntentInput,
   scriptedAuthorities
 } from './index.js';
+
+describe('reconciliation against the real custody store', () => {
+  let root: string;
+  let custodyRoot: string;
+  let outbox: ClientOutbox;
+
+  beforeEach(() => {
+    root = makeOutboxRoot();
+    custodyRoot = makeOutboxRoot();
+    outbox = createFileClientOutbox({ root });
+  });
+
+  afterEach(() => {
+    fs.rmSync(root, { recursive: true, force: true });
+    fs.rmSync(custodyRoot, { recursive: true, force: true });
+  });
+
+  it('has a durable copy of the envelope at the moment the producer copy is deleted', async () => {
+    await outbox.enqueue(makeRecordInput({ messageId: 'msg-a', executionId: 'exec-1' }));
+    const authorities = {
+      resultCustodian: createFileResultCustodian({ root: custodyRoot }),
+      launchIntentValidator: {
+        validateRecoveredObligation: () => Promise.resolve({ kind: 'authority-unavailable', detail: 'unused' } as const)
+      }
+    };
+
+    const report = await reconcileOutboxOnStartup(outbox, authorities);
+
+    // The handoff, stated as one assertion pair: the outbox copy is gone and the
+    // custody copy is there. Either one alone would pass a weaker design.
+    expect(countRecordFiles(root)).toBe(0);
+    expect(await readResultCustody(custodyRoot, 'exec-1', 'msg-a')).not.toBeNull();
+    expect(report.ok).toBe(true);
+  });
+
+  it('keeps the producer copy when custody cannot be written', async () => {
+    await outbox.enqueue(makeRecordInput({ messageId: 'msg-a' }));
+    const blockedRoot = path.join(custodyRoot, 'file-in-the-way');
+    fs.writeFileSync(blockedRoot, 'not a directory');
+    const authorities = {
+      resultCustodian: createFileResultCustodian({ root: blockedRoot }),
+      launchIntentValidator: {
+        validateRecoveredObligation: () => Promise.resolve({ kind: 'authority-unavailable', detail: 'unused' } as const)
+      }
+    };
+
+    const report = await reconcileOutboxOnStartup(outbox, authorities);
+
+    expect(countRecordFiles(root)).toBe(1);
+    expect(report.blocked).toHaveLength(1);
+    expect(report.ok).toBe(false);
+  });
+});
 
 describe('launch-intent routing list', () => {
   it('names only types the protocol actually classes as durable intents', () => {

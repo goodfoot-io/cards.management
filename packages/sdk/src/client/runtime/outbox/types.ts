@@ -250,23 +250,20 @@ export type LaunchIntentMessageType = (typeof LAUNCH_INTENT_MESSAGE_TYPES)[numbe
 /**
  * What an authority said about one recovered record.
  *
- * The three refusals are distinct on purpose, and collapsing any pair would hide
- * a different failure.
+ * `accepted` has exactly one meaning wherever it appears: it is safe to retire
+ * this record, because a durable copy of the obligation exists that is not this
+ * one. Whether that copy was just written by a custodian or already existed
+ * elsewhere is the answering party's business, not the caller's.
  *
- * `not-admitted` is a definite answer: the record is untrusted and stays put.
- * `authority-unavailable` is no answer at all, and reading it as `not-admitted`
- * would turn a corrupt journal into a licence to retire every obligation it
- * failed to recognise. `no-custodian` is neither — the authority was reachable
- * and the record may be perfectly valid, but nothing in this build durably holds
- * this kind of obligation, so there is no one to hand it to. That is a gap in the
- * system rather than a fault in the record, and it must not read as a refusal of
- * the record itself.
+ * The two refusals are distinct on purpose. `not-admitted` is a definite answer:
+ * the record is untrusted and stays put. `authority-unavailable` is no answer at
+ * all, and reading it as `not-admitted` would turn a corrupt journal into a
+ * licence to retire every obligation it failed to recognise.
  */
 export type OutcomeAcceptance =
   | { readonly kind: 'accepted'; readonly acknowledgment: JournalAcknowledgment }
   | { readonly kind: 'not-admitted'; readonly detail: string }
-  | { readonly kind: 'authority-unavailable'; readonly detail: string }
-  | { readonly kind: 'no-custodian'; readonly detail: string };
+  | { readonly kind: 'authority-unavailable'; readonly detail: string };
 
 /**
  * The seam into whatever durably persists a recovered result envelope.

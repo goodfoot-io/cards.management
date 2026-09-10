@@ -20,10 +20,11 @@
  * {@link ReconciliationAuthorities.launchIntentValidator} answers it.
  *
  * Every other durable intent — cancels, shutdown requests, watcher stops — has no
- * durable owner in this build. Those are refused as `unowned` and left on disk.
- * Routing them to either port would be asking a component to vouch for a copy it
- * does not have, which is precisely how the only copy of an obligation gets
- * deleted.
+ * durable owner in this build. Those are never routed anywhere: the router
+ * recognises that nothing can answer for them and reports them `unowned` without
+ * asking. Offering one to either port would be inviting a component to vouch for
+ * a copy it does not have, which is precisely how the only copy of an obligation
+ * gets deleted.
  *
  * Three refusals here are the substance of the module.
  *
@@ -43,7 +44,9 @@
  * the record may be entirely valid; there is simply no component in this build
  * that can hold it. Retrying will not help, so it is reported apart from
  * `blocked` — but it still keeps `ok` false, because an obligation with no home
- * is not a clean startup.
+ * is not a clean startup. This is a routing outcome rather than an authority's
+ * answer, which is why {@link OutcomeAcceptance} has no branch for it: no
+ * authority is consulted, so none of them has to have an opinion.
  *
  * @summary Startup reconciliation of exited producers' outbox records
  * @module runtime/outbox/reconcile
@@ -72,17 +75,14 @@ const LAUNCH_INTENT_TYPES: ReadonlySet<string> = new Set(LAUNCH_INTENT_MESSAGE_T
 async function routeToAuthority(
   record: OutboxRecord,
   authorities: ReconciliationAuthorities
-): Promise<OutcomeAcceptance> {
+): Promise<OutcomeAcceptance | null> {
   if (record.deliveryClass === 'durable-result') {
     return authorities.resultCustodian.takeCustody(record);
   }
   if (LAUNCH_INTENT_TYPES.has(record.envelope.type)) {
     return authorities.launchIntentValidator.validateRecoveredObligation(record);
   }
-  return {
-    kind: 'no-custodian',
-    detail: `no component durably holds '${record.envelope.type}' obligations in this build`
-  };
+  return null;
 }
 
 /**
@@ -109,16 +109,19 @@ export async function reconcileOutboxOnStartup(
     const ref = outbox.refFor(record);
     const acceptance = await routeToAuthority(record, authorities);
 
+    if (acceptance === null) {
+      unowned.push({
+        ref,
+        detail: `no component durably holds '${record.envelope.type}' obligations in this build`
+      });
+      continue;
+    }
     if (acceptance.kind === 'not-admitted') {
       untrusted.push({ ref, detail: acceptance.detail });
       continue;
     }
     if (acceptance.kind === 'authority-unavailable') {
       blocked.push({ ref, detail: acceptance.detail });
-      continue;
-    }
-    if (acceptance.kind === 'no-custodian') {
-      unowned.push({ ref, detail: acceptance.detail });
       continue;
     }
 
