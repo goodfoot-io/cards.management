@@ -97,6 +97,21 @@ export type AdmissionUncertaintyReason =
 export interface LaunchAdmissionRequest {
   /** Original caller request ID, minted at the ingress and reused on every retry. */
   readonly requestId: OriginalCallerRequestId;
+  /**
+   * `messageId` of the launch request envelope this admission is being asked for.
+   *
+   * Recorded with the admission so the server can later tell a reconnecting
+   * client that this exact message is durably held and its outbox copy may be
+   * dropped. It has to come from the caller: an ID the server invented would
+   * match nothing the client is holding, and so could retire nothing.
+   *
+   * The first one wins. The protocol keeps a `messageId` stable across
+   * retransmissions of the same logical message, so a retrying caller presents
+   * the one already recorded; a caller presenting a different one under an
+   * already-admitted request ID is making a duplicate launch attempt, which
+   * admission answers as a replay.
+   */
+  readonly messageId: string;
   /** Scope the caller was authorized in. */
   readonly scope: AdmissionScope;
   /** Immutable action parameters; a changed replay under this ID is rejected. */
