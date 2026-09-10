@@ -65,9 +65,9 @@ Ranked by probability:
 
 ### Attach Fails (Already Bound) — HIGH probability
 
-**Evidence**: `cards <id> attach` fails. `.cards/CARD_ID` already exists in the worktree with a different card ID.
+**Evidence**: `cards <id> attach` fails. `.cards/CARD_ID` already exists in the worktree with a different card ID — or, if that marker is missing or empty, `core.hooksPath` still points at the cards shared hooks dir.
 
-**Cause**: A worktree can only be bound to one card. The worktree was previously bound and not cleaned up.
+**Cause**: A worktree can only be bound to one card. The worktree was previously bound and not cleaned up. The bind probe checks `.cards/CARD_ID` first and falls back to the durable hooks-dir evidence when the marker is missing or empty, so the gate still refuses locally — before any client connection — even after the marker is lost.
 
 **Recovery**: Remove the existing `.cards/CARD_ID` only if the previous bind is stale (no active session). Check `~/.cards/adhoc-active/{cardId}/` for live ref files — if all ref PIDs are dead, the bind is stale and the file can be safely removed.
 **Risk**: **risky — removing CARD_ID during an active session breaks attribution and triggers orphan cleanup**.
