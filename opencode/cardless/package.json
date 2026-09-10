@@ -1,0 +1,10 @@
+{
+  "name": "cardless",
+  "version": "1.0.81",
+  "description": "Autonomous captain workflow from a task brief to a reviewed pull request",
+  "type": "module",
+  "main": "./skills/plugin.mjs",
+  "exports": {
+    "./server": "./skills/plugin.mjs"
+  }
+}

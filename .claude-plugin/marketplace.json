@@ -11,6 +11,16 @@
   },
   "plugins": [
     {
+      "name": "cardless",
+      "version": "1.0.81",
+      "source": "./claude/cardless",
+      "description": "Autonomous captain workflow from a task brief to a reviewed pull request",
+      "author": {
+        "name": "Goodfoot Media LLC"
+      },
+      "license": "proprietary"
+    },
+    {
       "name": "cards",
       "version": "1.0.81",
       "source": "./claude/cards",

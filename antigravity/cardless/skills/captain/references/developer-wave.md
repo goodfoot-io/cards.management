@@ -1,0 +1,139 @@
+# Developer Team
+
+Persistent-worker delegation for implementation work you choose not to do inline. Loaded from `./implementation.md` for planned units and `./implementation-evaluation.md` for finding fixes. You are the lead: workers implement, test and commit in their package worktrees; you own every contract, gate, merge and integration in the lead checkout.
+
+Read `./coordination.md` for this host's dispatch, continuation, messaging and retirement operations. The protocol below is the same across hosts. Missing host primitives are a capability blocker, never a reason to invent a tool or silently discard the persistent-worker process.
+
+<placeholder-variables>
+[WORKER_BRANCH] — `implement/[TASK_KEY]/[package]`, the recorded package branch.
+[WORKER_WORKTREE] — The private checkout on that branch, created per `./worktrees.md`.
+[WORKER_NAME] — Stable package identity mapped to the host's returned worker/session ID.
+[TIER] — Model or effort appropriate to this task, per `<model-selection>`.
+</placeholder-variables>
+
+<roster>
+
+Split the work into packages: one per disjoint directory or subsystem a worker can gate independently. A worker owns its package for the whole wave, not one task. Spawn it once and reuse its identity for every later task in that package. Never spawn a second live worker for the same package, except the one-off escalation described below. Keep the roster small enough to review every checkpoint promptly; queue the rest.
+
+Size each task so its package gate can pass at its end. A task that stays red until a later step includes that step; one that cannot pass in a single session is too large and must be split. Order tasks so their gates do not depend on peer work still in flight. Reissue a dependency-blocked task only after the peer's branch is integrated.
+
+You decide cross-package contracts: types, wire shapes, storage layouts and other shared boundaries. State them explicitly in each brief; workers do not negotiate with peers. At every relevant report, diff contract files against the consuming workers' `## Contract` sections. Send `REVISE:` to the deviator before integration.
+
+If ownership overlaps mid-wave, request `HOLD` through the host adapter and wait for acknowledged quiescence; a queued message is not a lock. On a call-return host without mid-turn messaging, wait for the outstanding tasks to return and do not continue them. Then assign the files to one package, send corrected `## Package` scopes and resolve the overlap during integration. Record the roster, ownership, contracts and current assignments in `TASK_STATE/workers.md`.
+
+</roster>
+
+<worktrees>
+
+Before a package's first dispatch, use `./worktrees.md` to create its worktree and branch at the lead's current tip. Pass the literal path, branch and lead branch to the worker. The worktree survives tasks and worker refreshes. Only its worker runs Git in it; only the lead runs Git in the lead checkout. A review agent may inspect either tree read-only.
+
+</worktrees>
+
+<dispatch>
+
+Every protocol message begins with its marker, then `Sender: [identity]`, then `---`, then content. Attribute reports to the host's returned identity and the recorded sender, never arrival order. Messages from workers go to you; you relay contracts and dependency state.
+
+Reassess the tier per task. For system-level or cross-cutting work, use a one-off worker on the strongest appropriate model/effort. Wait for green reports from all affected packages first; send them no new tasks until the one-off reports. Inline its findings into their next briefs. Do not suspend unfinished peer work just to escalate.
+
+Dispatch through `coordination.md`, using this complete brief:
+
+```text
+## Role
+Load the developer and TDD bootstrap skills named by the lead.
+
+## Workspace
+[WORKER_WORKTREE] on [WORKER_BRANCH] is your cwd and the only place you run Git.
+The lead checkout [TASK_CHECKOUT] and branch [TASK_BRANCH] are read-only to you.
+Verify actual cwd, branch, HEAD, shared Git storage and access to the assigned state/scratch paths before editing; missing access is BLOCKED, not permission to clone or publish another branch.
+
+## Repository and Host Instructions
+Read [applicable repository instruction paths]. [Required validation/setup commands, commit conventions, host restrictions and explicit permission limits.] Confirm the bundled skills resolve; neither the brief nor a tool name proves that plugins, instructions, environment variables or credentials were inherited.
+
+## Package
+You own [absolute paths under WORKER_WORKTREE]. Do not touch files outside this set without a revised scope from the lead.
+
+## Context
+[Why this work exists, task intent/constraints, relevant plan and investigation findings, completed work not to redo. The plan's opening intent resolves implementation ambiguity.]
+
+## Task
+[This task's outcome and testing requirements. Scope status, iterations and decision narratives to THIS assignment, not prior tasks.]
+
+## Contract
+[Exact signatures, wire formats, flags, storage keys produced or consumed. Name the peer package implementing the other side.]
+
+## Dependencies
+[Unmerged prerequisites, or None. Build against the stated contract; report BLOCKED when the missing side is needed. Do not fetch, rebase onto or reconstruct a peer branch.]
+
+## Workflow
+Provision the repository's declared dependencies in your worktree. For new behavior worth validating ahead of implementation, follow TDD bootstrap: contract/stubs, checkpoint if required, skipped checks, implement/unskip. Bug fixes reproduce first. Commit validated logical units on your package branch using the repository's conventions. [Task-specific additions.]
+
+## Checkpoint
+[Required | Not required]. When required, after Phase 1 report CHECKPOINT: contract-ready through the report transport below and end your turn: no tests or implementation until PROCEED. An unanticipated cross-package coupling always requires CHECKPOINT: unanticipated-contract and the same hold, even when marked Not required. Silence is not approval. These markers are a protocol, not special host tools; use the host adapter's report/continuation operations.
+
+## Gate
+[Commands scoped to this package.] Run before commits and completion reports. A failure outside your package: rerun once; if it persists, report BLOCKED with exact output. The lead assigns its resolution. COMPLETED and HELD require committed work; if a gate or hook prevents a safe commit, preserve and report the exact dirty state as BLOCKED instead of bypassing the gate.
+
+## Constraints
+Never trigger interactive Git auth, write outside your package, bypass hooks, push any branch/tag, or create/update a PR. Only the lead publishes. Scratch files use [assigned scratch path]. [Known hook obstacles and their documented resolution, or none known.] A false plan assumption or an approach creating its own problems gets REPORT: BLOCKED naming the evidence, not a workaround.
+
+## Report
+REPORT: COMPLETED | NEEDS_REVISION | BLOCKED, including branch and HEAD SHA, decisions, files, gate results, deviations and unfinished work. A checkpoint is not a completion report. Apply the developer skill's report schema.
+
+## Envelope
+Marker on line one, Sender: [WORKER_NAME] on line two, then ---, then body.
+PROCEED resumes the held task.
+TASK: starts the next assignment; first fast-forward your branch from the recorded lead branch to pick up integrated peer work. If it cannot fast-forward, report BLOCKED instead of rewriting history.
+REVISE: corrects this task and may amend any brief section; keep the same task scope and narrative. While held, apply corrections and resend the checkpoint.
+HOLD: stop starting new work, finish and commit the current safe validated step, report HELD: with HEAD SHA and remaining work, then end the turn. Resume only after TASK: or PROCEED. If a safe commit is impossible, stop editing and report BLOCKED with exact partial state; never claim a clean hold or bypass a hook.
+
+## Report Transport
+[Exact lead identity and send operation for a messaging host; otherwise return the protocol envelope as the task result to the waiting lead. State the same-worker continuation operation from the host adapter.] Never invent a messaging tool on a call-return host.
+
+## Peers
+The lead is the only coordination contact. [Name peer packages whose contracts matter.] Deliver checkpoints/reports and contract questions through the report transport above, never directly to peers. On messaging hosts, user-facing prose alone does not send a message; on call-return hosts, the task result is the transport.
+```
+
+Name `developer` and `tdd-bootstrap` explicitly in the dispatch. Include the literal task state/scratch paths and the commit/Markdown conventions from `session.md` in the brief; workers must not assume inherited context or mutate the lead's session record.
+
+Start every package whose first task consumes no peer contract concurrently, within host limits. Dispatch a consumer after accepting its producer's contract-ready checkpoint; gate it only when required peer implementation is integrated. Send `TASK:` only after that worker's preceding green report is merged. Restate `## Task`, `## Contract`, `## Dependencies`, `## Checkpoint` and any changed package/workflow sections; other rules persist.
+
+</dispatch>
+
+<checkpoints>
+
+- `CHECKPOINT:` ends the worker's turn without completing its assignment. Promptly send `PROCEED` or `REVISE:` to the same identity after inspecting its contract; no dedicated checkpoint API is required.
+- `REPORT:` ends a task turn, not the package worker's lifetime. Unmet criteria get `REVISE:` on the same worker identity.
+- `REPORT: BLOCKED` naming a false assumption or a self-defeating approach triggers `implementation.md`'s `<when-to-return-to-planning>` before reassignment.
+- `REPORT: BLOCKED` on a failure outside its package goes to the owning worker; if none owns it, apply `<pre-existing-diagnosis>`.
+- `HELD:` plus confirmed idle state means a committed partial step, not a green branch. Resume with `PROCEED` or `TASK:`; merge only after a green report. An accepted HOLD send or interrupt result is not that acknowledgment.
+- Idle/turn completion without a report, checkpoint or held message is unexplained. Reengage the recorded worker with what it was waiting on; do not infer success.
+
+When revision rounds stop producing information, usually by the third, split or re-scope the task or replace the worker with a fresh one carrying failed-attempt evidence. Route integration bugs to the owner; bug fixes reproduce first. Preserve every checkpoint and report in the worker ledger.
+
+</checkpoints>
+
+<integration-gate>
+
+Merge each green report as it arrives, one branch at a time, from the lead checkout. Require clean status and verify the reported SHA is the recorded branch tip. Inspect its diff for ownership, contract compliance and the claimed gate evidence. Use a fast-forward when ancestry allows it; otherwise perform a regular local merge. A failed merge requires diagnosis, not an unconditional alternate command.
+
+Resolve conflicts before the next integration or task dispatch. A wave is all tasks since the last step tag. Workers with nothing queued remain idle while other reports arrive. Once every wave branch is integrated, review cross-package consistency, run workspace lint/typecheck and every touched package suite, reconcile any affected repository-maintained anchors, and commit integration fixes under the repository conventions. Full validation remains in `deliver.md`.
+
+- All pass: tag `implement/[TASK_KEY]/step-N`, record the exact tag/SHA/gate evidence, then dispatch the next wave. When work is exhausted, return to the caller with workers retained for review fixes.
+- Implementation or contract error: send `REVISE:` to the owning worker. The lead may make a small integration fix when a handoff costs more than the correction, recording why.
+- Failure in unowned files: apply `implementation.md`'s `<pre-existing-diagnosis>`. It must be resolved or block the gate.
+
+</integration-gate>
+
+<lifecycle>
+
+Workers persist between waves. Retire one only when its package is finished for the rest of the task or during drain. Before any reset/clean, finalization or return to planning, **drain** through the host adapter: request `HOLD` where supported and wait for held/completed evidence; on a call-return host without mid-turn messaging, wait for every outstanding task to return to a checkpoint/report and do not continue it. Then retire the workers using the adapter and confirm no writer remains. Integrate kept green branches and clean up only recorded worktrees/branches per `worktrees.md`. Preserve held summaries, triggering blockers and abandoned branch SHAs in task state before discarding an unpublished attempt.
+
+Never repurpose a worker for an unrelated package. Refresh after roughly six tasks, or sooner if it forgets a constraint: retire it, preserve the same worktree/branch, and spawn a replacement with completed work, queued tasks and current contracts. Host resumption may require the same reconstruction even sooner; never act on a stale worker ID as though it were live.
+
+</lifecycle>
+
+<model-selection>
+
+Default to the model/effort that reliably handles ordinary package work. Use the strongest appropriate tier for system-level or cross-cutting decisions, not as the roster default; a lighter model suits bounded, unambiguous work. Inherit the host's selected model unless a supported explicit override is appropriate. Use only options the host actually exposes; effort words in a prompt are guidance, not a claim that the API changed model settings.
+
+</model-selection>

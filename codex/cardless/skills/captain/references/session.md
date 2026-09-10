@@ -1,0 +1,55 @@
+# Session Context
+
+## Establish the Checkout
+
+Read the repository's AGENTS.md, any applicable nested instructions, and its declared setup and validation commands. Record host restrictions, required attribution on GitHub posts, and the user's authorized delivery actions. The checkout must already be on a dedicated task branch. Keep a cloud host's assigned branch: its Git proxy may allow pushes only to that branch. The caller's dispatch branch need not be knowable from this checkout; use the explicit host assignment and actual Git state, not a guessed relationship between branch names. For a local run, prepare the dedicated branch before invoking this workflow. A detached HEAD or a checkout on the PR base is a setup blocker.
+
+Resolve these local values and record their literal values in the session record:
+
+```bash
+TASK_CHECKOUT=$(git rev-parse --show-toplevel)
+TASK_BRANCH=$(git symbolic-ref --quiet --short HEAD)
+TASK_STATE="$(git rev-parse --absolute-git-dir)/captain"
+TASK_KEY=$(printf '%s' "$TASK_BRANCH" | git hash-object --stdin)
+```
+
+Check each command succeeded and the values are nonempty before creating any paths. `TASK_STATE` is inside this checkout's Git directory, outside the source tree and rollback targets. Verify that this task-owned directory can actually be written; a successful push alone does not prove metadata writability. A worker receives its lead's literal state path; it does not derive a second session in its own worktree. Verify worker access before using the path as a handoff. Shell variables do not survive every tool invocation: read the record and bind the needed values in each new shell; never execute the record as shell code.
+
+Resolve the intended remote and GitHub repository from the host's task context and Git remote/upstream configuration. If multiple remotes leave the destination ambiguous, stop with the exact missing destination. Verify the selected remote's URL; a proxy URL may not contain the canonical repository name. Save the verified `owner/repo` as `TASK_REPOSITORY` and the selected remote name as `TASK_REMOTE`. Read `./github.md` to select the host's GitHub interface, verify repository access and resolve its default branch without requiring a particular CLI.
+
+Use an explicitly supplied PR base, otherwise that repository's verified default branch, as `TASK_PR_BASE`. Resolve `TASK_BASE_REF` to an existing local branch of that name when available, otherwise the selected remote-tracking ref. Fetch only the named base if needed to resolve it. Record the base commit SHA and the initial task HEAD; do not guess a base from a branch name substring. Confirm the current task branch differs from the base and that their histories share an ancestor. Resolve missing GitHub access and required capabilities now, before implementation. Git transport and GitHub tools may authenticate separately; success with one does not prove access through the other. Never export host credentials to workers.
+
+## Initialize or Resume
+
+If `TASK_STATE/session.md` exists, read it before writing. The stored checkout, branch, remote, repository, base and original task brief must match this run; record follow-up input separately. Never replace an unrelated session or move an existing baseline. Verify recorded refs resolve and the pinned initial commit remains the recorded baseline. A missing or moved expected ref is a blocker, not a reason to tag current HEAD as a new baseline. After successful delivery, refs explicitly recorded as cleaned need not exist. If new follow-up work needs them, recreate only those names at their recorded original SHAs, never at current HEAD.
+
+For a new session, inspect all existing changes and commits ahead of the PR base. Preserve supplied work and record it as the starting state. A dirty checkout must be classified with `./bug-dirty-tree.md` before any broad staging or rollback. Pin `implement/$TASK_KEY/baseline` at the initial HEAD; it remains the comparison and rollback ref throughout the task. Existing commits before that baseline still belong in the final PR review if they are ahead of the PR base. Do not reset them away.
+
+Create only this task-owned state directory and save:
+
+| File or directory | Purpose |
+|---|---|
+| `TASK.md` | Verbatim supplied task brief; preserve all requirements and error details |
+| `session.md` | Literal context values, authorized delivery scope, GitHub interface, host restrictions/attribution, pinned baseline/initial SHA, phase, current plan, last processed input, reviewed HEAD, validation evidence, and delivery result |
+| `plans/` | Numbered plans and revisions; the record explicitly identifies the current plan |
+| `notes/` | Architectural discoveries, captured fixtures, and decisions with source evidence |
+| `progress.md` | Completed units, incoming feedback, route decisions, and recovery information |
+| `workers.md` | Worker transport and exact identities, verified continuation/access, assigned packages, worktree/branch paths, contracts, task state, reports and HEAD SHAs |
+| `reports/` | Validation output, review findings, blockers, and the final PR body |
+| `spike/` | Executable throwaway investigations and captured results |
+
+Create directories only as needed. These are ordinary local files, not another Git repository. Save plans, notes and reports directly; commit only deliverable changes in the source checkout. Update the record after every committed unit, gate, review, worker report and phase transition. Retain failed-attempt evidence before rollback.
+
+The state survives conversation compaction and source-tree resets in this checkout. It is not pushed and may disappear when a cloud VM expires. Separate clones do not share their Git directories; even linked worktrees have distinct per-worktree Git directories while sharing a common object/ref store. A scratchpad is also local, not a cross-session transport. Only commits verified on the remote survive loss of all local copies; a local commit is not yet remote durability. Serialize the final plan, validation and review evidence into the PR description and the final response. On recovery in a fresh clone, recover the brief from the conversation and inspect remote commits/PR state; reconstruct context with a verified comparison base and revalidate/review rather than asserting prior gates passed. A server-side session ID or conversation summary does not prove its filesystem, live worker or unabridged context survived; verify each before reuse.
+
+<workspace-commit-style>
+Follow the repository's commit conventions. Commit each validated logical unit on the assigned branch with a message explaining the concrete change and why. Stage only inspected task-owned files. Never bypass hooks, sign-off, or validation requirements. A root reproduction commit may deliberately contain a failing test only under `bug.md`'s explicit reproduction-first procedure and when repository hooks permit it.
+</workspace-commit-style>
+
+<markdown-guidelines>
+Use concise Markdown with fenced code examples and language tags. Link named workspace files, functions and types to their real source locations; verify links before saving. In task state, resolve source links against the recorded checkout; in a PR, use repository-relative paths and commit permalinks where necessary. Use a diagram only when it clarifies a multi-component relationship. Keep observations, assumptions and decisions distinguishable.
+</markdown-guidelines>
+
+## Terminal States
+
+`complete` requires the intended code committed, required checks and review passing on the delivered HEAD, the branch pushed, and a verified open PR to the intended repository/base. Preserve the state until that proof exists. `blocked` records the exact missing requirement or failing command, safe remedies attempted, preserved branch/commit and next required action. A blocked run reports this in the conversation and ends; it does not wait for a nonexistent approval event or call a shutdown service.

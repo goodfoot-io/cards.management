@@ -1,0 +1,104 @@
+
+# Cloud Dispatch and Deployment
+
+Use this reference only for a Claude Code cloud session. A cloud session starts from a fresh clone of the current remote branch; local-only configuration, local dependencies, and uncommitted files are absent. [Claude Code on the web](https://code.claude.com/docs/en/claude-code-on-the-web) [Cloud environment carry-over](https://code.claude.com/docs/en/cloud-environments)
+
+## Publish the plugin
+
+The generated Claude plugin names its bundled agent file explicitly:
+
+```json
+{
+  "skills": "./skills/",
+  "agents": ["./skills/captain/agents/developer.md"]
+}
+```
+
+`skills` exposes every skill under the plugin's normal `skills/` tree. `agents` replaces the default `agents/` scan with the explicit developer file stored beside the captain skill. Use the file array shown here, which passes native manifest validation. [Plugin component paths](https://code.claude.com/docs/en/plugins-reference)
+
+To make the published plugin available in another repository, commit the marketplace declaration and enable the fully-qualified plugin name in that repository's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "example-tools": {
+      "source": {
+        "source": "github",
+        "repo": "example-org/agent-marketplace",
+        "ref": "main"
+      }
+    }
+  },
+  "enabledPlugins": {
+    "cardless@example-tools": true
+  }
+}
+```
+
+In `marketplace.json`, a plugin kept below the marketplace repository root uses a relative path beginning with `./`, for example `"source": "./plugins/cardless"`. A plugin sourced from a different monorepo uses `git-subdir`, whose `path` is relative to that repository root and contains no `..`:
+
+```json
+{
+  "name": "cardless",
+  "source": {
+    "source": "git-subdir",
+    "url": "https://git.example.com/example-org/agent-suite.git",
+    "path": "plugins/cardless",
+    "ref": "main"
+  }
+}
+```
+
+Marketplace sources and plugin sources are separate. Keep the marketplace cloneable from the cloud environment and commit both settings keys before dispatch; cloud sessions install project-declared plugins at startup. [Marketplace sources and paths](https://code.claude.com/docs/en/plugin-marketplaces) [Cloud configuration carry-over](https://code.claude.com/docs/en/cloud-environments)
+
+## Enable coordinated workers
+
+Agent teams are experimental and disabled unless the project settings enable them. Commit this setting before dispatch:
+
+```json
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  }
+}
+```
+
+Confirm the session actually exposes native `Agent`, `SendMessage`, and the bundled developer agent. Read `./claude-workers.md` for the live-schema dispatch and read-only continuation/access probe. The captain allocates each package worktree itself and omits Agent isolation; naming a worker or enabling the setting alone does not prove continuation or filesystem access. [Agent teams](https://code.claude.com/docs/en/agent-teams)
+
+Reuse the recorded native worker identity through the verified continuation operation. Checkpoints are text messages followed by ending the worker's turn, not built-in HOLD/PROCEED tools. If an identity is unavailable after resumption or expiry, verify the prior worker cannot still write before replacing it with current task context. A remote MCP session's lifecycle or conversation summary is not evidence about native worker persistence. [Agent teams limitations](https://code.claude.com/docs/en/agent-teams) [Subagent continuation](https://code.claude.com/docs/en/sub-agents)
+
+Prepare every worker worktree that must execute checks: a cloud clone has no local dependency tree, and one worktree's generated or installed dependencies are not a committed handoff. Install the repository's declared dependencies in the worktree that will run each check, using its prescribed package manager and lockfile. Keep worker file ownership disjoint.
+
+## GitHub and Host Capabilities
+
+Cloud environments may expose authenticated GitHub tools without the `gh` CLI. Use `./github.md` for repository/base discovery and PR list/create/update/read operations through the actual available interface; do not require local CLI installation or copy authentication material. Confirm the live tool schemas and repository scope. Preserve host-required attribution on GitHub posts, and obey any requirement that pushing or creating a PR be explicitly requested. [Cloud GitHub access](https://code.claude.com/docs/en/cloud-environments)
+
+Record the actual CLI version when obtainable (a model ID is not a CLI version), worker tool schema, selected model, loaded instructions/skills and setup/check commands. Separate observed behavior from advertised capability and untested inheritance. Validate dependencies, service connectivity and required toolchains in each worktree; a network/proxy error, missing service, resource exhaustion or timeout blocks the affected gate. Never disable TLS verification, weaken checks, or delete unfamiliar data to make a cloud check appear to pass. No particular e2e gate or browser path is universal: follow this repository's own required checks.
+
+## Preflight and dispatch
+
+Before starting the cloud session:
+
+1. Connect the repository through the Claude GitHub App, or use `/web-setup` from an interactive local Claude Code session when using an existing local GitHub CLI login. A local login alone does not prove cloud access, and a cloud GitHub App connection does not require `gh` in the worker. [Cloud GitHub setup](https://code.claude.com/docs/en/web-quickstart)
+2. Push any local commits that the cloud session needs, then confirm `git status --porcelain` is empty. The local branch is only the dispatch base and may be a default branch: `--cloud` clones that remote branch, while each cloud task receives its own working branch. Do not create a dedicated local branch or switch branches from the task prompt. Confirm the host-assigned branch inside the cloud session before its first commit and keep using it. [Cloud CLI dispatch](https://code.claude.com/docs/en/claude-code-on-the-web) [Cloud task branches](https://code.claude.com/docs/en/web-quickstart)
+3. Keep the user's task text in a readable local file. It need not be committed: it is passed as the cloud session's initial plain-language prompt.
+
+The `--cloud` option accepts the task as its positional description. Fail closed if the local task file cannot be read, then pass its contents as one shell-quoted argument so newlines and shell syntax stay task text rather than additional arguments:
+
+```bash
+TASK_FILE="/path/to/task.md"
+TASK_BRIEF=$(cat -- "$TASK_FILE") || exit 1
+if [ -z "$TASK_BRIEF" ]; then
+  printf 'Task file is empty: %s\n' "$TASK_FILE" >&2
+  exit 1
+fi
+claude --cloud "Load the cardless:captain skill. Implement the task below, validate and review it, commit the changes, push only the host-assigned task branch, and create or update its pull request. Do not merge. Follow repository and host instructions, including required attribution. Task brief: $TASK_BRIEF"
+```
+
+This is an interactive cloud dispatch, not a claim about stdin prompting or `-p` compatibility. `--cloud` creates a new cloud session; sessions continue after the local terminal disconnects and can be monitored or steered on claude.ai. [Cloud CLI dispatch](https://code.claude.com/docs/en/claude-code-on-the-web)
+
+Use that dispatch prompt only when authorizing its stated commit/push/PR scope. The cloud GitHub proxy permits pushes only to the session's current working branch. Have the lead use its verified assigned branch to push and create the PR; workers never publish their local package refs. Do not treat a local branch rename or switch as part of the cloud workflow. [Cloud GitHub proxy](https://code.claude.com/docs/en/cloud-environments)
+
+## Deliver durable review state
+
+Write the final task summary into the PR body: implementation scope, worker/reviewer outcomes, checks run and their results, known limits, and the branch tip. Do not rely on `TASK_STATE` or another file under `.git` as handoff evidence: it is local runtime state and is absent from a fresh clone. Scratchpads have the same limitation. Only remote-verified commits, not every local commit, survive container loss. Verify the PR's current head SHA against the validated remote branch; do not infer it from a successful push alone. Cloud-created commits and PRs can link back to the session transcript, but the PR summary remains the review artifact. Never depend on automatic host commit/push/PR actions after the session ends. [Cloud session links](https://code.claude.com/docs/en/cloud-environments)

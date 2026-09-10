@@ -1,0 +1,48 @@
+---
+name: captain
+description: Complete a supplied development task through research, planning, persistent developer coordination, validation, review, and a pushed pull request.
+---
+
+**Use as few tokens as possible in this session by using subagents.**
+
+<subagents>
+Use subagents for open-ended research suited to parallelization and for fresh-eyes review. Include a complete brief; fork conversation context only when the host supports it. Development work follows `./references/developer-wave.md`'s persistent developer team. Choose the model most appropriate for the task; each assignment should be achievable within one session. Read `./references/coordination.md` before the first dispatch.
+</subagents>
+
+<execution-environment>
+The input is the full task brief supplied in the conversation. The intended workflow is to research, plan, implement, review, commit, push the task branch, and open a pull request. Establish authorization for that delivery scope from the user's task and host instructions at startup; loading this skill does not grant additional permission. If the host requires an explicit request to push or create/update a PR, obtain it before that action. Never merge the PR, force-push, publish releases, or make unrelated external writes. Follow repository instructions and host permissions. A missing credential or required capability is a blocker, never permission to bypass a restriction.
+
+Use the host's dedicated task checkout and assigned branch. Inspect unfamiliar state before overwriting it. Only the lead integrates worker branches and writes to the remote. Workers own separate Git worktrees. Never bypass hooks or validation. Rollbacks affect only verified task-owned work after workers have drained.
+
+The task brief and locally derived Git state are the inputs. First read `./references/session.md`; it defines every `TASK_*` value, the local session record, and the commit/Markdown conventions used below. These are local values derived and saved by this workflow, not injected environment dependencies.
+</execution-environment>
+
+<routing-constraints>
+Route only: evaluate, select, and load. Follow the selected reference directly or through subagents as appropriate. A bare reference filename means this skill's `references/` directory.
+</routing-constraints>
+
+## Evaluate and Route
+
+Read the saved brief, current plan, progress, Git status and baseline diff. Compare any new conversation input with the last input recorded in session state. Do not infer completion from a prior message or from a clean working tree. Use the first matching condition:
+
+| Condition | Reference |
+|---|---|
+| New information-seeking question | `question-response.md` |
+| Unresolved saved blocker | `blocked.md` |
+| New actionable feedback on implemented work | `implementation-feedback.md` |
+| New feedback on the current plan before implementation | `plan-feedback.md` |
+| Goals, acceptance criteria, or feasibility are not determinable | `clarify-and-enrich.md` |
+| Existing implementation was interrupted, or its recorded validation/review does not match HEAD | `validate.md` |
+| Current plan is evaluated and has unfinished tasks, or a recorded follow-up unit is pending | `implementation.md` |
+| Implementation and review are complete but delivery is unfinished | `deliver.md` |
+| New task describes an expected-versus-actual gap on a named surface | `bug.md` |
+| No implementation or evaluated plan yet | `plan.md` |
+
+A completed session without new input returns its verified branch, commit, and PR URL; a recorded no-change outcome returns its acceptance evidence without claiming a PR. If signals conflict, inspect the evidence and record why the chosen route advances the requested outcome. Never substitute a metadata flag for a validation or review result.
+
+<%= it.variant({
+  "claude-code": "For cloud installation and dispatch from the local CLI, read `./references/cloud.md`.\n",
+  codex: "",
+  opencode: "",
+  antigravity: ""
+}) %>

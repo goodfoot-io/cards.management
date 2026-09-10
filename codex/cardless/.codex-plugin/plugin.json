@@ -1,0 +1,19 @@
+{
+  "name": "cardless",
+  "version": "1.0.81",
+  "description": "Autonomous captain workflow from a task brief to a reviewed pull request",
+  "author": {
+    "name": "Goodfoot Media LLC"
+  },
+  "license": "proprietary",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Cardless Captain",
+    "shortDescription": "Complete a task through a reviewed pull request",
+    "longDescription": "Research, plan, coordinate persistent developers, validate, review, and deliver a task as a pull request.",
+    "developerName": "Goodfoot Media LLC",
+    "category": "Coding",
+    "capabilities": ["Interactive", "Write"],
+    "defaultPrompt": ["Use the captain skill to complete the supplied task and open a pull request."]
+  }
+}
