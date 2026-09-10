@@ -48,6 +48,13 @@
  * answer, which is why {@link OutcomeAcceptance} has no branch for it: no
  * authority is consulted, so none of them has to have an opinion.
  *
+ * A caller wiring this into a real startup sequence will have to decide whether
+ * `ok: false` with only `unowned` populated should hard-fail or merely warn. That
+ * question is deliberately left open here — nothing wires this to a startup
+ * sequence yet, so answering it now would be guessing at a consumer that does not
+ * exist. It resolves in milestone 3, when cancels, shutdown requests and watcher
+ * stops get an owner and the bucket empties on its own.
+ *
  * @summary Startup reconciliation of exited producers' outbox records
  * @module runtime/outbox/reconcile
  */
