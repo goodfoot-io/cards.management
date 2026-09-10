@@ -38,6 +38,11 @@ import type { RuntimeMessageType } from './runtime-messages.js';
  *   authorized and may override idle requirements.
  * - `successor-continuation-durable` — the successor identity and its
  *   continuation payload are persisted before the predecessor is stopped.
+ * - `launch-observed-successful` — the launcher reported the harness started;
+ *   the execution stays `launching` until the runtime registers. This is the
+ *   positive counterpart to `terminal-exit-nonzero` on the same trigger, and
+ *   exists so the successful edge is selected by a guard it states rather than
+ *   by being the less specific of two overlapping rows.
  * - `terminal-exit-zero` / `terminal-exit-nonzero` — the observed process exit.
  * - `idempotent-finalization` — a replayed durable result reaching an execution
  *   already in this state; recorded again without a second effect.
@@ -48,6 +53,7 @@ export const LIFECYCLE_GUARDS = [
   'launch-token-claimed',
   'fresh-strict-drain-with-barrier',
   'readiness-superseded',
+  'launch-observed-successful',
   'user-authorized-cancel',
   'successor-continuation-durable',
   'terminal-exit-zero',
@@ -105,7 +111,7 @@ export const EXECUTION_LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
     from: 'launching',
     to: 'launching',
     trigger: 'execution.launchOutcome',
-    guards: ['ownership-current']
+    guards: ['ownership-current', 'launch-observed-successful']
   },
   { from: 'running', to: 'running', trigger: 'runtime.resume', guards: ['ownership-current'] },
   {
@@ -294,10 +300,18 @@ export function findLifecycleTransition(
   trigger: LifecycleTrigger,
   satisfiedGuards: readonly LifecycleGuard[]
 ): LifecycleTransition | undefined {
-  void from;
-  void trigger;
-  void satisfiedGuards;
-  throw new Error('Not Implemented');
+  const matches = EXECUTION_LIFECYCLE_TRANSITIONS.filter(
+    (transition) =>
+      transition.from === from &&
+      transition.trigger === trigger &&
+      transition.guards.every((guard) => satisfiedGuards.includes(guard))
+  );
+  if (matches.length > 1) {
+    throw new Error(
+      `Ambiguous lifecycle transition table: ${matches.length} rows match ${String(from)} --${trigger}--> under guards [${satisfiedGuards.join(', ')}]`
+    );
+  }
+  return matches[0];
 }
 
 /**
@@ -307,13 +321,10 @@ export function findLifecycleTransition(
  * @param trigger - Event being applied.
  * @returns The resulting connection state, or `undefined` when the trigger is
  *   not legal from this state.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function findConnectionTransition(
   from: ConnectionState,
   trigger: ConnectionTrigger
 ): ConnectionTransition | undefined {
-  void from;
-  void trigger;
-  throw new Error('Not Implemented');
+  return CONNECTION_TRANSITIONS.find((transition) => transition.from === from && transition.trigger === trigger);
 }

@@ -30,8 +30,13 @@ import {
   type RuntimeScope,
   runtimeScopeSchema
 } from './runtime-identity.js';
-import { type RuntimeMessageType, type RuntimePayload, runtimeMessageTypeSchema } from './runtime-messages.js';
-import { protocolVersionSchema } from './runtime-version.js';
+import {
+  RUNTIME_MESSAGE_PAYLOADS,
+  type RuntimeMessageType,
+  type RuntimePayload,
+  runtimeMessageTypeSchema
+} from './runtime-messages.js';
+import { assertSupportedProtocolVersion, protocolVersionSchema } from './runtime-version.js';
 
 /**
  * A validated runtime protocol message.
@@ -144,6 +149,30 @@ export class EnvelopeValidationError extends Error {
  *   unknown message type, or carries a payload the type's schema rejects.
  */
 export function parseEnvelope(raw: unknown): RuntimeEnvelope {
-  void raw;
-  throw new Error('Not Implemented');
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    throw new EnvelopeValidationError('malformed-frame', 'Frame is not a JSON object');
+  }
+  const candidate = raw as Record<string, unknown>;
+
+  // The version gate runs before anything else so a future peer's fields are
+  // never partially applied on the way to discovering the skew.
+  assertSupportedProtocolVersion(candidate['protocolVersion']);
+
+  const declaredType = candidate['type'];
+  if (typeof declaredType !== 'string' || !(declaredType in RUNTIME_MESSAGE_PAYLOADS)) {
+    throw new EnvelopeValidationError('unknown-message-type', `No contract for type ${JSON.stringify(declaredType)}`);
+  }
+  const type = declaredType as RuntimeMessageType;
+
+  const header = envelopeHeaderSchema.safeParse(candidate);
+  if (!header.success) {
+    throw new EnvelopeValidationError('malformed-frame', header.error.issues[0]?.message ?? 'Invalid envelope', type);
+  }
+
+  const payload = RUNTIME_MESSAGE_PAYLOADS[type].safeParse(header.data.payload);
+  if (!payload.success) {
+    throw new EnvelopeValidationError('invalid-payload', payload.error.issues[0]?.message ?? 'Invalid payload', type);
+  }
+
+  return { ...header.data, type, payload: payload.data } as RuntimeEnvelope;
 }

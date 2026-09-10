@@ -21,6 +21,7 @@
 import type { DeliveryClass } from './runtime-delivery.js';
 import type { RuntimeEnvelope } from './runtime-envelope.js';
 import type { OwnershipStamp, ProducerRole, RuntimeScope } from './runtime-identity.js';
+import { compareOwnership, isAdmittedExecution } from './runtime-identity.js';
 import { MAX_CONTROL_FRAME_BYTES, type RuntimeMessageType } from './runtime-messages.js';
 
 /** Which way a message travels. */
@@ -377,12 +378,80 @@ export interface AuthorizationContext {
  *   subject.
  * @returns Authorization with the matched contract, or a refusal naming the
  *   first rule that was not satisfied.
- * @throws {Error} While this contract is stubbed, until the Phase 3 implementation lands.
  */
 export function authorizeMessage(envelope: RuntimeEnvelope, context: AuthorizationContext): AuthorizationOutcome {
-  void envelope;
-  void context;
-  throw new Error('Not Implemented');
+  const contract = RUNTIME_MESSAGE_CONTRACTS[envelope.type] as MessageContract | undefined;
+  if (contract === undefined) {
+    return { authorized: false, reason: 'unknown-message-type' };
+  }
+  if (context.frameBytes > contract.maxFrameBytes) {
+    return { authorized: false, reason: 'frame-too-large' };
+  }
+  if (contract.direction !== context.peerDirection) {
+    return { authorized: false, reason: 'wrong-direction' };
+  }
+  // The envelope's claimed identity is checked against what authentication
+  // established, never trusted on its own.
+  if (
+    envelope.producer.role !== context.authenticatedRole ||
+    envelope.producer.producerId !== context.authenticatedProducerId
+  ) {
+    return { authorized: false, reason: 'role-impersonation' };
+  }
+  if (!contract.allowedRoles.includes(context.authenticatedRole)) {
+    return { authorized: false, reason: 'role-not-permitted' };
+  }
+  if (context.admittedScope !== undefined && !isSameScope(envelope.scope, context.admittedScope)) {
+    return { authorized: false, reason: 'scope-mismatch' };
+  }
+
+  const execution = envelope.execution;
+  if (contract.executionRequirement === 'none') {
+    if (execution !== null) {
+      return { authorized: false, reason: 'execution-reference-not-permitted' };
+    }
+  } else if (execution === null) {
+    return { authorized: false, reason: 'execution-reference-not-permitted' };
+  } else if (
+    contract.executionRequirement === 'admitted' &&
+    !(context.executionAdmitted && isAdmittedExecution(execution))
+  ) {
+    return { authorized: false, reason: 'execution-not-admitted' };
+  }
+
+  if (contract.requiresRequestId && envelope.requestId === undefined) {
+    return { authorized: false, reason: 'missing-request-id' };
+  }
+  if (contract.requiresCausationId && envelope.causationId === undefined) {
+    return { authorized: false, reason: 'missing-causation-id' };
+  }
+
+  if (contract.requiresOwnershipCurrent) {
+    const ownership = compareOwnership(envelope.ownership, context.currentOwnership);
+    if (ownership === 'stale') {
+      return { authorized: false, reason: 'ownership-stale' };
+    }
+    if (ownership === 'conflict') {
+      return { authorized: false, reason: 'ownership-conflict' };
+    }
+  }
+
+  return { authorized: true, contract };
+}
+
+/**
+ * Compares two scopes field by field.
+ *
+ * @param left - Scope claimed by the envelope.
+ * @param right - Scope bound at admission.
+ * @returns True when every field matches.
+ */
+function isSameScope(left: RuntimeScope, right: RuntimeScope): boolean {
+  return (
+    left.repositoryId === right.repositoryId &&
+    left.workspacePath === right.workspacePath &&
+    left.cardId === right.cardId
+  );
 }
 
 /**
