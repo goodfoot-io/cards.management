@@ -62,7 +62,7 @@ describe('runtime action HTTP client', () => {
     });
   }
 
-  it.skip('posts caller-owned IDs and immutable params with bearer authentication and no principal body', async () => {
+  it('posts caller-owned IDs and immutable params with bearer authentication and no principal body', async () => {
     await listen((request, response) => {
       expect(request.headers.authorization).toBe('Bearer access-token');
       response.writeHead(202, { 'content-type': 'application/json' });
@@ -74,7 +74,7 @@ describe('runtime action HTTP client', () => {
     expect(requests).toEqual([{ method: 'POST', url: '/runtime/actions', body: REQUEST }]);
   });
 
-  it.skip('maps admitted and pending replay responses to accepted while preserving both IDs', async () => {
+  it('maps admitted and pending replay responses to accepted while preserving both IDs', async () => {
     await listen((_request, response) => {
       response.writeHead(202, { 'content-type': 'application/json' });
       response.end(
@@ -94,7 +94,7 @@ describe('runtime action HTTP client', () => {
     });
   });
 
-  it.skip('maps a completed replay to completed with its durable launch outcome', async () => {
+  it('maps a completed replay to completed with its durable launch outcome', async () => {
     await listen((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -110,7 +110,7 @@ describe('runtime action HTTP client', () => {
     await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'completed', requestId: 'request-1' });
   });
 
-  it.skip('maps changed parameters under the same request ID to rejection', async () => {
+  it('maps changed parameters under the same request ID to rejection', async () => {
     await listen((_request, response) => {
       response.writeHead(409, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ disposition: 'rejected', reason: 'parameter-mismatch', execution: EXECUTION }));
@@ -126,7 +126,7 @@ describe('runtime action HTTP client', () => {
     });
   });
 
-  it.skip('retrieves a completed result by URL-encoded caller request ID', async () => {
+  it('retrieves a completed result by URL-encoded caller request ID', async () => {
     await listen((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -142,12 +142,12 @@ describe('runtime action HTTP client', () => {
     expect(requests[0]?.url).toBe('/runtime/actions/request%2Fone');
   });
 
-  it.skip('distinguishes authentication rejection, server unavailability, and invalid responses', async () => {
-    const statuses = [401, 503, 500];
+  it('distinguishes authentication rejection, server unavailability, and invalid responses', async () => {
+    const statuses = [401, 503, 500, 202];
     await listen((_request, response) => {
       const status = statuses.shift() ?? 500;
       response.writeHead(status, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ error: 'no' }));
+      response.end(JSON.stringify(status === 202 ? { disposition: 'admitted' } : { error: 'no' }));
     });
 
     await expect(client?.launch(REQUEST)).resolves.toMatchObject({
@@ -156,22 +156,31 @@ describe('runtime action HTTP client', () => {
     });
     await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'uncertain', reason: 'server-unavailable' });
     await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'uncertain', reason: 'invalid-response' });
+    await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'uncertain', reason: 'invalid-response' });
   });
 
-  it.skip('reports timeout and network failures as uncertainty without changing caller-owned IDs', async () => {
+  it('reports timeout and network failures as uncertainty without changing caller-owned IDs', async () => {
+    await listen((_request, _response) => undefined);
+    const port = (server?.address() as AddressInfo).port;
     client = createRuntimeActionClient({
-      discover: async () => ({ host: '127.0.0.1', port: 1, accessToken: 'access-token' }),
+      discover: async () => ({ host: '127.0.0.1', port, accessToken: 'access-token' }),
       timeoutMs: 10
     });
 
     await expect(client.launch(REQUEST)).resolves.toMatchObject({
       status: 'uncertain',
       requestId: 'request-1',
-      messageId: 'message-1'
+      messageId: 'message-1',
+      reason: 'deadline-expired'
     });
+
+    const networkClient = createRuntimeActionClient({
+      discover: async () => ({ host: '127.0.0.1', port: 1, accessToken: 'access-token' })
+    });
+    await expect(networkClient.launch(REQUEST)).resolves.toMatchObject({ reason: 'network-error' });
   });
 
-  it.skip('retries after client reconstruction with exactly the same persisted request and message IDs', async () => {
+  it('retries after client reconstruction with exactly the same persisted request and message IDs', async () => {
     await listen((_request, response) => {
       response.writeHead(202, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION, credentials: [] }));
