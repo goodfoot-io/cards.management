@@ -10,6 +10,17 @@
  * @module
  */
 
+export type {
+  RuntimeActionClient,
+  RuntimeActionClientOptions,
+  RuntimeActionHttpRejectionReason,
+  RuntimeActionLaunchRequest,
+  RuntimeActionLaunchResponse,
+  RuntimeActionLaunchResult,
+  RuntimeActionRetrievalResult,
+  RuntimeActionTransportUncertaintyReason
+} from './actions.js';
+export { createRuntimeActionClient } from './actions.js';
 export { DEFAULT_BACKOFF_POLICY, nextBackoffDelayMs } from './backoff.js';
 export { createRuntimeClient } from './client.js';
 export { buildHandshakeRequest, type RuntimeHandshakeRequest } from './handshake.js';
