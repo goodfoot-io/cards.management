@@ -100,7 +100,7 @@ const PROFILE_SETTINGS = JSON.stringify({
 
 /**
  * Serves what mocked `fs.readFile` calls should see: the Antigravity profile,
- * lifecycle ready markers, and ENOENT for anything else.
+ * and ENOENT for anything else.
  *
  * @param path - Path the launcher tried to read.
  * @returns The file contents that path should present.
@@ -109,15 +109,6 @@ const PROFILE_SETTINGS = JSON.stringify({
 function readMockFile(path: string): string {
   if (path === `${ANTIGRAVITY_HOME}/settings.json`) {
     return PROFILE_SETTINGS;
-  }
-  if (path.endsWith('/conv-1.ready')) {
-    const sessionId = path.split('/').at(-2) as string;
-    return JSON.stringify({
-      conversationId: 'conv-1',
-      sessionId,
-      transcriptPath: '/home/user/.gemini/antigravity-cli/conversations/conv-1.db',
-      modelName: 'gemini-3-pro'
-    });
   }
   throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
 }
@@ -204,7 +195,7 @@ beforeEach(async () => {
   vi.mocked(fs.rm).mockResolvedValue(undefined);
   vi.mocked(fs.readdir).mockImplementation(async (directory) => {
     if (String(directory).includes('/antigravity/runtime/markers/')) {
-      return ['conv-1.ready'] as never;
+      return [] as never;
     }
     throw enoent;
   });
