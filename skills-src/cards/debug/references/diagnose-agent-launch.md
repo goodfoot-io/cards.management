@@ -102,7 +102,7 @@ VS Code command (cards.startCardsAssistant or cards.executeAction)
 
 ## Launch Environment Variables
 
-The Cards Assistant and action dispatcher each assemble their base environment immediately before dispatch and hand it to the agent CLI unchanged. No authorization step gates a launch — nothing is issued, validated, or refused before spawn, and the launch path probes nothing. A missing or malformed variable therefore surfaces as the handler's or agent CLI's own startup failure.
+The Cards Assistant and action dispatcher each assemble their base environment immediately before dispatch and hand it to the agent CLI unchanged. No authorization step gates a launch — nothing is issued for authorization before spawn, and no launch path probes credentials. What the launch path does refuse, it refuses for reasons that are not variables: the action dispatcher validates its execution controls (model and effort) before dispatch, and both launchers refuse as `marker-store-unavailable` when the session's runtime marker store cannot be established. A missing or malformed variable therefore surfaces as the handler's or agent CLI's own startup failure.
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
