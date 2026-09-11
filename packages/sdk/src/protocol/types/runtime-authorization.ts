@@ -125,7 +125,13 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
   'runtime.accepted': {
     type: 'runtime.accepted',
     direction: 'server-to-client',
-    deliveryClass: 'durable-result',
+    // Not `durable-result`, despite acknowledging one. That class carries
+    // `completionEvidence: true`, and an acknowledgment of custody is not evidence that
+    // work finished — admitting it there would let a receipt stand as a terminal result.
+    // It belongs with `runtime.resumeAck` instead: neither is persisted or replayed by the
+    // client, both are mandatory for the server to send, and losing one costs nothing
+    // because the resume barrier re-derives the whole accepted set on reconnect.
+    deliveryClass: 'reconciled-snapshot',
     allowedRoles: ['server'],
     executionRequirement: 'admitted',
     requiresRequestId: false,

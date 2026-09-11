@@ -5,6 +5,7 @@ import {
   deliveryClassFor,
   RUNTIME_MESSAGE_CONTRACTS
 } from '../../../src/protocol/types/runtime-authorization.js';
+import { DELIVERY_CLASS_POLICIES } from '../../../src/protocol/types/runtime-delivery.js';
 import type { RuntimeEnvelope } from '../../../src/protocol/types/runtime-envelope.js';
 import { MAX_CONTROL_FRAME_BYTES, RUNTIME_MESSAGE_TYPES } from '../../../src/protocol/types/runtime-messages.js';
 import { RUNTIME_PROTOCOL_VERSION } from '../../../src/protocol/types/runtime-version.js';
@@ -142,9 +143,11 @@ describe('acknowledgment messages', () => {
     }
   });
 
-  it('makes a durable receipt completion evidence and a resume reply merely current', () => {
-    expect(deliveryClassFor('runtime.accepted')).toBe('durable-result');
-    expect(deliveryClassFor('runtime.resumeAck')).toBe('reconciled-snapshot');
+  it('keeps both acknowledgments out of the completion-evidence classes', () => {
+    for (const type of ['runtime.accepted', 'runtime.resumeAck'] as const) {
+      expect(deliveryClassFor(type)).toBe('reconciled-snapshot');
+      expect(DELIVERY_CLASS_POLICIES[deliveryClassFor(type)].completionEvidence).toBe(false);
+    }
   });
 
   it('requires a causation id so a receipt names what it acknowledges', () => {

@@ -359,12 +359,17 @@ export const resumeAckPayloadSchema = z
   .strict();
 
 /**
- * Payload of `runtime.accepted`, the durable receipt for one client message.
+ * Payload of `runtime.accepted`, the server's receipt for one client message.
  *
  * This is what lets a producer retire an outbox record. It is deliberately its own message
  * rather than a field on some other reply: the record exists precisely because the process
  * may die before the receipt arrives, so the receipt cannot be tied to the liveness of the
  * request that produced it.
+ *
+ * The receipt itself is not durable, which is why it is classed as a reconciled snapshot
+ * rather than a durable result. Losing one in flight costs nothing: the obligation stays in
+ * the outbox and the next resume barrier reports it in `acceptedMessageIds`. What must never
+ * happen is the reverse — a receipt read as evidence that work completed.
  */
 export const acceptedPayloadSchema = z
   .object({
