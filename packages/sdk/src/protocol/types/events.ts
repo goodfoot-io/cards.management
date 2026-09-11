@@ -390,6 +390,10 @@ export interface ActionExecuteRequestEvent {
   type: 'action:executeRequest';
   /** Correlation ID linking the request to its result. */
   correlationId: string;
+  /** Stable original caller identity, reused unchanged by every retry. */
+  requestId: string;
+  /** Stable launch-message identity, reused unchanged by every retry. */
+  messageId: string;
   /** ID of the card whose action is being executed. */
   cardId: string;
   /** ID of the action to execute. */

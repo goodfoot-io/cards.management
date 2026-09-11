@@ -654,11 +654,13 @@ describe('card binary', () => {
   });
 
   describe('executeAction', () => {
+    const actionIdentity = { requestId: 'request-1', messageId: 'message-1' };
+
     it('forwards ordered variable-group IDs including an explicit empty selection', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        await executeAction('card-1', 'launch', { variableGroupIds: ['vg-b', 'vg-a'] });
-        await executeAction('card-1', 'launch', { variableGroupIds: [] });
+        await executeAction('card-1', 'launch', { ...actionIdentity, variableGroupIds: ['vg-b', 'vg-a'] });
+        await executeAction('card-1', 'launch', { ...actionIdentity, variableGroupIds: [] });
         expect(actionRequests.map(({ body }) => body)).toEqual([
           { variableGroupIds: ['vg-b', 'vg-a'] },
           { variableGroupIds: [] }
@@ -673,7 +675,7 @@ describe('card binary', () => {
 
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        await executeAction('card-1', 'launch');
+        await executeAction('card-1', 'launch', actionIdentity);
         expect(logSpy).toHaveBeenCalledOnce();
         const output = JSON.parse(logSpy.mock.calls[0]![0] as string) as { success: boolean; exitCode: number };
         expect(output.success).toBe(true);
@@ -688,8 +690,8 @@ describe('card binary', () => {
 
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        await executeAction('card-1', 'launch');
-        expect(actionRequests).toEqual([{ cardId: 'card-1', actionName: 'launch', body: undefined }]);
+        await executeAction('card-1', 'launch', actionIdentity);
+        expect(actionRequests).toEqual([{ cardId: 'card-1', actionName: 'launch', body: actionIdentity }]);
       } finally {
         logSpy.mockRestore();
       }
@@ -700,8 +702,10 @@ describe('card binary', () => {
 
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        await executeAction('card-1', 'launch', { background: true });
-        expect(actionRequests).toEqual([{ cardId: 'card-1', actionName: 'launch', body: { mode: 'background' } }]);
+        await executeAction('card-1', 'launch', { ...actionIdentity, background: true });
+        expect(actionRequests).toEqual([
+          { cardId: 'card-1', actionName: 'launch', body: { ...actionIdentity, mode: 'background' } }
+        ]);
       } finally {
         logSpy.mockRestore();
       }
@@ -712,8 +716,10 @@ describe('card binary', () => {
 
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        await executeAction('card-1', 'launch', { exitWhenDone: true });
-        expect(actionRequests).toEqual([{ cardId: 'card-1', actionName: 'launch', body: { exitWhenDone: true } }]);
+        await executeAction('card-1', 'launch', { ...actionIdentity, exitWhenDone: true });
+        expect(actionRequests).toEqual([
+          { cardId: 'card-1', actionName: 'launch', body: { ...actionIdentity, exitWhenDone: true } }
+        ]);
       } finally {
         logSpy.mockRestore();
       }
@@ -724,9 +730,13 @@ describe('card binary', () => {
 
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
-        await executeAction('card-1', 'launch', { background: true, exitWhenDone: true });
+        await executeAction('card-1', 'launch', { ...actionIdentity, background: true, exitWhenDone: true });
         expect(actionRequests).toEqual([
-          { cardId: 'card-1', actionName: 'launch', body: { mode: 'background', exitWhenDone: true } }
+          {
+            cardId: 'card-1',
+            actionName: 'launch',
+            body: { ...actionIdentity, mode: 'background', exitWhenDone: true }
+          }
         ]);
       } finally {
         logSpy.mockRestore();
@@ -737,6 +747,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await executeAction('card-1', 'launch', {
+          ...actionIdentity,
           background: true,
           exitWhenDone: true,
           selectedAgent: 'opencode-cli'
@@ -745,7 +756,7 @@ describe('card binary', () => {
           {
             cardId: 'card-1',
             actionName: 'launch',
-            body: { mode: 'background', exitWhenDone: true, selectedAgent: 'opencode-cli' }
+            body: { ...actionIdentity, mode: 'background', exitWhenDone: true, selectedAgent: 'opencode-cli' }
           }
         ]);
       } finally {
@@ -758,7 +769,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       actionResult = { success: false, exitCode: 0, error: 'codex-cli is unavailable' };
       try {
-        await executeAction('card-1', 'launch', { selectedAgent: 'codex-cli' });
+        await executeAction('card-1', 'launch', { ...actionIdentity, selectedAgent: 'codex-cli' });
         expect(process.exitCode).toBe(1);
       } finally {
         process.exitCode = originalExitCode;
@@ -771,7 +782,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       actionResult = { success: false, exitCode: 0, error: 'default launch failed' };
       try {
-        await executeAction('card-1', 'launch');
+        await executeAction('card-1', 'launch', actionIdentity);
         expect(process.exitCode).toBe(originalExitCode);
       } finally {
         process.exitCode = originalExitCode;

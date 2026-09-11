@@ -243,6 +243,12 @@ export const CARDS_ENV_VARS = {
   CARDS_BIN_PATH: 'CARDS_BIN_PATH',
 
   /**
+   * Absolute path to the protected runtime credential handoff file.
+   * Secrets are read from this file and never expanded into individual environment variables.
+   */
+  RUNTIME_CREDENTIAL_FILE: 'CARDS_RUNTIME_CREDENTIAL_FILE',
+
+  /**
    * Absolute path to the Cards hooks log file.
    *
    * Set by ActionDispatcher at runtime. Read by the Logger singleton
@@ -273,6 +279,19 @@ export function getCardId(): string {
   const value = process.env[CARDS_ENV_VARS.CARD_ID];
   if (value === undefined || value === '') {
     throw new Error(`Missing required environment variable: ${CARDS_ENV_VARS.CARD_ID}`);
+  }
+  return value;
+}
+
+/**
+ * Reads the protected runtime credential-file path from the environment.
+ * @returns The absolute credential-file path supplied by the execution wrapper.
+ * @throws When the wrapper did not provide a path.
+ */
+export function getRuntimeCredentialFilePath(): string {
+  const value = process.env[CARDS_ENV_VARS.RUNTIME_CREDENTIAL_FILE];
+  if (value === undefined || value === '') {
+    throw new Error(`Missing required environment variable: ${CARDS_ENV_VARS.RUNTIME_CREDENTIAL_FILE}`);
   }
   return value;
 }

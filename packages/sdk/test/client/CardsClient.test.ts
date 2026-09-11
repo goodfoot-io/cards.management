@@ -320,7 +320,7 @@ describe('CardsClient', () => {
       ['removeBranch', (client, cardId) => client.removeBranch(cardId, 'feature/test')],
       ['listStreams', (client, cardId) => client.listStreams(cardId)],
       ['getStream', (client, cardId) => client.getStream(cardId, 'claude-session', 'session.log')],
-      ['executeAction', (client, cardId) => client.executeAction(cardId, 'launch')]
+      ['executeAction', (client, cardId) => client.executeAction(cardId, 'launch', 'request-1', 'message-1')]
     ];
 
     it.each(cardIdCallers)('encodes the cardId segment in %s', async (_method, call) => {
@@ -682,13 +682,13 @@ describe('CardsClient', () => {
       httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', expectedResult);
       const client = new CardsClient(options, httpClient);
 
-      const result = await client.executeAction('card-123', 'launch');
+      const result = await client.executeAction('card-123', 'launch', 'request-1', 'message-1');
 
       expect(httpClient.requests[0]).toMatchObject({
         method: 'POST',
         url: expect.stringContaining('/cards/card-123/actions/launch')
       });
-      expect(httpClient.requests[0]!.body).toBeUndefined();
+      expect(httpClient.requests[0]!.body).toEqual({ requestId: 'request-1', messageId: 'message-1' });
       expect(result).toEqual(expectedResult);
     });
 
@@ -697,12 +697,12 @@ describe('CardsClient', () => {
       httpClient.responses.set('http://localhost:3000/cards/card-123/actions/chat', { success: true, exitCode: 0 });
       const client = new CardsClient(options, httpClient);
 
-      await client.executeAction('card-123', 'chat', 'interactive');
+      await client.executeAction('card-123', 'chat', 'request-1', 'message-1', 'interactive');
 
       expect(httpClient.requests[0]).toMatchObject({
         method: 'POST',
         url: expect.stringContaining('/cards/card-123/actions/chat'),
-        body: { mode: 'interactive' }
+        body: { requestId: 'request-1', messageId: 'message-1', mode: 'interactive' }
       });
     });
 
@@ -711,9 +711,13 @@ describe('CardsClient', () => {
       httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
       const client = new CardsClient(options, httpClient);
 
-      await client.executeAction('card-123', 'launch', undefined, false, 'codex-cli');
+      await client.executeAction('card-123', 'launch', 'request-1', 'message-1', undefined, false, 'codex-cli');
 
-      expect(httpClient.requests[0]?.body).toEqual({ selectedAgent: 'codex-cli' });
+      expect(httpClient.requests[0]?.body).toEqual({
+        requestId: 'request-1',
+        messageId: 'message-1',
+        selectedAgent: 'codex-cli'
+      });
     });
 
     it('executeAction serializes ordered variable-group IDs including an explicit empty selection', async () => {

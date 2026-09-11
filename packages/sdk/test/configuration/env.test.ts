@@ -32,6 +32,7 @@ describe('env', () => {
     delete process.env[CARDS_ENV_VARS.EXIT_WHEN_DONE];
     delete process.env[CARDS_ENV_VARS.CODING_AGENT];
     delete process.env[CARDS_ENV_VARS.VSCODE_NODE];
+    delete process.env[CARDS_ENV_VARS.RUNTIME_CREDENTIAL_FILE];
   });
 
   afterEach(() => {
@@ -66,6 +67,7 @@ describe('env', () => {
         MARKETPLACE_PATH: 'MARKETPLACE_PATH',
         INITIAL_PROMPT: 'INITIAL_PROMPT',
         CARDS_BIN_PATH: 'CARDS_BIN_PATH',
+        RUNTIME_CREDENTIAL_FILE: 'CARDS_RUNTIME_CREDENTIAL_FILE',
         HOOKS_LOG_FILE: 'CARDS_HOOKS_LOG_FILE'
       });
     });

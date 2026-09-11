@@ -948,6 +948,8 @@ export class CardsClient {
    *
    * @param cardId - Identifier of the card to execute the action on.
    * @param actionName - Action identifier (e.g., 'launch').
+   * @param requestId - Stable original caller identity, persisted before the first attempt.
+   * @param messageId - Stable launch-message identity, reused by every retry.
    * @param mode - Optional execution mode. When omitted, the server runs the
    *   action interactively (the default).
    * @param exitWhenDone - When true, the spawned agent is signalled to exit
@@ -964,19 +966,20 @@ export class CardsClient {
   async executeAction(
     cardId: string,
     actionName: string,
+    requestId: string,
+    messageId: string,
     mode?: ExecutionMode,
     exitWhenDone?: boolean,
     selectedAgent?: CodingAgentId,
     variableGroupIds?: string[]
   ): Promise<ActionResult> {
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/actions/${encodeURIComponent(actionName)}`);
-    const body: ExecuteActionRequest = {};
+    const body: ExecuteActionRequest = { requestId, messageId };
     if (mode) body.mode = mode;
     if (exitWhenDone) body.exitWhenDone = true;
     if (selectedAgent) body.selectedAgent = selectedAgent;
     if (variableGroupIds !== undefined) body.variableGroupIds = variableGroupIds;
-    const hasBody = Object.keys(body).length > 0;
-    return this.request(() => this.getHttpClient().post<ActionResult>(url, hasBody ? body : undefined), false);
+    return this.request(() => this.getHttpClient().post<ActionResult>(url, body), false);
   }
 
   // --- Compare Operations ---

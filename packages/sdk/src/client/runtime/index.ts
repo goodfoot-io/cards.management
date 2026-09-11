@@ -23,6 +23,12 @@ export type {
 export { createRuntimeActionClient } from './actions.js';
 export { DEFAULT_BACKOFF_POLICY, nextBackoffDelayMs } from './backoff.js';
 export { createRuntimeClient } from './client.js';
+export {
+  type LoadedRuntimeCredential,
+  loadRuntimeCredential,
+  readRuntimeCredentialFile,
+  writeRuntimeCredentialFile
+} from './credential-file.js';
 export { buildHandshakeRequest, type RuntimeHandshakeRequest } from './handshake.js';
 export {
   DEFAULT_HEARTBEAT_POLICY,

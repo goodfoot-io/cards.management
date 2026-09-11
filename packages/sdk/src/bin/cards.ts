@@ -1241,7 +1241,9 @@ async function htmlCommand(args: string[]): Promise<void> {
  *
  * @param cardId - The card identifier.
  * @param actionName - The action identifier to execute.
- * @param opts - Execution options parsed from the action subcommand flags.
+ * @param opts - Execution identity and options parsed from the action subcommand flags.
+ * @param opts.requestId - Stable original caller identity.
+ * @param opts.messageId - Stable launch-message identity.
  * @param opts.jsonPath - Optional JSONPath expression to filter the output.
  * @param opts.background - When true (`--background`), runs the action in the
  *   background; otherwise the action runs interactively (the default). The
@@ -1255,7 +1257,9 @@ async function htmlCommand(args: string[]): Promise<void> {
 export async function executeAction(
   cardId: string,
   actionName: string,
-  opts?: {
+  opts: {
+    requestId: string;
+    messageId: string;
     jsonPath?: string;
     background?: boolean;
     exitWhenDone?: boolean;
@@ -1268,6 +1272,8 @@ export async function executeAction(
   const result: ActionResult = await client.executeAction(
     cardId,
     actionName,
+    opts.requestId,
+    opts.messageId,
     mode,
     opts?.exitWhenDone ?? false,
     opts?.selectedAgent,
@@ -1648,10 +1654,17 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
         run = Promise.resolve().then(() => {
           const actionFlags = parseFlags(process.argv.slice(5), new Set(['background', 'exit-when-done']));
           const selectedAgent = actionFlags['agent']?.[0];
+          const requestId = actionFlags['request-id']?.[0];
+          const messageId = actionFlags['message-id']?.[0];
+          if (requestId === undefined || messageId === undefined) {
+            throw new Error('action requires --request-id and --message-id from the original caller');
+          }
           if (selectedAgent !== undefined && !isCodingAgentId(selectedAgent)) {
             throw new Error(`invalid coding agent "${selectedAgent}"; expected one of: ${CODING_AGENT_IDS.join(', ')}`);
           }
           return executeAction(command, actionId, {
+            requestId,
+            messageId,
             jsonPath: actionFlags['jsonpath']?.[0],
             background: actionFlags['background'] !== undefined,
             exitWhenDone: actionFlags['exit-when-done'] !== undefined,

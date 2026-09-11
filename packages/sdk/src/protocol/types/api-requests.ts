@@ -580,6 +580,12 @@ export type EnvironmentsResponse = EnvironmentInfo[];
  * Controls how the relayed action is executed by the extension client.
  */
 export interface ExecuteActionRequest {
+  /** Stable original caller identity, persisted before the first attempt. */
+  requestId: string;
+
+  /** Stable launch-message identity, persisted before the first attempt. */
+  messageId: string;
+
   /** One-shot coding-agent override. Omitted to preserve default selection. */
   selectedAgent?: CodingAgentId;
 

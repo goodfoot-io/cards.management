@@ -98,6 +98,7 @@ export {
   getBaseBranch,
   getCardRepoPath,
   getExecutionMode,
+  getRuntimeCredentialFilePath,
   getWorkspaceBranch,
   getWorkspacePath,
   readSwitchToInteractiveData,

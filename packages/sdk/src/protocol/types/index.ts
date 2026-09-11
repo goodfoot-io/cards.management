@@ -212,6 +212,7 @@ export {
   type MessageDirection,
   RUNTIME_MESSAGE_CONTRACTS
 } from './runtime-authorization.js';
+export { type RuntimeCredentialFile, runtimeCredentialFileSchema } from './runtime-credential-file.js';
 // --- Runtime Protocol: Delivery Classes ---
 export {
   authorizeTermination,

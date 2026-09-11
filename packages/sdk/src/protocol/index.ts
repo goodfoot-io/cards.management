@@ -13,18 +13,6 @@
  * @module
  */
 
-// --- Status Types ---
-// --- Card Types ---
-// --- API Discovery Types ---
-// --- Response Envelope Types ---
-// --- WebSocket Event Types ---
-// --- Webview Messaging Types ---
-// --- Custom Types ---
-// --- API Request/Response Types ---
-// --- Remote Programmatic API Types ---
-// --- Input Constraints ---
-// --- Card Gates ---
-// --- Runtime Protocol: Launch Admission ---
 export type {
   Action,
   ActionClientMessage,
@@ -344,3 +332,16 @@ export {
   UnsupportedProtocolVersionError,
   validateHtmlInfo
 } from './types/index.js';
+// --- Status Types ---
+// --- Card Types ---
+// --- API Discovery Types ---
+// --- Response Envelope Types ---
+// --- WebSocket Event Types ---
+// --- Webview Messaging Types ---
+// --- Custom Types ---
+// --- API Request/Response Types ---
+// --- Remote Programmatic API Types ---
+// --- Input Constraints ---
+// --- Card Gates ---
+// --- Runtime Protocol: Launch Admission ---
+export { type RuntimeCredentialFile, runtimeCredentialFileSchema } from './types/runtime-credential-file.js';
