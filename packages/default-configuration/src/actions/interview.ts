@@ -56,12 +56,6 @@ export default defineAction(
     const agent = resolveCodingAgent(input);
 
     if (agent === 'antigravity-cli') {
-      if (input.executionMode === 'background') {
-        throw new Error(
-          `cards.defaultCodingAgent='antigravity-cli' does not support background-mode interviews. ` +
-            `Run the Interview action in interactive mode, or switch cards.defaultCodingAgent to 'claude-code-cli'.`
-        );
-      }
       await spawnAntigravitySession(input, context, {
         suppressExitWhenDone: true,
         prompt: 'Load the `runtime:interview` skill and follow the `<routing-instructions>`.'

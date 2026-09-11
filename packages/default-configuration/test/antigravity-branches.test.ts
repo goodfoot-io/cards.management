@@ -826,15 +826,9 @@ describe('chat action — antigravity branch', () => {
     await promise;
   });
 
-  it('rejects background mode and does not spawn', async () => {
-    const { spawn } = await import('node:child_process');
-
+  it('declares no background-mode support, keeping the action-wide declaration the single check', async () => {
     const action = (await import('../src/actions/chat.js')).default;
-    await expect(
-      action(baseInput({ actionName: 'Chat', executionMode: 'background' }), createMockContext())
-    ).rejects.toThrow(/antigravity-cli.*does not support background-mode chat/);
-
-    expect(spawn).not.toHaveBeenCalled();
+    expect(action.supportsBackgroundMode).toBe(false);
   });
 });
 
@@ -861,15 +855,9 @@ describe('interview action — antigravity branch', () => {
     await promise;
   });
 
-  it('rejects background mode and does not spawn', async () => {
-    const { spawn } = await import('node:child_process');
-
+  it('declares no background-mode support, keeping the action-wide declaration the single check', async () => {
     const action = (await import('../src/actions/interview.js')).default;
-    await expect(
-      action(baseInput({ actionName: 'Interview', executionMode: 'background' }), createMockContext())
-    ).rejects.toThrow(/antigravity-cli.*does not support background-mode interviews/);
-
-    expect(spawn).not.toHaveBeenCalled();
+    expect(action.supportsBackgroundMode).toBe(false);
   });
 });
 
