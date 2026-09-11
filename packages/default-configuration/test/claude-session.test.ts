@@ -182,6 +182,8 @@ function createMockChild(overrides?: Partial<ChildProcess>): ChildProcess {
 /**
  * Minimal event-emitter stand-in for `child.stderr`, matching the
  * `on`/`emit` shape `createMockChild` uses for the child process itself.
+ *
+ * @returns A stub with `on('data', cb)` registration and a synchronous `emit`.
  */
 function createMockStderr(): {
   on: (event: string, cb: (chunk: Buffer) => void) => void;
@@ -1818,6 +1820,95 @@ describe('claude-session shared utilities', () => {
       child.emit('close', 0);
 
       await expect(promise).rejects.toThrow(/600s/);
+    });
+
+    it('completes successfully in background mode when the child exits 0 with no ceiling diagnostic on stderr', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+
+      const stderr = createMockStderr();
+      const child = createMockChild({ stderr: stderr as unknown as ChildProcess['stderr'] });
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnClaudeSession(baseInput({ executionMode: 'background' }), context, {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      stderr.emit('some ordinary diagnostic output, unrelated to the wait ceiling');
+      child.emit('close', 0);
+
+      await expect(promise).resolves.toBeUndefined();
+    });
+
+    it('does not fail the action on the ceiling diagnostic when Cards itself already requested cancellation', async () => {
+      // Explicit Cards cancellation/shutdown retains its current outcome and
+      // cleanup precedence over the diagnostic latch.
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+
+      const stderr = createMockStderr();
+      const child = createMockChild({ stderr: stderr as unknown as ChildProcess['stderr'] });
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnClaudeSession(baseInput({ executionMode: 'background' }), context, {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      const onCancelHandler = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
+      await onCancelHandler();
+
+      stderr.emit('Background tasks still running after 600s; terminating.');
+      child.emit('close', 0);
+
+      await expect(promise).resolves.toBeUndefined();
+    });
+
+    it('does not inject CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS in interactive mode when the parent env has no value', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+      const saved = process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'];
+      delete process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'];
+
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnClaudeSession(baseInput(), context, {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
+      expect('CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS' in spawnOpts.env).toBe(false);
+
+      child.emit('close', null);
+      await promise;
+
+      if (saved !== undefined) {
+        process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'] = saved;
+      }
     });
   });
 });

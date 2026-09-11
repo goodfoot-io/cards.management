@@ -38,6 +38,16 @@ import { spawnAgentCli } from './spawn-cli.js';
 // attached handler path).
 const execFileAsync = execFileNoWindowAsync;
 
+/**
+ * Claude's own print-mode background-task wait ceiling diagnostic, emitted to
+ * stderr immediately before it terminates a background session on its own
+ * 600-second default (main-678). Background child envs force the ceiling to
+ * unlimited (see {@link spawnClaudeSession}), but this string is still
+ * latched in case an unrecognized future Claude build re-imposes a finite
+ * ceiling silently ignoring the override.
+ */
+const CLAUDE_BACKGROUND_CEILING_DIAGNOSTIC = 'Background tasks still running after 600s; terminating.';
+
 let _cliExecutable: string | undefined;
 
 /**
@@ -1009,6 +1019,14 @@ export async function spawnClaudeSession(
       BASE_BRANCH: baseBranch,
       PARENT_BRANCH: parentBranch,
       WORKSPACE_BRANCH: branchName,
+      // Claude's own print-mode background-task wait ceiling defaults to 600s
+      // and otherwise fires before Cards decides the session is done, killing
+      // agent-team work still in flight (main-678). Cards — not Claude — owns
+      // a background action's lifetime via cancellation, shutdown, or natural
+      // completion, so force this print-only setting to unlimited on every
+      // background child, overriding any finite value inherited from the
+      // parent env. Interactive sessions must not acquire this override.
+      ...(isInteractive ? {} : { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' }),
       ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
     }
   });
@@ -1035,13 +1053,20 @@ export async function spawnClaudeSession(
     forceTimeoutMs: 5_000
   });
 
+  // Tracks whether Cards itself asked the session to end, so a subsequent
+  // Claude-imposed ceiling diagnostic (below) does not override an outcome
+  // Cards already owns.
+  let cardsTerminationRequested = false;
+
   context.onCancel(async () => {
+    cardsTerminationRequested = true;
     context.logger.info(`${input.actionName} action cancelled, terminating claude`, { sessionId });
     const result = await termination.terminate('cancel');
     context.logger.info(`${input.actionName} cancellation termination completed`, { sessionId, result });
   });
 
   context.onAgentShutdown(async () => {
+    cardsTerminationRequested = true;
     context.logger.info(`${input.actionName} agent signalled shutdown, terminating claude`, { sessionId });
     const result = await termination.terminate('shutdown');
     context.logger.info(`${input.actionName} shutdown termination completed`, { sessionId, result });
@@ -1056,19 +1081,43 @@ export async function spawnClaudeSession(
     });
   }
 
-  // Background mode: capture stderr for diagnostic logging
+  // Background mode: capture stderr for diagnostic logging, and latch
+  // recognition of Claude's own background-task wait-ceiling diagnostic. The
+  // diagnostic can arrive split across chunk boundaries, so matching is done
+  // against a running tail rather than each chunk in isolation.
+  let ceilingDiagnosticObserved = false;
+  let stderrTail = '';
   if (!isInteractive) {
     child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString().trim();
-      if (text) {
-        context.logger.warn(text);
+      const text = chunk.toString();
+      const trimmed = text.trim();
+      if (trimmed) {
+        context.logger.warn(trimmed);
       }
+      stderrTail += text;
+      if (stderrTail.includes(CLAUDE_BACKGROUND_CEILING_DIAGNOSTIC)) {
+        ceilingDiagnosticObserved = true;
+      }
+      // Keep only enough trailing context to catch a match split across the
+      // next chunk boundary — checked above BEFORE truncating, so a match
+      // straddling this boundary is never cut in half.
+      stderrTail = stderrTail.slice(-(CLAUDE_BACKGROUND_CEILING_DIAGNOSTIC.length - 1));
     });
   }
 
   const exitCode = await new Promise<number | null>((resolve) => {
     child.on('close', resolve);
   });
+
+  // Claude's print-mode wait ceiling terminated the session before Cards
+  // decided the work was done — the child still exits 0, but this is not a
+  // successful completion. Fail through the same channel as the settle-error
+  // throw below, unless Cards itself already requested this termination.
+  if (ceilingDiagnosticObserved && !cardsTerminationRequested) {
+    throw new Error(
+      `${input.actionName} action was terminated by Claude's 600s background-task wait ceiling before completing (exit code ${exitCode}); Cards did not request cancellation or shutdown.`
+    );
+  }
 
   // Fail the launch loudly when the settle phase rejected: the agent was
   // killed and the worktree is gone, so the action must not report a normal

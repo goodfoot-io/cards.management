@@ -55,8 +55,7 @@ export default defineAction(
   {
     actionName: 'Launch',
     description: 'Start a coding session for the card',
-    supportsBackgroundMode: true,
-    timeout: 3600000
+    supportsBackgroundMode: true
   },
   async (input: ActionInput, context: ActionContext) => {
     const agent = resolveCodingAgent(input);

@@ -57,8 +57,7 @@ export default defineAction(
   {
     actionName: 'Captain',
     description: 'Delegates work to free-form subagents',
-    supportsBackgroundMode: true,
-    timeout: 3600000
+    supportsBackgroundMode: true
   },
   async (input: ActionInput, context: ActionContext) => {
     const agent = resolveCodingAgent(input);
