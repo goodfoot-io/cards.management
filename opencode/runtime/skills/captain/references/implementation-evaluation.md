@@ -26,6 +26,8 @@ Run lint and typecheck plus each package suite the `implement/[CARD_ID]/baseline
 
 Diff `implement/[CARD_ID]/baseline..HEAD`, then read the card (and plan, if one exists) again with that diff in hand. If you implemented this yourself or the diff is large, dispatch a fresh-eyes subagent per angle.
 
+Keep the decision log internal — never write a decision ledger, and a fresh-eyes reviewer reports findings back rather than editing the plan or the code.
+
 Evaluate from both angles below and list every finding — do not stop at the first one:
 
 **Failure modes.** Perform a failure mode and effects analysis on the implementation. Trace consumers, data flow, and error paths for each change. Where could this break at runtime that the validation suite wouldn't catch — new API boundaries, async/error-path logic, shared state, silently drifting contracts?

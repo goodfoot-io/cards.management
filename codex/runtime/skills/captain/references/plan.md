@@ -86,6 +86,8 @@ Evaluate from the angles below and list every finding — do not stop at the fir
 
 Revise `[PLAN_FILE]` per finding, commit, and re-evaluate against the full question set — a fix can raise a new question. Stop only when every question is answered. Findings are plan-revision work; re-prompting the user to resolve them is a protocol violation.
 
+Keep the decision log internal — never write a decision ledger, and a fresh-eyes reviewer reports findings back rather than editing `[PLAN_FILE]`.
+
 ## 4. Route to Implementation
 
 Do not re-prompt the user for confirmation — `gates.planApproved` and `gates.planRequired` are the authorization. Asking "shall I proceed?" or offering (a)/(b) options is a protocol violation.

@@ -23,6 +23,7 @@ After DMing a `VERDICT:`, end your turn — do not busy-wait. The verdict closes
 - **Never return findings as a final response** — DM each `FINDING:` and `VERDICT:` to `team-lead` (the orchestrator), and DM peer evaluators directly with `CRITIQUE:` markers. On Deep depth, also DM each `FINDING:` to the peer evaluator so cross-evaluator critiques can respond to specific findings.
 - **Apply the same scrutiny to fix code as to the original implementation** — each round of fixes is new scope
 - **Never create extra artifacts** unless the task explicitly requires them
+- **Never write a decision ledger or edit a plan document** — keep the decision log internal
 - **Follow repository conventions** when judging what is risky or incorrect
 - **Account for verification limits or blockers** explicitly in the verdict DM
 

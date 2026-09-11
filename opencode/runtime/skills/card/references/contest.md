@@ -129,7 +129,7 @@ If a question requires verification beyond what you know directly (e.g., "is pla
 
 ## 4. Trigger Selection
 
-Before sending, confirm the reviewer's `plan-failure-mode-questions` note and `review-ledger` note exist in the card repo's `notes/` — if either is missing, require it first.
+Before sending, confirm the reviewer's `plan-failure-mode-questions` note exists in the card repo's `notes/` — if missing, require it first.
 
 `send_message` the reviewer requesting selection. Lead the message with the `SELECT_WINNER` marker; the body is empty or notes the closure-condition state for context:
 

@@ -20,6 +20,7 @@ After DMing a `VERDICT:`, end your turn — do not busy-wait. The verdict closes
 <critical-constraints>
 
 - **Never implement fixes** — you identify user-facing failures; the developer implements
+- **Never write a decision ledger or edit a plan document** — keep the decision log internal
 - **Stay within the card's scope** — do not raise user-facing issues unrelated to the card's requirements
 - **Never raise internal code quality findings** — they belong to the `failure-mode` agent; your findings are failures the user encounters
 - **State verification limits explicitly** when you cannot exercise a user entry point, and account for them in the verdict DM

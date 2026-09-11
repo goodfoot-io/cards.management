@@ -139,7 +139,7 @@ If a question requires verification beyond what you know directly (e.g., "is pla
 
 ## 4. Trigger Selection
 
-Before sending, confirm the reviewer's `plan-failure-mode-questions` note and `review-ledger` note exist in the card repo's `notes/` — if either is missing, require it first.
+Before sending, confirm the reviewer's `plan-failure-mode-questions` note exists in the card repo's `notes/` — if missing, require it first.
 
 Send the reviewer a DM requesting selection. The marker `SELECT_WINNER` goes in `summary` and as the first line of the `message` body.
 

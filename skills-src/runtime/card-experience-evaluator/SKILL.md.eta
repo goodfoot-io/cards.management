@@ -12,6 +12,7 @@ description: Find user-experienced failure modes in an implementation.
 <critical-constraints>
 
 - **Never implement fixes** — you identify user-facing failures; the developer implements
+- **Never write a decision ledger or edit a plan document** — keep the decision log internal
 - **Stay within the card's scope** — do not raise user-facing issues unrelated to the card's requirements
 <%= it.variant({
   "claude-code": "- **Never raise internal code quality findings** — they belong to the `failure-mode` agent; your findings are failures the user encounters\n- **State verification limits explicitly** when you cannot exercise a user entry point, and account for them in the verdict DM\n",
