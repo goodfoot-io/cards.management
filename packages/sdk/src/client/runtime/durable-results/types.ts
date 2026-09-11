@@ -11,10 +11,33 @@
  * @summary Types describing durably held terminal results
  */
 
-import type { RuntimeEnvelope } from '../../../protocol/index.js';
+import type { OriginalCallerRequestId, RuntimeEnvelope, RuntimeMessageType } from '../../../protocol/index.js';
+import type { JournalAcknowledgment } from '../outbox/index.js';
 
 /** Schema version stamped into every custody record this build writes. */
-export const DURABLE_RESULT_SCHEMA_VERSION = 1;
+export const DURABLE_RESULT_SCHEMA_VERSION = 2;
+
+/** Message types whose immutable envelopes may enter durable-result custody. */
+export type DurableResultMessageType = Extract<
+  RuntimeMessageType,
+  | 'execution.launchAdmission'
+  | 'execution.launchOutcome'
+  | 'execution.agentTermination'
+  | 'execution.cleanupComplete'
+  | 'watcher.stopResult'
+>;
+
+/** Strict custody input after the server resolved the authoritative original request. */
+export interface DurableResultCustodyInput {
+  readonly requestId: OriginalCallerRequestId;
+  readonly envelope: RuntimeEnvelope<DurableResultMessageType>;
+}
+
+/** Closed result of attempting to take custody; only matching durable copies acknowledge. */
+export type DurableResultCustodyOutcome =
+  | { readonly status: 'created' | 'matching'; readonly acknowledgment: JournalAcknowledgment }
+  | { readonly status: 'conflict'; readonly detail: string }
+  | { readonly status: 'unavailable'; readonly detail: string };
 
 /**
  * One terminal result held durably on behalf of a producer that has exited.
@@ -31,7 +54,11 @@ export interface DurableResultCustodyRecord {
   /** Execution this result belongs to. */
   readonly executionId: string;
   /** Original caller request ID the execution was admitted under. */
-  readonly requestId: string;
+  readonly requestId: OriginalCallerRequestId;
+  /** SHA-256 of the canonical request/execution/scope/envelope custody identity. */
+  readonly fingerprint: string;
+  /** Canonical JSON of the immutable envelope, retained for byte-stable replay comparison. */
+  readonly canonicalEnvelope: string;
   /** The result itself, as the protocol will decode it. */
   readonly envelope: RuntimeEnvelope;
   /** When custody was taken, ISO 8601. */

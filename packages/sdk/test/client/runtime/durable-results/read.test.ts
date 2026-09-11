@@ -17,9 +17,10 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createDurableResultReader,
+  type DurableResultCustodyInput,
   describeDurableResult,
   listDurableResults,
-  takeResultCustody
+  takeResultCustody as takeStrictResultCustody
 } from '../../../../src/client/runtime/durable-results/index.js';
 import type { OutboxRecord } from '../../../../src/client/runtime/outbox/index.js';
 import { makeRecordInput } from '../outbox/index.js';
@@ -32,6 +33,14 @@ function makeRecord(overrides: Parameters<typeof makeRecordInput>[0] = {}): Outb
     schemaVersion: 1,
     enqueuedAt: '2026-09-10T11:59:00.000Z'
   };
+}
+
+function takeResultCustody(root: string, record: OutboxRecord, now: () => Date) {
+  return takeStrictResultCustody(
+    root,
+    { requestId: record.requestId, envelope: record.envelope as DurableResultCustodyInput['envelope'] },
+    now
+  );
 }
 
 function custodyFiles(root: string): string[] {

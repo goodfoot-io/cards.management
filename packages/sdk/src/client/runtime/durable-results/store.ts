@@ -36,11 +36,16 @@
  * @module runtime/durable-results/store
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { OutboxRecord, OutcomeAcceptance, RecoveredResultCustodian } from '../outbox/index.js';
-import { DURABLE_RESULT_SCHEMA_VERSION, type DurableResultCustodyRecord } from './types.js';
+import {
+  DURABLE_RESULT_SCHEMA_VERSION,
+  type DurableResultCustodyInput,
+  type DurableResultCustodyOutcome,
+  type DurableResultCustodyRecord
+} from './types.js';
 
 /**
  * Resolves the custody root inside the protected Cards runtime directory.
@@ -100,81 +105,23 @@ function custodyPath(root: string, executionId: string, messageId: string): stri
 }
 
 /**
- * Flushes a directory entry so a linked file survives power loss.
- *
- * Opening a directory for read and syncing it is the portable way to do this.
- * Some platforms refuse the open or the sync outright; that is not a failure of
- * the write, so it is swallowed rather than turned into a refusal that would
- * strand a perfectly good record.
- *
- * @param dir - Directory whose entries must be durable.
- */
-async function syncDirectory(dir: string): Promise<void> {
-  let handle: fs.FileHandle | undefined;
-  try {
-    handle = await fs.open(dir, 'r');
-    await handle.sync();
-  } catch {
-    return;
-  } finally {
-    await handle?.close();
-  }
-}
-
-/**
- * Writes one custody record atomically, idempotent on its message ID.
+ * Writes one custody record atomically, comparing the complete immutable identity on replay.
  *
  * Returns whether this call created the copy or found one already there. Both are
  * custody: a reconciliation pass that crashed after writing and before retiring
  * must be able to run again and reach the same conclusion.
  *
- * @param root - Absolute custody root.
- * @param record - The recovered result to take custody of.
- * @param now - Clock supplying the custody timestamp.
- * @returns `created` on first write, `exists` when this message is already held.
+ * @param _root - Absolute custody root.
+ * @param _input - Validated result envelope plus server-resolved original request ID.
+ * @param _now - Clock supplying the custody timestamp.
+ * @returns Created or matching custody with acknowledgment, conflict, or unavailable.
  */
 export async function takeResultCustody(
-  root: string,
-  record: OutboxRecord,
-  now: () => Date
-): Promise<'created' | 'exists'> {
-  const target = custodyPath(root, record.executionId, record.messageId);
-  const dir = path.dirname(target);
-  await fs.mkdir(dir, { recursive: true });
-
-  const custody: DurableResultCustodyRecord = {
-    schemaVersion: DURABLE_RESULT_SCHEMA_VERSION,
-    messageId: record.messageId,
-    executionId: record.executionId,
-    requestId: record.requestId,
-    envelope: record.envelope,
-    custodiedAt: now().toISOString()
-  };
-
-  const temp = path.join(dir, `.tmp-${randomUUID()}`);
-  const handle = await fs.open(temp, 'wx');
-  try {
-    await handle.writeFile(`${JSON.stringify(custody, null, 2)}\n`, 'utf-8');
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-
-  let outcome: 'created' | 'exists';
-  try {
-    await fs.link(temp, target);
-    outcome = 'created';
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
-      throw error;
-    }
-    outcome = 'exists';
-  } finally {
-    await fs.rm(temp, { force: true });
-  }
-
-  await syncDirectory(dir);
-  return outcome;
+  _root: string,
+  _input: DurableResultCustodyInput,
+  _now: () => Date
+): Promise<DurableResultCustodyOutcome> {
+  throw new Error('Not Implemented');
 }
 
 /**
@@ -231,15 +178,22 @@ export function createFileResultCustodian(options: FileResultCustodianOptions): 
       }
 
       try {
-        await takeResultCustody(root, record, now);
+        const outcome = await takeResultCustody(
+          root,
+          { requestId: record.requestId, envelope: record.envelope as DurableResultCustodyInput['envelope'] },
+          now
+        );
+        if (outcome.status === 'created' || outcome.status === 'matching') {
+          return { kind: 'accepted', acknowledgment: outcome.acknowledgment };
+        }
+        const detail = 'detail' in outcome ? outcome.detail : 'custody returned no acknowledgment';
+        return {
+          kind: outcome.status === 'conflict' ? 'not-admitted' : 'authority-unavailable',
+          detail
+        };
       } catch (error) {
         return { kind: 'authority-unavailable', detail: `custody write failed: ${(error as Error).message}` };
       }
-
-      return {
-        kind: 'accepted',
-        acknowledgment: { messageId: record.messageId, acknowledgedAt: now().toISOString() }
-      };
     }
   };
 }

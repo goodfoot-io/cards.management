@@ -29,4 +29,10 @@ export {
   resolveDurableResultRoot,
   takeResultCustody
 } from './store.js';
-export { DURABLE_RESULT_SCHEMA_VERSION, type DurableResultCustodyRecord } from './types.js';
+export {
+  DURABLE_RESULT_SCHEMA_VERSION,
+  type DurableResultCustodyInput,
+  type DurableResultCustodyOutcome,
+  type DurableResultCustodyRecord,
+  type DurableResultMessageType
+} from './types.js';

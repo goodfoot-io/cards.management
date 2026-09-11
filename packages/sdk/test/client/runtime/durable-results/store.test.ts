@@ -18,9 +18,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createFileResultCustodian,
   DURABLE_RESULT_SCHEMA_VERSION,
+  type DurableResultCustodyInput,
   readResultCustody,
   resolveDurableResultRoot,
-  takeResultCustody
+  takeResultCustody as takeStrictResultCustody
 } from '../../../../src/client/runtime/durable-results/index.js';
 import type { OutboxRecord } from '../../../../src/client/runtime/outbox/index.js';
 import { makeRecordInput } from '../outbox/index.js';
@@ -33,6 +34,14 @@ function makeRecord(overrides: Parameters<typeof makeRecordInput>[0] = {}): Outb
     schemaVersion: 1,
     enqueuedAt: '2026-09-10T11:59:00.000Z'
   };
+}
+
+function custodyInput(record: OutboxRecord): DurableResultCustodyInput {
+  return { requestId: record.requestId, envelope: record.envelope as DurableResultCustodyInput['envelope'] };
+}
+
+function takeResultCustody(root: string, record: OutboxRecord, now: () => Date) {
+  return takeStrictResultCustody(root, custodyInput(record), now);
 }
 
 function countFiles(dir: string): number {
@@ -102,6 +111,93 @@ describe('taking custody', () => {
     expect(await takeResultCustody(root, record, CLOCK)).toBe('created');
     expect(await takeResultCustody(root, record, CLOCK)).toBe('exists');
     expect(countFiles(root)).toBe(1);
+  });
+
+  it.skip('acknowledges an identical immutable envelope and authoritative identity as matching', async () => {
+    const input = custodyInput(makeRecord({ messageId: 'msg-a' }));
+
+    await expect(takeStrictResultCustody(root, input, CLOCK)).resolves.toMatchObject({ status: 'created' });
+    await expect(takeStrictResultCustody(root, input, CLOCK)).resolves.toMatchObject({ status: 'matching' });
+  });
+
+  it.skip.each([
+    'payload',
+    'request',
+    'execution',
+    'scope'
+  ])('returns conflict without acknowledgment when %s identity drifts', async (drift) => {
+    const original = custodyInput(makeRecord({ messageId: 'msg-a' }));
+    await takeStrictResultCustody(root, original, CLOCK);
+    const envelope = original.envelope;
+    const changed: DurableResultCustodyInput = {
+      requestId: drift === 'request' ? 'request-other' : original.requestId,
+      envelope: {
+        ...envelope,
+        execution:
+          drift === 'execution'
+            ? { executionId: 'execution-other', launchRequestId: original.requestId }
+            : envelope.execution,
+        scope: drift === 'scope' ? { ...envelope.scope, cardId: 'main-other' } : envelope.scope,
+        payload: drift === 'payload' ? { ...envelope.payload, statusMutationDeferred: true } : envelope.payload
+      } as DurableResultCustodyInput['envelope']
+    };
+
+    const outcome = await takeStrictResultCustody(root, changed, CLOCK);
+    expect(outcome).toEqual({ status: 'conflict', detail: expect.any(String) });
+    expect(outcome).not.toHaveProperty('acknowledgment');
+  });
+
+  it.skip('uses the authoritative request ID for cleanupComplete without inventing an envelope requestId', async () => {
+    const input = custodyInput(makeRecord({ requestId: 'authoritative-request' }));
+    expect(input.envelope.requestId).toBeUndefined();
+
+    await expect(takeStrictResultCustody(root, input, CLOCK)).resolves.toMatchObject({ status: 'created' });
+    expect((await readResultCustody(root, 'exec-1', input.envelope.messageId))?.requestId).toBe(
+      'authoritative-request'
+    );
+  });
+
+  it.skip('returns unavailable without replacing corrupt existing evidence', async () => {
+    const input = custodyInput(makeRecord({ messageId: 'msg-a' }));
+    await takeStrictResultCustody(root, input, CLOCK);
+    const file = fs
+      .readdirSync(root, { recursive: true, withFileTypes: true })
+      .find((entry) => entry.isFile() && !entry.name.startsWith('.tmp-'));
+    if (file === undefined) throw new Error('custody file was not written');
+    const filePath = path.join(file.parentPath, file.name);
+    fs.writeFileSync(filePath, '{corrupt');
+
+    await expect(takeStrictResultCustody(root, input, CLOCK)).resolves.toMatchObject({ status: 'unavailable' });
+    expect(fs.readFileSync(filePath, 'utf8')).toBe('{corrupt');
+  });
+
+  it.skip('returns unavailable without writing an envelope larger than its protocol bound', async () => {
+    const original = custodyInput(makeRecord({ messageId: 'msg-oversized' }));
+    const input = {
+      ...original,
+      envelope: {
+        ...original.envelope,
+        payload: { ...original.envelope.payload, detail: 'x'.repeat(2_000_000) } as never
+      }
+    } as DurableResultCustodyInput;
+
+    const outcome = await takeStrictResultCustody(root, input, CLOCK);
+
+    expect(outcome).toEqual({ status: 'unavailable', detail: expect.stringContaining('bound') });
+    expect(countFiles(root)).toBe(0);
+  });
+
+  it.skip('returns unavailable without writing a non-durable envelope', async () => {
+    const original = custodyInput(makeRecord({ messageId: 'msg-non-durable' }));
+    const input = {
+      ...original,
+      envelope: { ...original.envelope, type: 'runtime.ping' }
+    } as unknown as DurableResultCustodyInput;
+
+    const outcome = await takeStrictResultCustody(root, input, CLOCK);
+
+    expect(outcome).toEqual({ status: 'unavailable', detail: expect.stringContaining('durable-result') });
+    expect(countFiles(root)).toBe(0);
   });
 
   it('keeps two messages of one execution apart', async () => {
