@@ -115,21 +115,30 @@ async function setupDefaultMocks(): Promise<void> {
     settle: Promise.resolve({
       branch: 'cards/card-123/1',
       worktree: '/test/workspace/.worktrees/cards/card-123/1',
-      baseSha: 'abc123'
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
     })
   });
 
   // Forward the orchestrator to the low-level createWorktree mock with the
   // outfit-bearing options, so per-case `createWorktree` overrides and
-  // assertions keep working against the pure-primitive call shape.
+  // assertions keep working against the pure-primitive call shape. `cardId`
+  // and `compiledScriptPaths` are not part of `CreateWorktreeOptions` — the
+  // real `createWorktreeForCard` uses them for outfit work, not for the
+  // `createWorktree` call itself — so they're forwarded through a typed
+  // intermediate rather than an object literal to keep the excess fields
+  // observable to per-case `toHaveBeenCalledWith` assertions without an
+  // excess-property-check error at this call site.
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, {
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => {
+    const forwardedOptions = {
       cwd: opts.cwd,
       cardId: opts.cardId,
       compiledScriptPaths: opts.compiledScriptPaths
-    })
-  );
+    };
+    return createWorktree(ref, forwardedOptions);
+  });
 }
 
 beforeEach(async () => {
@@ -206,10 +215,12 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
     actionName: 'Launch',
     environment: 'default',
     executionMode: 'interactive',
+    exitWhenDone: false,
     repoRoot: '/test/workspace',
     cardRepoPath: '/test/repo',
     configPath: '/test/config',
     extensionPath: '/test/extension',
+    marketplacePath: '/test/extension/dist/marketplace',
     ...overrides
   };
 }
@@ -489,7 +500,9 @@ describe('claude-session shared utilities', () => {
         settle: Promise.resolve({
           branch: 'cards/card-123/2',
           worktree: '/test/workspace/.worktrees/cards/card-123/2',
-          baseSha: 'abc123'
+          baseSha: 'abc123',
+          copiedFromInclude: 0,
+          reroutedSymlinks: 0
         })
       });
 
@@ -528,7 +541,9 @@ describe('claude-session shared utilities', () => {
         settle: Promise.resolve({
           branch: 'cards/card-123/1',
           worktree: '/test/workspace/.worktrees/cards/card-123/1',
-          baseSha: 'abc123'
+          baseSha: 'abc123',
+          copiedFromInclude: 0,
+          reroutedSymlinks: 0
         })
       });
 
