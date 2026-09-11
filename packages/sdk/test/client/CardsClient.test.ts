@@ -635,7 +635,7 @@ describe('CardsClient', () => {
   });
 
   describe('Action Operations', () => {
-    it.skip('lists safe variable-group summaries for the configured workspace', async () => {
+    it('lists safe variable-group summaries for the configured workspace', async () => {
       const httpClient = new TestHttpClient();
       const groups = [{ id: 'vg-1', name: 'Deploy', variableCount: 2, secretCount: 1 }];
       httpClient.responses.set('http://localhost:3000/variable-groups?workspacePath=%2Fworkspace%2Frepo', groups);
@@ -688,7 +688,7 @@ describe('CardsClient', () => {
       expect(httpClient.requests[0]?.body).toEqual({ selectedAgent: 'codex-cli' });
     });
 
-    it.skip('executeAction serializes ordered variable-group IDs including an explicit empty selection', async () => {
+    it('executeAction serializes ordered variable-group IDs including an explicit empty selection', async () => {
       const httpClient = new TestHttpClient();
       httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
       const client = new CardsClient(options, httpClient);

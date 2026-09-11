@@ -607,7 +607,7 @@ describe('card binary', () => {
   });
 
   describe('executeAction', () => {
-    it.skip('forwards ordered variable-group IDs including an explicit empty selection', async () => {
+    it('forwards ordered variable-group IDs including an explicit empty selection', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await executeAction('card-1', 'launch', { variableGroupIds: ['vg-b', 'vg-a'] });
@@ -734,7 +734,7 @@ describe('card binary', () => {
   });
 
   describe('listVariableGroups', () => {
-    it.skip('lists groups for an explicit workspace and supports JSONPath output', async () => {
+    it('lists groups for an explicit workspace and supports JSONPath output', async () => {
       variableGroups = [{ id: 'vg-1', name: 'Deploy', description: 'Deployment', variableCount: 2, secretCount: 1 }];
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
@@ -1216,14 +1216,14 @@ describe('card binary', () => {
       expect(result.stdout).toContain('claude-code-cli, codex-cli, opencode-cli, or antigravity-cli');
     });
 
-    it.skip('help documents variable-group listing and repeatable action selection', () => {
+    it('help documents variable-group listing and repeatable action selection', () => {
       const result = runCard(['help']);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('variable-group list');
       expect(result.stdout).toContain('--variable-group <id>');
     });
 
-    it.skip('rejects a missing variable-group value before API discovery', () => {
+    it('rejects a missing variable-group value before API discovery', () => {
       const result = runCard(['card-1', 'action', 'launch', '--variable-group']);
       expect(result).toEqual({ stdout: '', stderr: 'card: flag --variable-group requires a value\n', exitCode: 1 });
     });

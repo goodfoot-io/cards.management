@@ -193,12 +193,27 @@ Action:
                              not support background mode.
     --exit-when-done        Signal the agent to exit cleanly once the action
                              completes, instead of leaving the session open.
+    --variable-group <id>   Use this variable group for this launch. Repeat to
+                             preserve an ordered selection; no flag uses the
+                             persisted selection.
 
   Examples:
     cards <card-id> action launch
     cards <card-id> action launch --agent codex-cli
     cards <card-id> action launch --background
     cards <card-id> action launch --background --exit-when-done
+    cards <card-id> action launch --variable-group deploy --variable-group shared
+
+Variable groups:
+  Lists safe variable-group summaries for the selected workspace. Variable
+  names, values, and secret material are never returned.
+
+  Options:
+    --workspace-path <path>  Workspace root (default: git rev-parse --show-toplevel)
+
+  Examples:
+    cards variable-group list
+    cards variable-group list --workspace-path /path/to/workspace
 
 Watch:
   Waits for the next unattributed commit on a card's repository. If
@@ -1231,7 +1246,6 @@ export async function executeAction(
     variableGroupIds?: string[];
   }
 ): Promise<void> {
-  if (opts?.variableGroupIds !== undefined) throw new Error('Not Implemented');
   const mode: ExecutionMode | undefined = opts?.background ? 'background' : undefined;
   const client = await connectClient();
   const result: ActionResult = await client.executeAction(
@@ -1239,20 +1253,11 @@ export async function executeAction(
     actionName,
     mode,
     opts?.exitWhenDone ?? false,
-    opts?.selectedAgent
+    opts?.selectedAgent,
+    opts?.variableGroupIds
   );
   console.log(formatOutput(result, opts?.jsonPath));
   if (opts?.selectedAgent && !result.success) process.exitCode = 1;
-}
-
-/**
- * Lists safe variable-group summaries for a workspace.
- *
- * @param args - CLI arguments after the `variable-group list` subcommand.
- */
-export async function listVariableGroups(args: string[]): Promise<void> {
-  void args;
-  throw new Error('Not Implemented');
 }
 
 /**
@@ -1633,7 +1638,8 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
             jsonPath: actionFlags['jsonpath']?.[0],
             background: actionFlags['background'] !== undefined,
             exitWhenDone: actionFlags['exit-when-done'] !== undefined,
-            selectedAgent
+            selectedAgent,
+            variableGroupIds: actionFlags['variable-group']
           });
         });
       } else if (verb === 'watch') {

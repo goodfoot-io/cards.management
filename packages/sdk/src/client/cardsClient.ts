@@ -934,7 +934,10 @@ export class CardsClient {
    * @returns Promise resolving to summaries without variable or secret material.
    */
   async listVariableGroups(): Promise<VariableGroupsResponse> {
-    throw new Error('Not Implemented');
+    const url = this.buildUrl('/variable-groups', {
+      workspacePath: this.options.workspacePath
+    });
+    return this.request(() => this.getHttpClient().get<VariableGroupsResponse>(url));
   }
 
   /**
@@ -963,12 +966,12 @@ export class CardsClient {
     selectedAgent?: CodingAgentId,
     variableGroupIds?: string[]
   ): Promise<ActionResult> {
-    if (variableGroupIds !== undefined) throw new Error('Not Implemented');
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/actions/${encodeURIComponent(actionName)}`);
     const body: ExecuteActionRequest = {};
     if (mode) body.mode = mode;
     if (exitWhenDone) body.exitWhenDone = true;
     if (selectedAgent) body.selectedAgent = selectedAgent;
+    if (variableGroupIds !== undefined) body.variableGroupIds = variableGroupIds;
     const hasBody = Object.keys(body).length > 0;
     return this.request(() => this.getHttpClient().post<ActionResult>(url, hasBody ? body : undefined), false);
   }
