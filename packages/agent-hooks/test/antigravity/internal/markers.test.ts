@@ -7,8 +7,8 @@
 import { describe, expect, it } from 'vitest';
 import { defaultAntigravityIo } from '../../../src/antigravity/internal/io.js';
 import {
+  type FailureMarkerPayload,
   markerPath,
-  type ReadyMarkerPayload,
   UNATTRIBUTED_SESSION,
   UNKNOWN_CONVERSATION,
   writeMarker
@@ -17,8 +17,8 @@ import { makeTempDir, removeTempDir } from '../helpers.js';
 
 describe('markerPath', () => {
   it('scopes by session directory then conversation file name', () => {
-    expect(markerPath('/cards-home', 'session-453', 'conv-453', 'ready')).toBe(
-      '/cards-home/antigravity/runtime/markers/session-453/conv-453.ready'
+    expect(markerPath('/cards-home', 'session-453', 'conv-453', 'failure')).toBe(
+      '/cards-home/antigravity/runtime/markers/session-453/conv-453.failure'
     );
   });
 
@@ -38,9 +38,7 @@ describe('markerPath', () => {
   });
 
   it('uses the marker kind as the file extension', () => {
-    for (const kind of ['ready', 'failure'] as const) {
-      expect(markerPath('/cards-home', 's', 'c', kind).endsWith(`.${kind}`)).toBe(true);
-    }
+    expect(markerPath('/cards-home', 's', 'c', 'failure').endsWith('.failure')).toBe(true);
   });
 });
 
@@ -48,12 +46,10 @@ describe('marker store operations on the real filesystem', () => {
   it('writes, reads, and reports markers with their payload', () => {
     const root = makeTempDir('markers');
     try {
-      const path = markerPath(root, 'session-453', 'conv-453', 'ready');
-      const payload: ReadyMarkerPayload = {
-        conversationId: 'conv-453',
-        sessionId: 'session-453',
-        transcriptPath: '/transcripts/conv-453.jsonl',
-        modelName: 'gemini-3-pro'
+      const path = markerPath(root, 'session-453', 'conv-453', 'failure');
+      const payload: FailureMarkerPayload = {
+        stage: 'watcher-setup',
+        reason: 'transcript path was not watchable'
       };
       writeMarker(defaultAntigravityIo, path, payload);
       expect(defaultAntigravityIo.existsSync(path)).toBe(true);
@@ -77,7 +73,7 @@ describe('marker store operations on the real filesystem', () => {
   it('creates the session directory on demand', () => {
     const root = makeTempDir('markers-mkdir');
     try {
-      const path = markerPath(root, 'session-453', 'conv-453', 'ready');
+      const path = markerPath(root, 'session-453', 'conv-453', 'failure');
       writeMarker(defaultAntigravityIo, path);
       expect(defaultAntigravityIo.existsSync(path)).toBe(true);
     } finally {

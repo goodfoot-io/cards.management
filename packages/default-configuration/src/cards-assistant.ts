@@ -17,7 +17,11 @@
  * - Antigravity: spawns `agy` interactively (`-i`) with the assistant
  *   instructions as the opening prompt. No plugin is globally enabled for this
  *   launch and no card/session state exists: no card ID, no worktree, no branch
- *   watcher, no `EXIT_WHEN_DONE` override, and no card settlement calls.
+ *   watcher, no `EXIT_WHEN_DONE` override, and no card settlement calls. Its
+ *   child outcome reaches the handler's own exit code — a spawn error or a
+ *   non-zero `agy` exit throws the action path's named
+ *   {@link AntigravitySessionFailureError}, so the extension's terminal
+ *   lifecycle reports the launch failure instead of a silent clean exit.
  *
  * When `input.initialPrompt` is set, it is appended to the Claude branch's
  * `cliArgs` after a `--` end-of-options terminator, so `claude` treats it as
@@ -34,6 +38,7 @@
  */
 
 import { defineCardsAssistant } from '@cards.management/sdk/config';
+import { AntigravitySessionFailureError } from './lib/antigravity-session.js';
 import { updateMarketplaceRegistration } from './lib/claude-session.js';
 import {
   CODEX_ASSISTANT_PLUGIN_NAMES,
@@ -83,27 +88,50 @@ export default defineCardsAssistant({}, async (input, { logger }) => {
     const child = spawnAgentCli('agy', args, {
       cwd: input.repoRoot,
       stdio: 'inherit',
-      // Detached on POSIX so `agy` roots its own process group: the extension
-      // records the group for window-disposal and cancellation drains
-      // (graceful-then-forced, same escalation as the action paths).
+      // Detached on POSIX so `agy` roots its own process group. Nothing records
+      // that group: the extension holds only the terminal's process id — the
+      // handler's own group — so a window-owned disposal drains the handler's
+      // group and never reaches `agy`, which outlives it. Pre-existing gap,
+      // out of scope to redesign here; named because this comment previously
+      // claimed the opposite.
       detached: process.platform !== 'win32'
     });
 
-    const exitCode = await new Promise<number | null>((resolve) => {
+    const outcome = await new Promise<{ exitCode: number | null; spawnError?: Error }>((resolve) => {
       // Fail closed: a spawn failure (e.g. ENOENT when the `agy` binary is
       // missing) emits `error` but never `close`, which would leave this
       // promise hung forever. Mirrors the codex/claude/opencode launch
       // guards above/below.
       child.on('error', (error) => {
-        logger.error('Failed to spawn agy', {
-          error: error instanceof Error ? error.message : String(error)
-        });
-        resolve(null);
+        const spawnError = error instanceof Error ? error : new Error(String(error));
+        logger.error('Failed to spawn agy', { error: spawnError.message });
+        resolve({ exitCode: null, spawnError });
       });
-      child.on('close', resolve);
+      child.on('close', (exitCode) => {
+        resolve({ exitCode });
+      });
     });
 
-    logger.info('Cards assistant exited', { exitCode });
+    // The handler's own exit code is what the shared terminal lifecycle reads,
+    // so a launch that failed must not exit zero: a spawn error or a non-zero
+    // `agy` exit is propagated as the same named failure the action path
+    // throws for the identical outcomes. A signal-terminated child (null exit
+    // code) stays a plain close — user cancellation is an expected shutdown,
+    // and the extension's own disposal path reports it.
+    if (outcome.spawnError !== undefined) {
+      throw new AntigravitySessionFailureError(
+        'spawn-failure',
+        `Cards assistant failed: the agy process could not be launched (${outcome.spawnError.message})`
+      );
+    }
+
+    logger.info('Cards assistant exited', { exitCode: outcome.exitCode });
+    if (outcome.exitCode !== null && outcome.exitCode !== 0) {
+      throw new AntigravitySessionFailureError(
+        'nonzero-exit',
+        `Cards assistant failed: agy exited with code ${outcome.exitCode}`
+      );
+    }
     return;
   }
 

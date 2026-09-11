@@ -33,7 +33,6 @@ import {
   parseInvocationInput,
   peekConversationId
 } from './inputs.js';
-import { markerPath, writeMarker } from './markers.js';
 import { postInvocationOutput, preInvocationOutput, stopOutput } from './outputs.js';
 
 /**
@@ -48,7 +47,6 @@ export type HandlerFailureStage =
   | 'session-registration'
   | 'session-cleanup'
   | 'watcher-setup'
-  | 'ready-marker'
   | 'decision'
   | 'drain-ack'
   | 'unexpected';
@@ -79,30 +77,21 @@ export interface AntigravityHandlerResult {
   output?: unknown;
 }
 
-/** Durable workspace/window registration emitted for Cards Assistant. */
-export interface CardsAssistantRuntimeRegistration {
-  /** Cards-owned session identity inherited from the launcher. */
-  sessionId: string;
-  /** VS Code window/session identity that owns this Assistant process. */
-  windowId: string;
-  /** Exact active workspace selected as the launch cwd. */
-  workspacePath: string;
-  /** Host conversation identity from the pinned hook input. */
-  conversationId: string;
-  /** Canonical read-only SQLite conversation path for this conversation. */
-  transcriptPath: string;
-  /** Host model name recorded for diagnostics. */
-  modelName: string;
-}
-
 /**
- * Registers and marks a workspace/window Assistant invocation without
- * entering any card-action routing or settlement path.
+ * Registers a workspace/window Assistant invocation without entering any
+ * card-action routing or settlement path.
+ *
+ * Registration is the whole contract: the session identity the launcher
+ * exported pre-spawn is bound to its conversation and workspace so
+ * `cards create`/`attach` and transcript resolution can find it. Nothing is
+ * published back to the launcher — an Assistant launch is not gated on hook
+ * evidence, and the only marker this path can produce is the shared failure
+ * marker the transport writes when the contract is violated.
  *
  * @param raw - Raw pinned PreInvocation input.
  * @param ctx - Handler dependencies and logger.
  * @returns The standard no-message PreInvocation response.
- * @throws {HandlerFailure} When identity, registration, or ready-marker persistence fails.
+ * @throws {HandlerFailure} When identity or registration fails.
  */
 export async function handleCardsAssistantPreInvocation(
   raw: unknown,
@@ -132,28 +121,11 @@ export async function handleCardsAssistantPreInvocation(
     );
   }
 
-  const registration: CardsAssistantRuntimeRegistration = {
+  logger.info('Antigravity Cards Assistant session registered', {
     sessionId,
     windowId,
-    workspacePath,
     conversationId: input.conversationId,
-    transcriptPath,
-    modelName: input.modelName
-  };
-  try {
-    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'ready'), registration);
-  } catch (error) {
-    throw new HandlerFailure(
-      'ready-marker',
-      error instanceof Error ? error.message : String(error),
-      input.conversationId
-    );
-  }
-
-  logger.info('Antigravity Cards Assistant session ready', {
-    sessionId,
-    windowId,
-    conversationId: input.conversationId
+    transcriptPath
   });
   return { output: preInvocationOutput() };
 }

@@ -16,6 +16,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * regression where a `shell: true` spawn concatenated argv unquoted and cmd.exe
  * mangled the `--settings '{…JSON…}'` argument. The codex branch is covered for
  * the same cross-spawn routing and fail-closed spawn-`error` guard as claude.
+ * The antigravity branch additionally pins its launch outcome onto the
+ * handler's own exit code: a spawn error and a non-zero `agy` exit both throw
+ * the action path's named failure, while an exit zero or a signal-terminated
+ * child (null exit code — user cancellation is an expected shutdown) settles.
  *
  * @summary Tests default cards-assistant handler behavior
  */
@@ -60,6 +64,17 @@ vi.mock('../src/lib/opencode-session.js', () => ({
 }));
 
 vi.mock('../src/lib/antigravity-session.js', () => ({
+  // The antigravity branch propagates a failed launch by throwing this class,
+  // so the mock must carry it — the real one lives inside the mocked module and
+  // the handler imports it from there.
+  AntigravitySessionFailureError: class extends Error {
+    constructor(
+      public readonly reason: string,
+      message: string
+    ) {
+      super(message);
+    }
+  },
   spawnAntigravitySession: vi.fn()
 }));
 
@@ -123,6 +138,25 @@ function baseInput(overrides?: Partial<CardsAssistantInput>): CardsAssistantInpu
   };
 }
 
+/**
+ * Reads an indexed slot that `noUncheckedIndexedAccess` widens to `| undefined`,
+ * failing the test rather than the type check when the slot is empty. Every
+ * `mock.calls[0]` / `args[i]` read below is non-optional by construction: the
+ * scenario that reaches it already asserted the call or argument exists.
+ *
+ * @param values - Indexed collection to read.
+ * @param index - Zero-based index to read.
+ * @returns The value at `index`.
+ * @throws {Error} When the collection has no value at `index`.
+ */
+function requiredAt<T>(values: readonly (T | undefined)[], index: number): T {
+  const value = values[index];
+  if (value === undefined) {
+    throw new Error(`Expected a value at index ${index}, but the collection has ${values.length}`);
+  }
+  return value;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
@@ -146,10 +180,11 @@ describe('cards-assistant handler', () => {
     const promise = handler(baseInput(), createMockContext());
     await flushMicrotasks();
 
-    expect(vi.mocked(spawn).mock.calls[0][0]).toBe('claude');
+    const spawnCall = requiredAt(vi.mocked(spawn).mock.calls, 0);
+    expect(spawnCall[0]).toBe('claude');
     // cross-spawn owns win32 shim resolution + argv escaping; the caller must NOT
     // set `shell` (a `shell: true` spawn is what mangled the JSON --settings arg).
-    const opts = vi.mocked(spawn).mock.calls[0][2] as { shell?: boolean };
+    const opts = spawnCall[2] as { shell?: boolean };
     expect(opts.shell).toBeUndefined();
 
     child.emit('close', 0);
@@ -166,7 +201,7 @@ describe('cards-assistant handler', () => {
     const promise = handler(baseInput({ repoRoot: '/custom/repo' }), createMockContext());
     await flushMicrotasks();
 
-    const opts = vi.mocked(spawn).mock.calls[0][2] as { cwd?: string; stdio?: unknown };
+    const opts = requiredAt(vi.mocked(spawn).mock.calls, 0)[2] as { cwd?: string; stdio?: unknown };
     expect(opts.cwd).toBe('/custom/repo');
     expect(opts.stdio).toBe('inherit');
 
@@ -184,11 +219,11 @@ describe('cards-assistant handler', () => {
     const promise = handler(baseInput(), createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     const promptIdx = args.indexOf('--append-system-prompt');
     expect(promptIdx).toBeGreaterThan(-1);
 
-    const prompt = args[promptIdx + 1];
+    const prompt = requiredAt(args, promptIdx + 1);
     expect(prompt).toContain('Load the `cards:cards` skill');
     // cross-spawn escapes embedded newlines for cmd.exe, so the prompt is passed
     // verbatim — the previous single-line collapse (a shell:true workaround) is
@@ -210,16 +245,16 @@ describe('cards-assistant handler', () => {
     const promise = handler(input, createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     const settingsIdx = args.indexOf('--settings');
     expect(settingsIdx).toBeGreaterThan(-1);
 
-    const settings = JSON.parse(args[settingsIdx + 1]) as {
+    const settings = JSON.parse(requiredAt(args, settingsIdx + 1)) as {
       enabledPlugins: Record<string, boolean>;
       extraKnownMarketplaces: Record<string, { source: { source: string; path: string } }>;
     };
     expect(settings.enabledPlugins['cards@cards.management']).toBe(true);
-    expect(settings.extraKnownMarketplaces['cards.management'].source.path).toBe('/global/storage/marketplace');
+    expect(settings.extraKnownMarketplaces['cards.management']?.source.path).toBe('/global/storage/marketplace');
 
     child.emit('close', 0);
     await promise;
@@ -235,7 +270,7 @@ describe('cards-assistant handler', () => {
     const promise = handler(input, createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     expect(args[0]).toBe('--append-system-prompt');
     expect(args[args.length - 2]).toBe('--');
     expect(args[args.length - 1]).toBe('explain this error');
@@ -254,7 +289,7 @@ describe('cards-assistant handler', () => {
     const promise = handler(input, createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     expect(args[args.length - 2]).toBe('--');
     expect(args[args.length - 1]).toBe('--dangerously-skip-permissions');
 
@@ -271,7 +306,7 @@ describe('cards-assistant handler', () => {
     const promise = handler(baseInput(), createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     expect(args[0]).toBe('--append-system-prompt');
     expect(args).not.toContain('--');
 
@@ -288,7 +323,7 @@ describe('cards-assistant handler', () => {
     const promise = handler(baseInput({ initialPrompt: '' }), createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     expect(args[0]).toBe('--append-system-prompt');
     expect(args).not.toContain('--');
 
@@ -340,8 +375,9 @@ describe('cards-assistant handler', () => {
 
     // The codex branch was taken (not claude) and routed through cross-spawn with
     // no `shell` option, mirroring the claude launch.
-    expect(vi.mocked(spawn).mock.calls[0][0]).toBe('codex');
-    const opts = vi.mocked(spawn).mock.calls[0][2] as { shell?: boolean };
+    const spawnCall = requiredAt(vi.mocked(spawn).mock.calls, 0);
+    expect(spawnCall[0]).toBe('codex');
+    const opts = spawnCall[2] as { shell?: boolean };
     expect(opts.shell).toBeUndefined();
     expect(resolved).toBe(false);
 
@@ -365,7 +401,8 @@ describe('cards-assistant handler', () => {
     const promise = handler(baseInput({ codingAgent: 'opencode-cli' }), createMockContext());
     await flushMicrotasks();
 
-    expect(vi.mocked(spawn).mock.calls[0][0]).toBe('/usr/bin/opencode');
+    const spawnCall = requiredAt(vi.mocked(spawn).mock.calls, 0);
+    expect(spawnCall[0]).toBe('/usr/bin/opencode');
     // The writer receives the global layer's registrations so globally
     // registered plugins stage their colliding pointer spec instead of a
     // second copy of every hook module.
@@ -374,7 +411,7 @@ describe('cards-assistant handler', () => {
     expect(vi.mocked(writeCardsLaunchConfig).mock.calls[0]?.[4]).toEqual({
       globalPluginEntries: expect.any(Array)
     });
-    const opts = vi.mocked(spawn).mock.calls[0][2] as {
+    const opts = spawnCall[2] as {
       shell?: boolean;
       cwd?: string;
       stdio?: unknown;
@@ -385,16 +422,17 @@ describe('cards-assistant handler', () => {
     expect(opts.stdio).toBe('inherit');
     // The per-set staged config document rides OPENCODE_CONFIG — never a
     // CODEX_HOME-style replacement of the config dir.
-    expect(opts.env?.OPENCODE_CONFIG).toBe('/test/cards-opencode-staging/cards-assistant.config.json');
+    expect(opts.env?.['OPENCODE_CONFIG']).toBe('/test/cards-opencode-staging/cards-assistant.config.json');
 
     // Interactive TUI contract pinned at the repo root; the interview
     // instructions are the seeded opening turn (`--prompt`) and the repo root
     // is the project positional — mirroring the action path's interactive
     // launch surface (the TUI accepts neither `run` nor `--dir`).
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = requiredAt(vi.mocked(spawn).mock.calls, 0)[1];
     expect(args[0]).toBe('--prompt');
-    expect(args[1]).toContain('Load the `cards:cards` skill');
-    expect(args[1].trimStart().startsWith('<instructions>')).toBe(true);
+    const prompt = requiredAt(args, 1);
+    expect(prompt).toContain('Load the `cards:cards` skill');
+    expect(prompt.trimStart().startsWith('<instructions>')).toBe(true);
     expect(args[2]).toBe('/test/workspace');
     // The assistant session runs prompt-less beyond that — initialPrompt is
     // not read by this branch (unreachable via cards.startCardsAssistant).
@@ -444,8 +482,8 @@ describe('cards-assistant handler', () => {
 
     expect(updateMarketplaceRegistration).toHaveBeenCalledWith(input.marketplacePath, context.logger);
 
-    const registrationOrder = vi.mocked(updateMarketplaceRegistration).mock.invocationCallOrder[0];
-    const spawnOrder = vi.mocked(spawn).mock.invocationCallOrder[0];
+    const registrationOrder = requiredAt(vi.mocked(updateMarketplaceRegistration).mock.invocationCallOrder, 0);
+    const spawnOrder = requiredAt(vi.mocked(spawn).mock.invocationCallOrder, 0);
     expect(registrationOrder).toBeLessThan(spawnOrder);
 
     child.emit('close', 0);
@@ -462,17 +500,19 @@ describe('cards-assistant handler', () => {
       const promise = handler(baseInput({ codingAgent: 'antigravity-cli' }), createMockContext());
       await flushMicrotasks();
 
-      expect(vi.mocked(spawn).mock.calls[0][0]).toBe('agy');
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const spawnCall = requiredAt(vi.mocked(spawn).mock.calls, 0);
+      expect(spawnCall[0]).toBe('agy');
+      const args = spawnCall[1];
       expect(args[0]).toBe('-i');
       // The assistant prompt is the packaged assistant instructions (same
       // bundle the other hosts launch with); no card fields ride the argv.
-      expect(args[1]).toContain('Load the `cards:cards` skill');
-      expect(args[1].trimStart().startsWith('<instructions>')).toBe(true);
+      const prompt = requiredAt(args, 1);
+      expect(prompt).toContain('Load the `cards:cards` skill');
+      expect(prompt.trimStart().startsWith('<instructions>')).toBe(true);
       expect(args).toHaveLength(2);
       expect(args).not.toContain('--dangerously-skip-permissions');
 
-      const opts = vi.mocked(spawn).mock.calls[0][2] as {
+      const opts = spawnCall[2] as {
         cwd?: string;
         stdio?: unknown;
         detached?: boolean;
@@ -484,7 +524,7 @@ describe('cards-assistant handler', () => {
       expect(opts.detached).toBe(process.platform !== 'win32');
       expect(opts.shell).toBeUndefined();
       // Workspace/window-owned session: no EXIT_WHEN_DONE override is ever set.
-      expect(opts.env?.EXIT_WHEN_DONE).not.toBe('false');
+      expect(opts.env?.['EXIT_WHEN_DONE']).not.toBe('false');
 
       child.emit('close', 0);
       await promise;
@@ -509,8 +549,9 @@ describe('cards-assistant handler', () => {
       await promise;
     });
 
-    it('fails closed on a spawn error without hanging', async () => {
+    it('fails closed on a spawn error without hanging, and surfaces it as a non-zero handler exit', async () => {
       const { spawn } = await import('node:child_process');
+      const { AntigravitySessionFailureError } = await import('../src/lib/antigravity-session.js');
       const child = createMockChild();
       vi.mocked(spawn).mockReturnValue(child);
 
@@ -518,20 +559,58 @@ describe('cards-assistant handler', () => {
       const errorSpy = vi.spyOn(context.logger, 'error');
 
       const handler = (await import('../src/cards-assistant.js')).default;
-      let resolved = false;
-      const promise = handler(baseInput({ codingAgent: 'antigravity-cli' }), context).then(() => {
-        resolved = true;
+      let settled = false;
+      const promise = handler(baseInput({ codingAgent: 'antigravity-cli' }), context).finally(() => {
+        settled = true;
       });
       await flushMicrotasks();
 
-      expect(resolved).toBe(false);
+      // A spawn failure emits `error` and never `close`; without the guard this
+      // promise would hang forever.
+      expect(settled).toBe(false);
 
       const enoent = Object.assign(new Error('spawn agy ENOENT'), { code: 'ENOENT' });
       child.emit('error', enoent);
 
-      await promise;
-      expect(resolved).toBe(true);
+      await expect(promise).rejects.toBeInstanceOf(AntigravitySessionFailureError);
+      await expect(promise).rejects.toThrow('the agy process could not be launched (spawn agy ENOENT)');
+      expect(settled).toBe(true);
       expect(errorSpy).toHaveBeenCalledWith('Failed to spawn agy', { error: 'spawn agy ENOENT' });
+    });
+
+    it('propagates a non-zero agy exit as a non-zero handler exit', async () => {
+      const { spawn } = await import('node:child_process');
+      const { AntigravitySessionFailureError } = await import('../src/lib/antigravity-session.js');
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const handler = (await import('../src/cards-assistant.js')).default;
+      const promise = handler(baseInput({ codingAgent: 'antigravity-cli' }), context);
+      await flushMicrotasks();
+
+      child.emit('close', 7);
+
+      // The handler's own exit code is what the extension's terminal lifecycle
+      // reads, so a non-zero child exit must not settle as a clean exit.
+      await expect(promise).rejects.toBeInstanceOf(AntigravitySessionFailureError);
+      await expect(promise).rejects.toThrow('agy exited with code 7');
+    });
+
+    it('settles clean when agy exits zero or is terminated without an exit code', async () => {
+      const { spawn } = await import('node:child_process');
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const handler = (await import('../src/cards-assistant.js')).default;
+      const promise = handler(baseInput({ codingAgent: 'antigravity-cli' }), createMockContext());
+      await flushMicrotasks();
+
+      // User cancellation is an expected shutdown: a signal-terminated child
+      // arrives as a null exit code and must not be reported as a failure.
+      child.emit('close', null);
+
+      await expect(promise).resolves.toBeUndefined();
     });
   });
 });

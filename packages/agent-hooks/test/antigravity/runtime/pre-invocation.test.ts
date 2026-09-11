@@ -1,7 +1,8 @@
 /**
  * Tests for the Antigravity PreInvocation handler contract: registration,
  * card-context readiness, watcher setup, and the marker invariants — the
- * failure marker on the action path, the ready marker on the Assistant path.
+ * failure marker is the only kind, written by the transport on both paths,
+ * and no path writes a marker the launcher is not owed.
  *
  * @summary Tests for the Antigravity PreInvocation handler
  */
@@ -46,8 +47,8 @@ function cardsHome(): string {
   return join(root, 'cards-home');
 }
 
-function readyMarker(): string {
-  return markerPath(cardsHome(), SESSION_ID, CONVERSATION_ID, 'ready');
+function sessionMarkerDir(): string {
+  return join(cardsHome(), 'antigravity', 'runtime', 'markers', SESSION_ID);
 }
 
 function failureMarker(): string {
@@ -77,10 +78,10 @@ async function run(
 }
 
 describe('PreInvocation success contract', () => {
-  it('returns no message and writes no ready marker on the host 0-indexed first invocation', async () => {
+  it('returns no message and writes no runtime marker on the host 0-indexed first invocation', async () => {
     const { result } = await run();
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
   });
 
   it('registers the session → worktree/transcript mapping', async () => {
@@ -185,12 +186,9 @@ describe('Cards Assistant PreInvocation contract', () => {
       }
     ]);
     expect(recorders.watcherSpawns).toEqual([]);
-    expect(JSON.parse(defaultAntigravityIo.readTextFileSync(readyMarker()))).toMatchObject({
-      sessionId: SESSION_ID,
-      windowId: 'window-453',
-      workspacePath: join(root, 'workspace'),
-      conversationId: CONVERSATION_ID
-    });
+    // Registration is the whole contract: the Assistant path publishes no
+    // launcher-facing evidence, so it leaves no marker behind.
+    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
   });
 
   it('keeps a foreign agy session inert even when it inherits a session-like variable', async () => {
@@ -202,7 +200,7 @@ describe('Cards Assistant PreInvocation contract', () => {
     expect(result?.output).toEqual({});
     expect(recorders.registrations).toEqual([]);
     expect(recorders.watcherSpawns).toEqual([]);
-    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
   });
 
   it('fails an Assistant launch when its window identity is missing', async () => {
@@ -214,28 +212,6 @@ describe('Cards Assistant PreInvocation contract', () => {
 
     expect(failure?.stage).toBe('session-identity');
     expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
-    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
-  });
-
-  it('fails closed when the Assistant ready marker cannot be written', async () => {
-    delete process.env['CARD_ID'];
-    process.env['CARDS_ASSISTANT_SESSION'] = '1';
-    process.env['CARDS_ASSISTANT_WINDOW_ID'] = 'window-453';
-    const failingIo = {
-      ...defaultAntigravityIo,
-      writeTextFileSync: (path: string, data: string) => {
-        if (path.endsWith('.ready')) {
-          throw new Error('read-only filesystem');
-        }
-        defaultAntigravityIo.writeTextFileSync(path, data);
-      }
-    };
-
-    const { failure } = await run({ io: failingIo });
-
-    expect(failure?.stage).toBe('ready-marker');
-    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
-    expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
   });
 });
 
@@ -244,7 +220,7 @@ describe('PreInvocation failure contract', () => {
     delete process.env['CARD_ID'];
     const { result } = await run();
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
   });
 
   it('fails closed on invalid input and scopes the failure marker to the conversation', async () => {

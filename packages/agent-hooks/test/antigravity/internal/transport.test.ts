@@ -110,14 +110,18 @@ describe('dispatchAntigravityHook', () => {
 });
 
 describe('inert gating inside handlers', () => {
-  it('PreInvocation stays inert and writes no ready marker outside a Cards action', async () => {
+  it('PreInvocation stays inert and writes no runtime marker outside a Cards action', async () => {
     const restore = withoutEnv('CARD_ID');
     const root = makeTempDir('transport-inert');
     try {
       const { deps } = makeDeps(root, { loadActionInput: () => null });
       const result = await handlePreInvocation({ conversationId: CONVERSATION_ID }, { deps, logger: new Logger() });
       expect(result.output).toEqual({});
-      expect(deps.io.existsSync(markerPath(joinCardsHome(root), SESSION_ID, CONVERSATION_ID, 'ready'))).toBe(false);
+      // No marker kind exists to write: the only surviving kind is the failure
+      // marker, so an inert invocation leaves no session marker directory at all.
+      expect(deps.io.existsSync(join(joinCardsHome(root), 'antigravity', 'runtime', 'markers', SESSION_ID))).toBe(
+        false
+      );
     } finally {
       restore();
       removeTempDir(root);
