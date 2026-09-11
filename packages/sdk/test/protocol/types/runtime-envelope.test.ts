@@ -91,4 +91,30 @@ describe('parseEnvelope', () => {
     expect(RUNTIME_MESSAGE_TYPES.length).toBeGreaterThan(0);
     expect(MAX_CONTROL_FRAME_BYTES).toBeGreaterThan(0);
   });
+
+  it('requires platform-session binding on strict-idle shutdown readiness', () => {
+    const frame = validFrame({
+      type: 'execution.shutdownReadiness',
+      producer: { producerId: 'hook-1', role: 'agent-hook' },
+      payload: {
+        shutdownRequestId: 'shutdown-1',
+        workRevision: 3,
+        observedIdleAt: '2026-01-01T00:00:00.000Z'
+      }
+    });
+    expect(rejectionReason(frame)).toBe('invalid-payload');
+    (frame['payload'] as Record<string, unknown>)['platformSessionId'] = 'session-1';
+    expect(rejectionReason(frame)).toBe('accepted');
+  });
+
+  it('requires shutdown-command correlation on agent termination', () => {
+    const frame = validFrame({
+      type: 'execution.agentTermination',
+      causationId: 'command-1',
+      payload: { shutdownRequestId: 'shutdown-1', result: 'graceful' }
+    });
+    expect(rejectionReason(frame)).toBe('invalid-payload');
+    (frame['payload'] as Record<string, unknown>)['commandMessageId'] = 'command-1';
+    expect(rejectionReason(frame)).toBe('accepted');
+  });
 });

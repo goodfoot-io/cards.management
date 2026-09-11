@@ -216,6 +216,8 @@ export const shutdownReadinessPayloadSchema = z
   .object({
     shutdownRequestId: z.string().min(1),
     workRevision: workRevisionSchema,
+    /** Platform session whose authenticated hook established strict idleness. */
+    platformSessionId: z.string().min(1),
     observedIdleAt: z.string().datetime()
   })
   .strict();
@@ -247,6 +249,8 @@ export const terminationResultSchema = z.enum(['graceful', 'forced', 'failed']);
 export const agentTerminationPayloadSchema = z
   .object({
     shutdownRequestId: z.string().min(1),
+    /** Exact shutdown command completed by the wrapper handler. */
+    commandMessageId: z.string().min(1),
     result: terminationResultSchema,
     message: z.string().max(4096).optional()
   })
