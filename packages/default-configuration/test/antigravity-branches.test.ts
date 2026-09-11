@@ -539,7 +539,13 @@ describe('launch action — antigravity branch', () => {
     vi.mocked(fs.readFile).mockImplementation(((
       path: Parameters<typeof realFsp.readFile>[0],
       encoding: Parameters<typeof realFsp.readFile>[1]
-    ) => realFsp.readFile(path, encoding)) as never);
+    ) => {
+      // The launch path's workspace-trust preparation reads the native profile
+      // before the spawn; every other read comes from the real file system so
+      // the marker the hook writes is the one the launcher reads back.
+      if (String(path) === `${ANTIGRAVITY_HOME}/settings.json`) return PROFILE_SETTINGS;
+      return realFsp.readFile(path, encoding);
+    }) as never);
 
     try {
       const action = (await import('../src/actions/launch.js')).default;
@@ -718,7 +724,13 @@ describe('launch action — antigravity branch', () => {
     vi.mocked(fs.readFile).mockImplementation(((
       path: Parameters<typeof realFsp.readFile>[0],
       encoding: Parameters<typeof realFsp.readFile>[1]
-    ) => realFsp.readFile(path, encoding)) as never);
+    ) => {
+      // The launch path's workspace-trust preparation reads the native profile
+      // before the spawn; every other read comes from the real file system so
+      // the marker the hook writes is the one the launcher reads back.
+      if (String(path) === `${ANTIGRAVITY_HOME}/settings.json`) return PROFILE_SETTINGS;
+      return realFsp.readFile(path, encoding);
+    }) as never);
 
     try {
       const action = (await import('../src/actions/launch.js')).default;
