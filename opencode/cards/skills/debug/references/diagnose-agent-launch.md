@@ -102,7 +102,7 @@ VS Code command (cards.startCardsAssistant or cards.executeAction)
 
 ## Launch Environment Variables
 
-The Cards Assistant and action dispatcher both assemble their base environment, then call the shared `addAgentLaunchGrantToEnv` helper immediately before dispatch. A launch is refused when the helper cannot issue the required grant.
+The Cards Assistant and action dispatcher each assemble their base environment immediately before dispatch and hand it to the agent CLI unchanged. No authorization step gates a launch — nothing is issued, validated, or refused before spawn, and the launch path probes nothing. A missing or malformed variable therefore surfaces as the handler's or agent CLI's own startup failure.
 
 | Variable | Value | Purpose |
 |----------|-------|---------|
@@ -110,7 +110,6 @@ The Cards Assistant and action dispatcher both assemble their base environment, 
 | `EXTENSION_PATH` | `{ext}/dist` | Extension install directory |
 | `CARDS_BIN_PATH` | `{ext}/dist/bin` | CLI tool directory |
 | `CODING_AGENT` | `codingAgentEnvValue` (resolved via `resolveEffectiveAgent`/gate: `claude-code-cli`, `codex-cli`, `opencode-cli`, or `antigravity-cli`) | Agent identifier |
-| `CARDS_AGENT_LAUNCH_GRANT` | Opaque, short-lived grant issued for the effective agent | Mandatory pre-spawn authorization bound to the current agent probe |
 | `REPO_ROOT` | First workspace folder path | Main git repository root |
 | `CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD` | `1` | Enable additional directory CLAUDE.md loading |
 | `INITIAL_PROMPT` | Command's `prompt` arg (set only when provided) | Seeds the assistant session |
