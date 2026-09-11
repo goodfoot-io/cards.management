@@ -629,9 +629,19 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
       // failure — the worktree, its git registration, and (when this call
       // created it) its branch must not be left behind, or every re-run dies
       // with "Worktree already exists" before the user's fix is even
-      // evaluated. Cleanup is best-effort: a cleanup failure is logged and
-      // must never mask the original settle error rethrown here.
-      await cleanupFailedWorktree(repoRoot, worktreeDir, createdBranch ? ref : undefined);
+      // evaluated. Cleanup failures are composed with the initiating failure so
+      // callers see the exact residual resource instead of retrying into a
+      // misleading no-op after the worktree directory disappeared.
+      try {
+        await cleanupFailedWorktree(repoRoot, worktreeDir, createdBranch ? ref : undefined);
+      } catch (cleanupError: unknown) {
+        throw new Error(
+          `create-worktree: settlement failed and cleanup left residual resources: ` +
+            `settle=${error instanceof Error ? error.message : String(error)}; ` +
+            `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+          { cause: error }
+        );
+      }
       throw error;
     }
   });
@@ -734,9 +744,9 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
  * created it (`git worktree add -b`): a pre-existing branch is never deleted
  * by a failed creation.
  *
- * Idempotent and best-effort: a cleanup failure is logged to stderr and
- * swallowed so it can never mask the original settle error, which the caller
- * rethrows.
+ * Cleanup failures identify the resource that remains. The settle orchestrator
+ * composes them with the initiating error so neither side of the failure is
+ * lost.
  *
  * @param repoRoot - Primary repository root where git commands run.
  * @param worktreeDir - Absolute worktree path to remove.
@@ -745,15 +755,20 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
 async function cleanupFailedWorktree(repoRoot: string, worktreeDir: string, branchToDelete?: string): Promise<void> {
   try {
     await removeWorktree(worktreeDir);
-    if (branchToDelete !== undefined) {
-      await execFileAsync('git', ['branch', '-D', branchToDelete], { cwd: repoRoot, timeout: 30_000 });
-    }
   } catch (error: unknown) {
-    process.stderr.write(
-      `create-worktree: settle failed and cleanup of ${worktreeDir} also failed: ${
-        error instanceof Error ? error.message : String(error)
-      }\n`
-    );
+    throw new Error(`worktree=${worktreeDir} may remain: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error
+    });
+  }
+  if (branchToDelete !== undefined) {
+    try {
+      await execFileAsync('git', ['branch', '-D', branchToDelete], { cwd: repoRoot, timeout: 30_000 });
+    } catch (error: unknown) {
+      throw new Error(
+        `branch=${branchToDelete} remains in ${repoRoot}: ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
   }
 }
 

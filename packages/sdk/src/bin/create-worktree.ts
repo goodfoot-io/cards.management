@@ -20,7 +20,12 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { compiledHookScriptPaths, resolveExtensionPath } from '@cards.management/sdk';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
-import { createWorktree, resolveCheckoutCardBinding } from '@cards.management/sdk/worktree';
+import {
+  createWorktree,
+  findGitRoots,
+  type GitRoots,
+  resolveCheckoutCardBinding
+} from '@cards.management/sdk/worktree';
 import { createWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 import { WorktreeIncludeError } from '../worktreeInclude.js';
 
@@ -103,8 +108,18 @@ async function resolveParentBranch(sourceRoot: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  const source = await resolveCheckoutCardBinding(process.cwd());
-  const effectiveCardId = cardId ?? source.cardId;
+  // Explicit selection must not touch marker state: a corrupt or unreadable
+  // source marker is irrelevant when the operator already chose the card.
+  let source: GitRoots;
+  let effectiveCardId: string | undefined;
+  if (cardId !== undefined) {
+    source = await findGitRoots(process.cwd());
+    effectiveCardId = cardId;
+  } else {
+    const binding = await resolveCheckoutCardBinding(process.cwd());
+    source = binding;
+    effectiveCardId = binding.cardId;
+  }
 
   if (parentBranchArg !== undefined && effectiveCardId === undefined) {
     throw new Error('Error: --parent-branch requires a card-bound source or --card-id');

@@ -767,6 +767,45 @@ describe('createWorktree worktree path policy integration', () => {
     await removeWorktree(wPath);
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'surfaces the initiating settle error and residual created branch when branch cleanup fails',
+    async () => {
+      commitGitignore(repoDir, 'dist/\n');
+      await fs.mkdir(path.join(repoDir, 'dist'), { recursive: true });
+      await fs.mkdir(path.join(repoDir, '.worktreeinclude'));
+
+      const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+      const fakeBin = path.join(tmpBase, 'fault-bin');
+      await fs.mkdir(fakeBin);
+      const wrapper = path.join(fakeBin, 'git');
+      await fs.writeFile(
+        wrapper,
+        `#!/bin/sh\nif [ "$1" = "branch" ] && [ "$2" = "-D" ] && [ "$3" = "feature/cleanup-residue" ]; then\n  echo "injected branch delete failure" >&2\n  exit 73\nfi\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 }
+      );
+
+      const priorPath = process.env['PATH'];
+      process.env['PATH'] = `${fakeBin}${path.delimiter}${priorPath ?? ''}`;
+      try {
+        const { path: wPath, settle } = await createWorktree('feature/cleanup-residue', { cwd: repoDir });
+        await expect(settle).rejects.toThrow(
+          /settlement failed and cleanup left residual resources: settle=.*worktreeinclude.*branch=feature\/cleanup-residue remains.*injected branch delete failure/s
+        );
+
+        await expect(fs.access(wPath)).rejects.toMatchObject({ code: 'ENOENT' });
+        const branches = execFileSync('git', ['branch', '--list', 'feature/cleanup-residue'], {
+          cwd: repoDir,
+          encoding: 'utf8'
+        });
+        expect(branches.trim()).toBe('feature/cleanup-residue');
+      } finally {
+        if (priorPath === undefined) delete process.env['PATH'];
+        else process.env['PATH'] = priorPath;
+        execFileSync(realGit, ['branch', '-D', 'feature/cleanup-residue'], { cwd: repoDir });
+      }
+    }
+  );
+
   it('leaves a pre-existing branch alive when settle fails against it', async () => {
     // The settle-failure cleanup deletes only the branch this call created
     // (`git worktree add -b`). A branch that existed before must survive the

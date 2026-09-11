@@ -399,6 +399,31 @@ describe('create-worktree CLI', () => {
     CLI_TEST_TIMEOUT_MS
   );
 
+  it(
+    'does not read a wrong-type source marker when --card-id is explicit',
+    async () => {
+      tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
+      const repoDir = path.join(tmpBase, 'repo');
+      await fs.mkdir(repoDir);
+      await initGitRepo(repoDir);
+      // Reading this as a file fails on every supported platform. Explicit
+      // selection must bypass it entirely rather than depend on marker health.
+      await fs.mkdir(path.join(repoDir, '.cards', 'CARD_ID'), { recursive: true });
+      const fixture = await prepareCardBoundRun(tmpBase);
+      stubStop = fixture.stub.stop;
+
+      const result = await runCreateWorktreeAsync(['--card-id', 'main-explicit', 'wrong-marker-worker'], repoDir, {
+        EXTENSION_PATH: fixture.extDir,
+        HOME: fixture.homeDir,
+        CARDS_DISCOVERY_PATH: fixture.discoveryPath
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(fixture.stub.addBranchCalls[0]!.cardId).toBe('main-explicit');
+    },
+    CLI_TEST_TIMEOUT_MS
+  );
+
   it.skipIf(process.platform === 'win32')(
     'canonicalizes a symlinked invocation before inheriting checkout identity',
     async () => {
