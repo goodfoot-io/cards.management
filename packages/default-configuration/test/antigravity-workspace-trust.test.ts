@@ -28,7 +28,7 @@
  */
 
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
@@ -560,6 +560,42 @@ describe('prepareAntigravityWorkspaceTrust — recording', () => {
     expect(await prepare()).toEqual({ kind: 'already-trusted', trustedPath: physical });
     expect(await readTrustedWorkspaces()).toEqual([repoRoot, physical]);
     expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('establishes consent from every spelling of the shared git-common-dir', async () => {
+    // `git rev-parse --git-common-dir` is not uniformly absolute: a main
+    // checkout answers `.git`, a subdirectory of it answers a relative
+    // `../../../.git`, and only linked worktrees answer absolutely. The repo
+    // root the user approved is the relative case, so resolving each answer
+    // against anything but the directory it was queried with would deny consent
+    // on the primary path — silently, as `no-established-consent`.
+    const report = (directory: string): string =>
+      execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: directory, encoding: 'utf-8' }).trim();
+    const subdirectory = join(repoRoot, 'packages', 'nested');
+    await mkdir(subdirectory, { recursive: true });
+    const upstream = await workspace.createWorktree('cards/card-123/3');
+
+    expect(report(repoRoot)).toBe('.git');
+    expect(report(subdirectory)).toBe(join('..', '..', '.git'));
+    expect(report(upstream)).toBe(join(repoRoot, '.git'));
+
+    const cases = [
+      // Approved project root (relative answer) authorizes the action checkout.
+      { entry: repoRoot, checkout: checkoutPath },
+      // A linked worktree (absolute answer) authorizes the main checkout.
+      { entry: upstream, checkout: repoRoot },
+      // A subdirectory of the approved project (relative, multi-level answer).
+      { entry: subdirectory, checkout: checkoutPath }
+    ];
+
+    for (const { entry, checkout } of cases) {
+      await writeSettings({ trustedWorkspaces: [entry] });
+      expect(await prepare({ checkoutPath: checkout })).toEqual({
+        kind: 'prepared',
+        trustedPath: await realpath(checkout)
+      });
+      expect(await readTrustedWorkspaces()).toEqual([entry, await realpath(checkout)]);
+    }
   });
 
   it('resolves a symlinked checkout spelling to the physical path and records it once', async () => {
