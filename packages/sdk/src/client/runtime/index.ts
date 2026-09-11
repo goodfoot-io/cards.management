@@ -38,6 +38,8 @@ export {
   type HeartbeatDecision,
   type HeartbeatState
 } from './heartbeat.js';
+export { drainRuntimeClientOutbox, type RuntimeClientDrainOptions } from './live-drain.js';
+export { PRESERVE_FOR_SERVER_STARTUP_AUTHORITIES } from './preservation-authorities.js';
 export {
   collectOutstandingMessageIds,
   type ResumeAcknowledgment,

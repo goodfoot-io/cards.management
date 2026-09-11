@@ -27,6 +27,7 @@ import {
   runtimeCredentialFileSchema
 } from '../../protocol/types/index.js';
 import { createRuntimeClient } from './client.js';
+import { PRESERVE_FOR_SERVER_STARTUP_AUTHORITIES } from './preservation-authorities.js';
 import type { RuntimeClient, RuntimeClientOptions } from './types.js';
 
 function assertProtectedDirectory(path: string): void {
@@ -80,8 +81,11 @@ export interface LoadedRuntimeCredential {
 }
 
 /** Inputs retained from the caller when bootstrapping a runtime client from protected credentials. */
-export interface RuntimeClientBootstrapOptions extends Omit<RuntimeClientOptions, 'identity' | 'credential'> {
+export interface RuntimeClientBootstrapOptions
+  extends Omit<RuntimeClientOptions, 'identity' | 'credential' | 'authorities'> {
   readonly role: ChildRuntimeCredentialRole;
+  /** Defaults to fail-closed preservation for later server-startup reconciliation. */
+  readonly authorities?: RuntimeClientOptions['authorities'];
   /** Explicit handoff path; defaults to CARDS_RUNTIME_CREDENTIAL_FILE. */
   readonly credentialFilePath?: string;
 }
@@ -175,10 +179,11 @@ export function loadRuntimeCredential(role: ChildRuntimeCredentialRole, path?: s
  * @returns A disconnected runtime client ready to start.
  */
 export function createRuntimeClientFromCredentialFile(options: RuntimeClientBootstrapOptions): RuntimeClient {
-  const { role, credentialFilePath, ...services } = options;
+  const { role, credentialFilePath, authorities = PRESERVE_FOR_SERVER_STARTUP_AUTHORITIES, ...services } = options;
   const loaded = loadRuntimeCredential(role, credentialFilePath);
   return createRuntimeClient({
     ...services,
+    authorities,
     identity: {
       subject: { kind: 'execution', executionId: loaded.execution.executionId },
       scope: loaded.scope,

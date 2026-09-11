@@ -18,7 +18,7 @@ import {
 import { CARDS_ENV_VARS, getRuntimeCredentialFilePath } from '../../../src/config/env.js';
 import type { RuntimeCredentialFile } from '../../../src/protocol/index.js';
 import { FakeRuntimeServer } from './fakeServer.js';
-import { MemoryOutbox, makeAcceptingAuthorities } from './index.js';
+import { MemoryOutbox, makeRecordInput } from './index.js';
 
 const FILE: RuntimeCredentialFile = {
   version: 1,
@@ -157,22 +157,33 @@ describe('runtime credential file', () => {
   it('bootstraps complete client identity and authentication from one explicit child role', async () => {
     writeRuntimeCredentialFile(credentialPath, FILE);
     const server = await FakeRuntimeServer.start();
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(makeRecordInput({ executionId: 'unrelated-execution', messageId: 'orphan-result' }));
+    const before = JSON.stringify(outbox.stored[0]);
     const client = createRuntimeClientFromCredentialFile({
       role: 'agent-handler',
       credentialFilePath: credentialPath,
-      outbox: new MemoryOutbox(),
-      authorities: makeAcceptingAuthorities(),
+      outbox,
       discover: async () => ({ host: '127.0.0.1', port: server.port, accessToken: 'access-token' }),
       onMessage: () => undefined
     });
     try {
-      await client.connect();
+      const result = await client.connect();
       expect(server.handshakes[0]).toMatchObject({ 'x-cards-runtime-credential-id': 'agent-credential' });
       expect(server.received[0]).toMatchObject({
         execution: FILE.execution,
         scope: FILE.scope,
         producer: { role: 'agent-handler', producerId: 'agent-1' },
         ownership: FILE.ownership
+      });
+      expect(JSON.stringify(outbox.stored[0])).toBe(before);
+      expect(result).toMatchObject({
+        synchronization: {
+          reconciliation: {
+            ok: false,
+            blocked: [{ detail: expect.stringContaining('server-startup recovery') }]
+          }
+        }
       });
     } finally {
       await client.close();

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutboundMessage, RuntimeClient, RuntimeClientOptions } from '../../../src/client/runtime/index.js';
-import { createRuntimeClient } from '../../../src/client/runtime/index.js';
+import { createRuntimeClient, drainRuntimeClientOutbox } from '../../../src/client/runtime/index.js';
 import { MAX_CONTROL_FRAME_BYTES, RUNTIME_CREDENTIAL_HEADERS } from '../../../src/protocol/types/index.js';
 import { FakeRuntimeServer } from './fakeServer.js';
 import { MemoryOutbox, makeAcceptingAuthorities, makeCredential, makeIdentity, makeRecordInput } from './index.js';
@@ -48,6 +48,22 @@ const intent = (messageId: string): OutboundMessage<'execution.cancelRequest'> =
   requestId: 'req-1',
   execution: { executionId: 'exec-1', launchRequestId: 'req-1' }
 });
+
+const pendingResult = (messageId: string, role: 'runtime-wrapper' | 'agent-hook' = 'runtime-wrapper') => {
+  const base = makeRecordInput();
+  return {
+    ...base,
+    messageId,
+    role,
+    deliveryClass: 'durable-result' as const,
+    envelope: {
+      ...base.envelope,
+      messageId,
+      type: 'execution.cleanupComplete' as const,
+      payload: { exitCode: 0, signal: null, lifecycleState: 'completed' as const, statusMutationDeferred: false }
+    }
+  };
+};
 
 describe('connecting', () => {
   it('presents the role credential in headers on the upgrade', async () => {
@@ -297,6 +313,64 @@ describe('sending', () => {
     });
 
     expect(outbox.stored).toHaveLength(0);
+  });
+});
+
+describe('post-barrier own-record drain', () => {
+  it('resends an own pending result after resume and retires only after runtime.accepted', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(pendingResult('pending-result'));
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    const report = await drainRuntimeClientOutbox({
+      client,
+      outbox,
+      executionId: 'exec-1',
+      role: 'runtime-wrapper'
+    });
+
+    expect(report).toMatchObject({ ok: true, retired: [{ messageId: 'pending-result' }] });
+    expect(outbox.stored).toHaveLength(0);
+    expect(server.received.filter(({ messageId }) => messageId === 'pending-result')).toHaveLength(1);
+  });
+
+  it('preserves an own pending record when delivery is uncertain', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(pendingResult('pending-result'));
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    const report = await drainRuntimeClientOutbox({
+      client,
+      outbox,
+      executionId: 'exec-1',
+      role: 'runtime-wrapper',
+      deadlineMs: 20
+    });
+
+    expect(report).toMatchObject({ ok: false, pending: [{ messageId: 'pending-result' }] });
+    expect(outbox.stored.map(({ messageId }) => messageId)).toEqual(['pending-result']);
+  });
+
+  it('does not drain another role on the same execution', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(pendingResult('hook-result', 'agent-hook'));
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    const report = await drainRuntimeClientOutbox({
+      client,
+      outbox,
+      executionId: 'exec-1',
+      role: 'runtime-wrapper'
+    });
+
+    expect(report.scanned).toBe(0);
+    expect(outbox.stored.map(({ messageId }) => messageId)).toEqual(['hook-result']);
   });
 });
 
