@@ -158,6 +158,17 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: false,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
+  'execution.commandCustody': {
+    type: 'execution.commandCustody',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-result',
+    allowedRoles: ['runtime-wrapper', 'agent-handler', 'watcher'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: true,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   'runtime.heartbeat': {
     type: 'runtime.heartbeat',
     direction: 'client-to-server',

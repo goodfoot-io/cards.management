@@ -378,6 +378,13 @@ export const acceptedPayloadSchema = z
   })
   .strict();
 
+/** Durable proof that a runtime producer fsynced a server command into its effect journal. */
+export const commandCustodyPayloadSchema = z
+  .object({
+    commandMessageId: z.string().min(1)
+  })
+  .strict();
+
 // --- Catalogue ---
 
 /**
@@ -393,6 +400,7 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'runtime.liveness': livenessPayloadSchema,
   'runtime.resumeAck': resumeAckPayloadSchema,
   'runtime.accepted': acceptedPayloadSchema,
+  'execution.commandCustody': commandCustodyPayloadSchema,
   'runtime.log': logPayloadSchema,
   'runtime.heartbeat': heartbeatPayloadSchema,
   'execution.launchRequest': launchRequestPayloadSchema,

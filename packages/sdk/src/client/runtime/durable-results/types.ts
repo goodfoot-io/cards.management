@@ -24,6 +24,7 @@ export type DurableResultMessageType = Extract<
   | 'execution.launchOutcome'
   | 'execution.agentTermination'
   | 'execution.cleanupComplete'
+  | 'execution.commandCustody'
   | 'watcher.stopResult'
 >;
 

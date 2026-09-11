@@ -136,6 +136,17 @@ describe('authorizeMessage', () => {
 });
 
 describe('acknowledgment messages', () => {
+  it('treats command custody as a durable client receipt bound to current ownership', () => {
+    const contract = RUNTIME_MESSAGE_CONTRACTS['execution.commandCustody'];
+    expect(contract).toMatchObject({
+      direction: 'client-to-server',
+      deliveryClass: 'durable-result',
+      requiresCausationId: true,
+      requiresOwnershipCurrent: true
+    });
+    expect(contract.allowedRoles).not.toContain('server');
+  });
+
   it('lets only the server acknowledge, so a peer cannot forge a receipt', () => {
     for (const type of ['runtime.resumeAck', 'runtime.accepted'] as const) {
       expect(RUNTIME_MESSAGE_CONTRACTS[type].allowedRoles).toEqual(['server']);
