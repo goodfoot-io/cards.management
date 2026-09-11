@@ -12,6 +12,14 @@
  * authentication probe uses. Driving the real capture through the real handler
  * is what keeps a minimal result adapter honest about which shape it reads.
  *
+ * A clean exit is not sufficient, and the committed truncation captures are the
+ * evidence: a `--print-timeout` run exits 0 with a record whose `status` is
+ * `"SUCCESS"`, an empty response, and a partial turn. The only channel that
+ * carries that class is the notice the CLI writes to stderr, matched on its
+ * invariant suffix — the timeout value it embeds (`after 1s`, `after 5m0s`)
+ * varies with the flag and the host default, so it is not part of the match —
+ * against a bounded tail that survives a notice split across a chunk boundary.
+ *
  * @summary Real-capture outcome checks for background Antigravity launches
  */
 
@@ -22,6 +30,7 @@ import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AntigravitySessionFailureError } from '../src/lib/antigravity-session.js';
 
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
@@ -253,6 +262,58 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   };
 }
 
+/** How a driven background launch settled. */
+type LaunchOutcome = { settled: true } | { settled: false; error: unknown };
+
+/**
+ * Drives one background launch over a mock child and reports how it settled.
+ *
+ * The chunks are emitted as separate `data` events so a caller can place a
+ * chunk boundary inside a stderr notice; the exit is always `0`, because every
+ * class this suite pins — success and truncation alike — exits zero.
+ *
+ * @param stdoutChunks - Transcript fragments emitted on stdout, in order.
+ * @param stderrChunks - Stderr fragments emitted on stderr, in order.
+ * @returns Whether the action settled, and the rejection reason when it did not.
+ */
+async function driveLaunch(stdoutChunks: readonly string[], stderrChunks: readonly string[]): Promise<LaunchOutcome> {
+  const { spawn } = await import('node:child_process');
+  const child = createMockChild();
+  vi.mocked(spawn).mockReturnValue(child);
+
+  const action = (await import('../src/actions/launch.js')).default;
+  const promise = action(baseInput(), createMockContext());
+  await flushMicrotasks();
+
+  for (const chunk of stdoutChunks) child.stdout?.emit('data', Buffer.from(chunk));
+  for (const chunk of stderrChunks) child.stderr?.emit('data', Buffer.from(chunk));
+  child.emit('close', 0);
+
+  try {
+    await promise;
+    return { settled: true };
+  } catch (error) {
+    return { settled: false, error };
+  }
+}
+
+/**
+ * Narrows a driven launch to its named failure.
+ *
+ * The error class is read through the same dynamic import the action itself
+ * uses, keeping with the rest of this file: the top-level import is type-only,
+ * so this file's import phase evaluates no part of the handler's graph.
+ *
+ * @param outcome - Outcome reported by {@link driveLaunch}.
+ * @returns The named failure the launch rejected with.
+ */
+async function failureOf(outcome: LaunchOutcome): Promise<AntigravitySessionFailureError> {
+  if (outcome.settled) throw new Error('expected the launch to fail, but it settled successfully');
+  const { AntigravitySessionFailureError } = await import('../src/lib/antigravity-session.js');
+  expect(outcome.error).toBeInstanceOf(AntigravitySessionFailureError);
+  return outcome.error as AntigravitySessionFailureError;
+}
+
 describe('background launch outcome — real agy captures', () => {
   it('settles as success when driven with the committed successful transcript', async () => {
     const { spawn } = await import('node:child_process');
@@ -272,5 +333,48 @@ describe('background launch outcome — real agy captures', () => {
     expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
     const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
     expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
+  });
+
+  it('settles as a named failure when driven with the committed print-timeout capture', async () => {
+    const transcript = await readFixture('captured-stream-json-print-timeout-1s.jsonl');
+    const notice = await readFixture('captured-stream-json-print-timeout-1s.stderr');
+
+    const error = await failureOf(await driveLaunch([transcript], [notice]));
+
+    expect(error.reason).toBe('output-truncated');
+    // The latch is a completion policy, not a diagnosis: it fires only because
+    // Cards did not ask for this termination, which is the half of the rule the
+    // notice itself cannot carry.
+    expect(error.message).toMatch(/Cards did not request/);
+  });
+
+  it('latches the print-timeout notice when a chunk boundary splits it', async () => {
+    const transcript = await readFixture('captured-stream-json-print-timeout-2s.jsonl');
+    const notice = await readFixture('captured-stream-json-print-timeout-2s.stderr');
+    // The hardest split the invariant suffix admits: the second chunk is the
+    // notice's final `t` plus its newline, so it can never match on its own.
+    // Only a tail still holding the whole prefix, tested for a match before it
+    // is truncated to the bound, sees the suffix complete across the two.
+    const boundary = notice.length - 2;
+    expect(notice.slice(boundary)).toBe('t\n');
+
+    const error = await failureOf(await driveLaunch([transcript], [notice.slice(0, boundary), notice.slice(boundary)]));
+
+    expect(error.reason).toBe('output-truncated');
+  });
+
+  it('latches a notice whose timeout value appears in no capture', async () => {
+    const transcript = await readFixture('captured-stream-json-print-timeout-3s.jsonl');
+    const notice = await readFixture('captured-stream-json-print-timeout-3s.stderr');
+    // `agy --help` reports `--print-timeout` defaulting to 5m0s and the action
+    // arg builder passes none, so this is the notice the production path
+    // inherits; only the value is substituted, leaving the capture's own bytes
+    // around it. A match keyed on the whole line would stop at `after 1s`.
+    const hostDefaultNotice = notice.replace('after 3s', 'after 5m0s');
+    expect(hostDefaultNotice).not.toBe(notice);
+
+    const error = await failureOf(await driveLaunch([transcript], [hostDefaultNotice]));
+
+    expect(error.reason).toBe('output-truncated');
   });
 });

@@ -175,7 +175,7 @@ describe('compiled Antigravity runtime output', () => {
     expect(payload.stage).toBe('input');
   });
 
-  it('the PreInvocation bundle writes no ready marker when the input is invalid', () => {
+  it('the PreInvocation bundle fails closed with a failure marker when the input is invalid', () => {
     const env = brokenActionEnvironment(isolatedHookEnvironment());
     const cardsHome = env['CARDS_HOME'] as string;
     const result = spawnSync(process.execPath, [join(binDir, 'runtime-pre-invocation.mjs')], {
@@ -189,7 +189,5 @@ describe('compiled Antigravity runtime output', () => {
     expect(result.stdout).toBe('');
     const failurePath = join(cardsHome, 'antigravity', 'runtime', 'markers', 'session-453', 'conv-live-453.failure');
     expect(existsSync(failurePath)).toBe(true);
-    const readyPath = join(cardsHome, 'antigravity', 'runtime', 'markers', 'session-453', 'conv-live-453.ready');
-    expect(existsSync(readyPath)).toBe(false);
   });
 });

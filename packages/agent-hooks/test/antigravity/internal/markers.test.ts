@@ -38,7 +38,7 @@ describe('markerPath', () => {
   });
 
   it('uses the marker kind as the file extension', () => {
-    for (const kind of ['ready', 'failure', 'route', 'idle', 'drain-ready'] as const) {
+    for (const kind of ['ready', 'failure'] as const) {
       expect(markerPath('/cards-home', 's', 'c', kind).endsWith(`.${kind}`)).toBe(true);
     }
   });
@@ -66,7 +66,7 @@ describe('marker store operations on the real filesystem', () => {
   it('writes empty markers when no payload is given', () => {
     const root = makeTempDir('markers-empty');
     try {
-      const path = markerPath(root, 'session-453', 'conv-453', 'drain-ready');
+      const path = markerPath(root, 'session-453', 'conv-453', 'failure');
       writeMarker(defaultAntigravityIo, path);
       expect(defaultAntigravityIo.readTextFileSync(path)).toBe('');
     } finally {
@@ -77,7 +77,7 @@ describe('marker store operations on the real filesystem', () => {
   it('creates the session directory on demand', () => {
     const root = makeTempDir('markers-mkdir');
     try {
-      const path = markerPath(root, 'session-453', 'conv-453', 'idle');
+      const path = markerPath(root, 'session-453', 'conv-453', 'ready');
       writeMarker(defaultAntigravityIo, path);
       expect(defaultAntigravityIo.existsSync(path)).toBe(true);
     } finally {

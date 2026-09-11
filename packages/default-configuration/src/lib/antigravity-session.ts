@@ -9,8 +9,10 @@
  * Invocation contract (notes/antigravity-host-contract.md, verified launch
  * surface): interactive launches run terminal-owned `agy -i <prompt>`;
  * background launches run child-owned `agy -p <prompt> --output-format
- * stream-json` and parse the final result record from the owned stdout. Cards
- * never passes `--dangerously-skip-permissions`.
+ * stream-json`, whose stdout is discarded and whose turn is judged by the
+ * shared outcome policy — exit status, plus `agy`'s own truncation notice
+ * latched off a bounded stderr tail — and by the durable hook-failure marker.
+ * Cards never passes `--dangerously-skip-permissions`.
  *
  * @summary Shared session utilities for Antigravity action workflows
  * @module
@@ -95,44 +97,32 @@ export function buildAntigravityExecutionControlArgs(controls: AntigravityExecut
 }
 
 /**
- * Structured final result record parsed from the child-owned `stream-json`
- * stdout of a background launch. The field set is pinned by the live
- * authentication-probe witness (`conversation_id`/`status`/`response`); the
- * surrounding stream-json event records are unpinned and tolerated.
+ * Invariant suffix of `agy`'s print-mode timeout notice: the diagnostic reads
+ * `[agy] print timeout after <duration> with turn in progress; returning
+ * partial output`, and the value it embeds moves with the flag and the host
+ * default (`after 1s` in the committed captures, `after 5m0s` on a host where
+ * the action path passes no `--print-timeout`). Matching the whole line would
+ * stop firing the moment that value moves, so only the suffix is matched.
  */
-export interface AntigravityFinalRecord {
-  /** Conversation identity attributed to the child. */
-  conversationId: string;
-  /** Host-reported final status (success is exactly `"SUCCESS"`). */
-  status: string;
-  /** Final assistant response text when the record carries it. */
-  response?: string;
-}
+const AGY_PRINT_TIMEOUT_SUFFIX = 'with turn in progress; returning partial output';
 
 /**
- * Error thrown when the child-owned stream-json stdout cannot be trusted:
- * a non-JSON, non-blank line is a stream parse error and fails the action.
- */
-export class AntigravityStreamError extends Error {
-  override readonly name = 'AntigravityStreamError';
-}
-
-/**
- * Named failure reasons for an unsuccessful Antigravity launch. Exit zero
- * without the expected final record is failure, per the action matrix
- * lifecycle; a refused launch — one that never reached a session — is failure
- * too, and names its refusal here.
+ * Named failure reasons for a completed-but-unsuccessful Antigravity launch.
+ * Exit zero is not success: a background run is judged by the shared outcome
+ * policy (exit status plus the latched CLI diagnostic) and by the durable
+ * hook-failure marker, never by the result record it writes, which reports
+ * `"SUCCESS"` on the truncated and hook-failed runs alike. A refused launch —
+ * one that never reached a session, because the checkout's workspace trust
+ * could not be carried — is failure too, and names its refusal here.
  */
 export type AntigravitySessionFailureReason =
   | 'spawn-failure'
   | 'nonzero-exit'
   | 'signal-termination'
   | 'hook-failure'
-  | 'lifecycle-evidence-missing'
+  | 'output-truncated'
   | 'process-tree-drain-failed'
   | 'transcript-finalization-degraded'
-  | 'missing-final-record'
-  | 'unsuccessful-final-record'
   | 'workspace-trust-unresolved';
 
 /**
@@ -187,93 +177,6 @@ export async function readAntigravityHookFailure(sessionId: string): Promise<str
   }
 }
 
-/** Positive hook evidence required before a card action may settle. */
-export interface AntigravityLifecycleEvidence {
-  /** Conversation identity proven by PreInvocation and, in background mode, stdout. */
-  conversationId: string;
-}
-
-/**
- * Requires the complete hook lifecycle for one Cards-owned action session.
- *
- * @param sessionId - Cards-owned session identity exported before spawn.
- * @param expectedConversationId - Background stdout conversation identity, when available.
- * @returns Validated positive lifecycle evidence.
- * @throws {AntigravitySessionFailureError} When failure evidence exists or any positive marker is absent/invalid.
- */
-export async function requireAntigravityLifecycleEvidence(
-  sessionId: string,
-  expectedConversationId?: string
-): Promise<AntigravityLifecycleEvidence> {
-  const directory = join(resolveGlobalCardsConfigDir(), 'antigravity', 'runtime', 'markers', sessionId);
-  let names: string[];
-  try {
-    names = await readdir(directory);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') names = [];
-    else throw error;
-  }
-
-  const failures = names.filter((name) => name.endsWith('.failure')).sort();
-  if (failures.length > 0) {
-    const failure = await readAntigravityHookFailure(sessionId);
-    throw new AntigravitySessionFailureError(
-      'hook-failure',
-      `Antigravity runtime hook failure (${failure ?? 'failure marker could not be decoded'})`
-    );
-  }
-
-  const readyNames = names.filter((name) => name.endsWith('.ready')).sort();
-  if (readyNames.length !== 1) {
-    throw new AntigravitySessionFailureError(
-      'lifecycle-evidence-missing',
-      `Antigravity lifecycle requires exactly one ready marker, found ${String(readyNames.length)}`
-    );
-  }
-  const readyName = readyNames[0] as string;
-  const conversationId = readyName.slice(0, -'.ready'.length);
-  let ready: { conversationId?: unknown; sessionId?: unknown; transcriptPath?: unknown; modelName?: unknown };
-  try {
-    ready = JSON.parse(await readFile(join(directory, readyName), 'utf8')) as typeof ready;
-  } catch (error) {
-    throw new AntigravitySessionFailureError(
-      'lifecycle-evidence-missing',
-      `Antigravity ready marker is unreadable: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  if (
-    ready.conversationId !== conversationId ||
-    ready.sessionId !== sessionId ||
-    typeof ready.transcriptPath !== 'string' ||
-    ready.transcriptPath.length === 0 ||
-    typeof ready.modelName !== 'string' ||
-    ready.modelName.length === 0 ||
-    (expectedConversationId !== undefined && conversationId !== expectedConversationId)
-  ) {
-    throw new AntigravitySessionFailureError(
-      'lifecycle-evidence-missing',
-      'Antigravity ready marker does not prove the launched session/conversation identity'
-    );
-  }
-
-  const hasIdle = names.includes(`${conversationId}.idle`);
-  const hasRoute = names.includes(`${conversationId}.route`);
-  if (!hasIdle && !hasRoute) {
-    throw new AntigravitySessionFailureError(
-      'lifecycle-evidence-missing',
-      'Antigravity PostInvocation produced neither idle nor route evidence'
-    );
-  }
-  if (!names.includes(`${conversationId}.drain-ready`)) {
-    throw new AntigravitySessionFailureError(
-      'lifecycle-evidence-missing',
-      'Antigravity Stop did not produce drain-ready evidence'
-    );
-  }
-
-  return { conversationId };
-}
-
 /**
  * Builds the CLI argument list for the `agy` process.
  *
@@ -308,65 +211,23 @@ export function buildAntigravityArgs(
 }
 
 /**
- * Parses the final result record out of a completed background launch's
- * `stream-json` stdout.
- *
- * Every non-blank line must be JSON — anything else is a stream parse error.
- * Event records without the pinned result field set (`status` plus a
- * non-empty `conversation_id`) are tolerated and skipped; the LAST record
- * carrying the pinned field set wins.
- *
- * @param stdout - Full stdout captured from the child.
- * @returns The final result record, or `null` when the stream carried none.
- * @throws {AntigravityStreamError} When stdout contains a non-JSON, non-blank line.
- */
-export function parseAntigravityFinalRecord(stdout: string): AntigravityFinalRecord | null {
-  let final: AntigravityFinalRecord | null = null;
-  for (const line of stdout.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.length === 0) continue;
-
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(trimmed);
-    } catch (error) {
-      const excerpt = trimmed.length > 120 ? `${trimmed.slice(0, 120)}…` : trimmed;
-      throw new AntigravityStreamError(`agy stream-json contained a non-JSON line: "${excerpt}"`, { cause: error });
-    }
-
-    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) continue;
-    const record = parsed as Record<string, unknown>;
-    const status = record['status'];
-    const conversationId = record['conversation_id'];
-    if (typeof status !== 'string' || typeof conversationId !== 'string' || conversationId.length === 0) continue;
-
-    final = {
-      conversationId,
-      status,
-      ...(typeof record['response'] === 'string' ? { response: record['response'] as string } : {})
-    };
-  }
-  return final;
-}
-
-/**
  * Spawns an `agy` CLI session with worktree lifecycle and prompt-based skill
  * guidance.
  *
  * Stage order mirrors {@link ./codex-session.js}: API client → base branch →
  * worktree → CLI spawn with card env vars → cancel/shutdown drain wiring →
  * exit → status settle → mode-dependent branch cleanup. Background launches
- * additionally parse the child-owned stream-json stdout and fail the action on
- * nonzero exit, signal termination, stream parse errors, or a
- * missing/unsuccessful final record.
+ * are judged by the shared outcome policy — nonzero exit, signal termination,
+ * a failed process-tree drain, the latched truncation notice, and the durable
+ * hook-failure marker all fail the action; a clean exit that carries none of
+ * them settles as success, whatever the discarded result record said.
  *
  * @param input - Parsed action input from the environment.
  * @param context - Action context providing logger and lifecycle hooks.
  * @param options - Session-specific parameters.
  * @returns Resolves after the child exits and post-exit settle/cleanup ran.
- * @throws {AntigravitySessionFailureError} When a background launch ends without a successful structured outcome (spawn failure, nonzero exit, signal termination, missing final record, unsuccessful final record), when an interactive launch fails to spawn, or when a background launch cannot carry the authorized project's workspace trust into the checkout.
+ * @throws {AntigravitySessionFailureError} When a background launch fails (spawn failure, nonzero exit, signal termination, output truncated by the CLI's print timeout, a runtime hook failure, or a failed process-tree drain), when the launch cannot carry the authorized project's workspace trust into the checkout, or when an interactive launch fails to spawn.
  * @throws {AntigravityTrustError} When the native Antigravity profile exists but its workspace trust cannot be read or safely updated.
- * @throws {AntigravityStreamError} When the background stdout stream carries a non-JSON, non-blank line.
  * @throws {Error} When Cards API discovery fails or the worktree settle phase rejected.
  */
 export async function spawnAntigravitySession(
@@ -458,12 +319,14 @@ export async function spawnAntigravitySession(
     // sweep sibling actions sharing the host's group.
     detached: process.platform !== 'win32',
     // Interactive actions inherit stdio so the user gets direct terminal
-    // control (terminal-owned `-i`). Background runs are console-less and own
-    // the stream-json stdout for final-result parsing; stderr is piped for
-    // diagnostic capture. windowsHide keeps the cross-spawn cmd.exe hop
-    // invisible on win32 — libuv ignores it when any fd is inherited, so the
-    // interactive path must not set it.
-    stdio: isInteractive ? 'inherit' : ['ignore', 'pipe', 'pipe'],
+    // control (terminal-owned `-i`). Background runs are console-less: stdout
+    // is ignored — the parser that read the stream-json transcript is gone and
+    // nothing consumed the buffer, so the run is judged by exit status, the
+    // latched stderr notice, and the hook-failure marker — while stderr stays
+    // piped as the diagnostic channel. windowsHide keeps the cross-spawn
+    // cmd.exe hop invisible on win32 — libuv ignores it when any fd is
+    // inherited, so the interactive path must not set it.
+    stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
     ...(isInteractive ? {} : { windowsHide: true }),
     env: {
       ...process.env,
@@ -492,7 +355,13 @@ export async function spawnAntigravitySession(
     return transcriptFinalization;
   };
 
+  // Set by the two termination paths Cards owns. The truncation latch reads it
+  // to tell an `agy` print timeout that interrupted a run Cards had already
+  // decided to end from one that silently truncated work still in progress.
+  let cardsTerminationRequested = false;
+
   context.onCancel(async () => {
+    cardsTerminationRequested = true;
     context.logger.info(`${input.actionName} action cancelled, terminating agy`, { sessionId });
     const result = await termination.terminate('cancel');
     const finalization = await finalizeTranscript();
@@ -508,6 +377,7 @@ export async function spawnAntigravitySession(
   });
 
   context.onAgentShutdown(async () => {
+    cardsTerminationRequested = true;
     context.logger.info(`${input.actionName} agent signalled shutdown, terminating agy`, { sessionId });
     const result = await termination.terminate('shutdown');
     const finalization = await finalizeTranscript();
@@ -523,18 +393,34 @@ export async function spawnAntigravitySession(
     return result;
   });
 
-  // Background mode: own the stream-json stdout for final-result parsing and
-  // capture stderr for diagnostic logging.
-  let stdoutText = '';
+  // Background mode: stderr is the diagnostic channel and also the only one
+  // that carries the truncation class. A `--print-timeout` run exits 0, writes
+  // `status:"SUCCESS"` with an empty response, and says what happened only
+  // here, so the notice is latched as it streams past.
+  let truncationObserved = false;
+  let stderrTail = '';
   if (!isInteractive) {
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdoutText += chunk.toString();
-    });
     child.stderr?.on('data', (chunk: Buffer) => {
-      const text = chunk.toString().trim();
-      if (text) {
-        context.logger.warn(text);
+      const text = chunk.toString();
+      const trimmed = text.trim();
+      if (trimmed) {
+        context.logger.warn(trimmed);
       }
+      // Match the notice's invariant suffix, never the whole line: the timeout
+      // value it embeds moves with the flag and the host default, so a
+      // full-line match would quietly stop firing when that value changes.
+      stderrTail += text;
+      if (stderrTail.includes(AGY_PRINT_TIMEOUT_SUFFIX)) {
+        truncationObserved = true;
+      }
+      // Retain one byte less than the suffix, and test before truncating. The
+      // hardest split that bound still admits is a one-character second half
+      // (`…returning partial outpu` then `t`), and completing it needs exactly
+      // the suffix minus the character it is missing — so this is as short as
+      // the tail can be and still recover a notice from the next chunk. A
+      // shorter bound drops the prefix, and testing after the truncation drops
+      // it for the same split this is keeping.
+      stderrTail = stderrTail.slice(-(AGY_PRINT_TIMEOUT_SUFFIX.length - 1));
     });
   }
 
@@ -566,14 +452,14 @@ export async function spawnAntigravitySession(
     );
   }
 
-  let final: AntigravityFinalRecord | null = null;
-  let lifecycle: AntigravityLifecycleEvidence | undefined;
   let primaryFailure: unknown;
   let hasPrimaryFailure = false;
   try {
     // Root exit does not prove the detached process group is gone: surviving
     // descendants can still own the worktree. Run the same bounded tree drain
-    // on every normal close before any success evidence or settlement.
+    // on every normal close before any success evidence or settlement. It runs
+    // ahead of the checks below, including the truncation latch, so a latched
+    // run is still drained rather than abandoned with its group alive.
     const normalDrain = await termination.terminate('normal-exit');
     if (outcome.signal) {
       throw new AntigravitySessionFailureError(
@@ -595,33 +481,38 @@ export async function spawnAntigravitySession(
     }
 
     if (!isInteractive) {
-      // Exit zero without the expected final record is failure, per the action
-      // matrix lifecycle — a clean exit alone never settles a background launch.
-      try {
-        final = parseAntigravityFinalRecord(stdoutText);
-      } catch (error) {
-        context.logger.error(`${input.actionName} action failed: unparseable agy stream-json output`, {
-          error: errorMessage(error)
-        });
-        throw error;
-      }
-
-      if (final === null) {
+      // Exit zero is not success. `agy` exits 0 for a CLI-level failure only
+      // when the failure is its own turn's, which is the user's business — but
+      // it also exits 0 when its print timeout cut the turn short, and that is
+      // not a completed run. Having asked for the termination is what makes the
+      // notice expected; a notice Cards did not cause means work was truncated
+      // under it. This sits after the exit checks so a nonzero exit keeps
+      // reporting itself: the latch exists for the class the exit code cannot
+      // express, and adds nothing to one it already does. The retained tail is
+      // tested once more here, beside the per-chunk test: one comparison, and
+      // the decision no longer depends on a data event having been delivered
+      // before the close it is read at.
+      const truncated = truncationObserved || stderrTail.includes(AGY_PRINT_TIMEOUT_SUFFIX);
+      if (truncated && !cardsTerminationRequested) {
         throw new AntigravitySessionFailureError(
-          'missing-final-record',
-          `${input.actionName} action failed: agy exited 0 without the expected final stream-json record ` +
-            '(exit zero without the final result record is failure)'
-        );
-      }
-      if (final.status !== 'SUCCESS') {
-        throw new AntigravitySessionFailureError(
-          'unsuccessful-final-record',
-          `${input.actionName} action failed: agy final record status is '${final.status}' (expected 'SUCCESS')`
+          'output-truncated',
+          `${input.actionName} action failed: agy reported a print timeout with its turn still in progress and ` +
+            `returned partial output (exit code ${outcome.exitCode}); Cards did not request cancellation or shutdown`
         );
       }
     }
 
-    lifecycle = await requireAntigravityLifecycleEvidence(sessionId, final?.conversationId);
+    // The failure marker is the only channel a hook failure has: `agy` exits 0,
+    // writes no stderr, and records `status:"SUCCESS"` when its hooks fail, so
+    // the durable marker written by the hook transport is what the action
+    // reads. It is read for both modes — this is the verifier's old call site,
+    // and a hook failure is not a property of the execution mode, so neither
+    // mode may lose it. A healthy session writes no marker and this reads
+    // nothing.
+    const hookFailure = await readAntigravityHookFailure(sessionId);
+    if (hookFailure !== undefined) {
+      throw new AntigravitySessionFailureError('hook-failure', `Antigravity runtime hook failure (${hookFailure})`);
+    }
   } catch (error) {
     primaryFailure = error;
     hasPrimaryFailure = true;
@@ -642,21 +533,25 @@ export async function spawnAntigravitySession(
   }
   if (hasPrimaryFailure) throw primaryFailure;
   if (finalization.kind === 'degraded') {
-    throw new AntigravitySessionFailureError(
-      'transcript-finalization-degraded',
-      `${input.actionName} action failed: final Antigravity transcript drain degraded (${finalization.reason}: ${finalization.detail})`
-    );
+    // A degraded drain is reported, not re-cast: the run itself succeeded, so
+    // the export gap is surfaced at error level with both of its fields rather
+    // than replacing a real outcome with a synthetic failure. This is a
+    // stricter channel than the peer sessions have — none of them finalize
+    // their transcript from the launcher at all.
+    context.logger.error(`${input.actionName} transcript finalization degraded`, {
+      sessionId,
+      reason: finalization.reason,
+      detail: finalization.detail
+    });
   }
 
-  if (!isInteractive) {
-    // Settle only after process, structured-result, hook, and transcript
-    // finalization success. Cleanup reads this status as its first gate.
-    await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
+  // Settle before the mode split: both modes settle with the same policy and
+  // differ only in who performs post-exit branch cleanup, and the settle has to
+  // stay ahead of the cleanup watcher's on-disk status read in either mode.
+  await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
 
-    context.logger.info(`${input.actionName} background launch settled`, {
-      sessionId,
-      conversationId: lifecycle?.conversationId
-    });
+  if (!isInteractive) {
+    context.logger.info(`${input.actionName} background launch settled`, { sessionId });
 
     // Post-exit cleanup: remove fully-merged branches inline — there is no
     // terminal to keep open in background mode.
@@ -672,9 +567,6 @@ export async function spawnAntigravitySession(
     return;
   }
 
-  // Interactive success uses the same verified-success settlement gate and
-  // still settles before the detached cleanup watcher can inspect status.
-  await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
   context.logger.info(`${input.actionName} action completed`, { sessionId, exitCode: outcome.exitCode });
 
   // Interactive mode: hand post-exit cleanup to the detached watcher so the

@@ -33,7 +33,7 @@ import {
   parseInvocationInput,
   peekConversationId
 } from './inputs.js';
-import { markerPath, type ReadyMarkerPayload, type RouteMarkerPayload, writeMarker } from './markers.js';
+import { markerPath, writeMarker } from './markers.js';
 import { postInvocationOutput, preInvocationOutput, stopOutput } from './outputs.js';
 
 /**
@@ -51,7 +51,6 @@ export type HandlerFailureStage =
   | 'ready-marker'
   | 'decision'
   | 'drain-ack'
-  | 'drain-marker'
   | 'unexpected';
 
 /**
@@ -166,7 +165,7 @@ export async function handleCardsAssistantPreInvocation(
  * @param raw - Raw pinned Stop input.
  * @param ctx - Handler dependencies and logger.
  * @returns The standard no-decision Stop response.
- * @throws {HandlerFailure} When registration/artifact cleanup or drain-marker persistence fails.
+ * @throws {HandlerFailure} When registration/artifact cleanup fails.
  */
 export async function handleCardsAssistantStop(raw: unknown, ctx: HandlerContext): Promise<AntigravityHandlerResult> {
   const { deps, logger } = ctx;
@@ -191,15 +190,6 @@ export async function handleCardsAssistantStop(raw: unknown, ctx: HandlerContext
     );
   }
 
-  try {
-    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'drain-ready'));
-  } catch (error) {
-    throw new HandlerFailure(
-      'drain-marker',
-      error instanceof Error ? error.message : String(error),
-      input.conversationId
-    );
-  }
   logger.info('Antigravity Cards Assistant cleanup complete', { sessionId, conversationId: input.conversationId });
   return { output: stopOutput() };
 }
@@ -311,10 +301,12 @@ function requireCardContext(actionInput: ActionInput, conversationId: string | n
  *
  * Contract: requires `conversationId`, non-empty `workspacePaths`,
  * `transcriptPath`, `artifactDirectoryPath`, `modelName`, `invocationNum`,
- * and `initialNumSteps`; returns no message. Success writes the
- * conversation-scoped ready marker. Missing/invalid input, inaccessible card
- * context, or watcher setup failure prevents action success: it writes the
- * failure marker and the launcher terminates the child.
+ * and `initialNumSteps`; returns no message. Success is the pinned no-message
+ * output plus the registered session and spawned watcher — no durable marker
+ * proves it, because the launcher's completion policy reads the native exit
+ * status. Missing/invalid input, inaccessible card context, or watcher setup
+ * failure prevents action success: it writes the failure marker and the
+ * launcher terminates the child.
  *
  * @param raw - The raw stdin JSON value.
  * @param ctx - Handler dependencies and logger.
@@ -386,22 +378,6 @@ export async function handlePreInvocation(raw: unknown, ctx: HandlerContext): Pr
   } catch (error) {
     throw new HandlerFailure(
       'session-registration',
-      error instanceof Error ? error.message : String(error),
-      input.conversationId
-    );
-  }
-
-  const readyPayload: ReadyMarkerPayload = {
-    conversationId: input.conversationId,
-    sessionId,
-    transcriptPath: conversationDbPath,
-    modelName: input.modelName
-  };
-  try {
-    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'ready'), readyPayload);
-  } catch (error) {
-    throw new HandlerFailure(
-      'ready-marker',
       error instanceof Error ? error.message : String(error),
       input.conversationId
     );
@@ -542,8 +518,9 @@ function requireUnmergedCommitCount(
  * `postInvocationOutput({ injectSteps: [{ ephemeralMessage }] })` only when
  * another model step is required. Decision errors write a failure marker and
  * inject no guessed route. A route is emitted at most once per state
- * transition (the shared once-per-session route markers); action settlement
- * requires the durable decision/idle marker, not hook exit zero.
+ * transition, guarded by the shared once-per-session store
+ * (`hasRouteNudgeFired`/`markRouteNudgeFired`); the injected step is the
+ * route's whole record, and an idle turn writes nothing durable.
  *
  * @param raw - The raw stdin JSON value.
  * @param ctx - Handler dependencies and logger.
@@ -574,7 +551,6 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
         deps.clearPendingShutdownRequest(sessionId, pendingRequest.requestId);
         logger.info('Acknowledged shutdown readiness', { sessionId });
       }
-      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'idle'));
       return { output: postInvocationOutput() };
     }
 
@@ -604,9 +580,6 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
 
     if (mergeDecision !== null) {
       deps.sessionMarkers.markRouteNudgeFired(sessionId);
-      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'route'), {
-        kind: 'merge'
-      } satisfies RouteMarkerPayload);
       logger.info('Injecting merge route', { sessionId, count: mergeDecision.count });
       return {
         output: postInvocationOutput({
@@ -628,9 +601,6 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
     // should run the shutdown verb. At most once per session.
     if (actionInput.exitWhenDone && !deps.sessionMarkers.hasExitWhenDoneFired(sessionId)) {
       deps.sessionMarkers.markExitWhenDoneFired(sessionId);
-      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'route'), {
-        kind: 'shutdown'
-      } satisfies RouteMarkerPayload);
       logger.info('Injecting shutdown route', { sessionId });
       return {
         output: postInvocationOutput({
@@ -649,9 +619,9 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
       };
     }
 
-    // 4. Idle: the decision machinery ran and required no next step. The
-    // durable marker — not hook exit zero — is what action settlement reads.
-    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'idle'));
+    // 4. Idle: the decision machinery ran and required no next step. Nothing
+    // durable records it: a route is visible by the step it injected, and a
+    // run that injected none has no marker to read.
     return { output: postInvocationOutput() };
   } catch (error) {
     if (error instanceof HandlerFailure) {
@@ -678,16 +648,16 @@ function writeFlushSentinel(deps: AntigravityHandlerDeps, cardRepoPath: string, 
  * `Stop` — process/session drain and call-scoped cleanup.
  *
  * Contract: requires `conversationId` plus the pinned common host fields;
- * returns no `continue` decision. Cleanup is idempotent and records drain
- * readiness; a missing acknowledgement blocks Cards settlement. It never
+ * returns no `continue` decision. Cleanup is idempotent and its completion is
+ * carried by the exit status alone — no durable marker records it. It never
  * uses `decision: "continue"` to turn cleanup failure into another model
  * turn.
  *
  * The pending-shutdown acknowledgement is settlement-critical: a failure
- * there (or an unprovable drain state) writes the failure marker and
- * withholds drain readiness, so the launcher's bounded wait fails closed.
- * The flush sentinel and session-artifact cleanup are best-effort — the
- * watcher provides crash resilience, and leftover artifacts are harmless.
+ * there (or an unprovable drain state) writes the failure marker and skips
+ * the acknowledgement, so the launcher's bounded wait fails closed. The flush
+ * sentinel and session-artifact cleanup are best-effort — the watcher
+ * provides crash resilience, and leftover artifacts are harmless.
  *
  * @param raw - The raw stdin JSON value.
  * @param ctx - Handler dependencies and logger.
@@ -709,8 +679,8 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
   const actionInput = requireActionInput(deps, input.conversationId);
 
   // 1. Pending-shutdown handshake under the strict drain authority. A
-  // failed acknowledgement must block settlement: throw before the
-  // drain-ready marker exists.
+  // failed acknowledgement must block settlement: throw before the response
+  // that reports Stop succeeded.
   let pendingRequest: PendingShutdownRequest | undefined;
   try {
     pendingRequest = deps.readPendingShutdownRequest(sessionId);
@@ -767,17 +737,6 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
       sessionId,
       error: error instanceof Error ? error.message : String(error)
     });
-  }
-
-  // 4. Drain readiness: the idempotent acknowledgement the launcher waits for.
-  try {
-    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'drain-ready'));
-  } catch (error) {
-    throw new HandlerFailure(
-      'drain-marker',
-      error instanceof Error ? error.message : String(error),
-      input.conversationId
-    );
   }
 
   logger.info('Antigravity session cleanup complete', { sessionId, conversationId: input.conversationId });

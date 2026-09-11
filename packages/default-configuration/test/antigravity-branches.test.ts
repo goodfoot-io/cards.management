@@ -12,6 +12,8 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
@@ -81,6 +83,7 @@ vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
 const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
 const AGENT = 'antigravity-cli';
 const ANTIGRAVITY_HOME = '/test/antigravity-cli';
+const CONVERSATION_ID = '8724cd98-6b07-4080-82d3-1c617be236bf';
 const _NOW_MS = 1_700_000_000_000;
 
 const originalFetch = globalThis.fetch;
@@ -206,7 +209,7 @@ beforeEach(async () => {
   vi.mocked(fs.rm).mockResolvedValue(undefined);
   vi.mocked(fs.readdir).mockImplementation(async (directory) => {
     if (String(directory).includes('/antigravity/runtime/markers/')) {
-      return ['conv-1.ready', 'conv-1.idle', 'conv-1.drain-ready'] as never;
+      return ['conv-1.ready'] as never;
     }
     throw enoent;
   });
@@ -383,7 +386,7 @@ describe('launch action — antigravity branch', () => {
     await promise;
   });
 
-  it('names final transcript degradation instead of reporting an otherwise successful exit', async () => {
+  it('reports a degraded final transcript drain as a diagnostic without failing a successful exit', async () => {
     const { spawn } = await import('node:child_process');
     const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
     const child = createMockChild();
@@ -393,55 +396,39 @@ describe('launch action — antigravity branch', () => {
       reason: 'db-absent',
       detail: 'conversation DB is absent at final drain'
     });
+    const { Logger } = await import('@cards.management/sdk/config');
+    const errorSpy = vi.spyOn(Logger.prototype, 'error');
 
     const action = (await import('../src/actions/launch.js')).default;
     const promise = action(baseInput(), createMockContext());
     await flushMicrotasks();
     child.emit('close', 0);
+    await expect(promise).resolves.toBeUndefined();
 
-    await expect(promise).rejects.toThrow(/final Antigravity transcript drain degraded \(db-absent:/);
+    // The export gap reaches the user through the structured log with both of
+    // its fields, and the run keeps the outcome it earned.
+    expect(errorSpy).toHaveBeenCalledWith(
+      expect.stringMatching(/transcript finalization degraded/),
+      expect.objectContaining({ reason: 'db-absent', detail: 'conversation DB is absent at final drain' })
+    );
     const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['ready', ['conv-1.idle', 'conv-1.drain-ready']],
-    ['PostInvocation idle-or-route', ['conv-1.ready', 'conv-1.drain-ready']],
-    ['Stop drain-ready', ['conv-1.ready', 'conv-1.idle']]
-  ] as const)('fails closed when %s positive hook evidence is missing', async (_label, markerNames) => {
-    const { spawn } = await import('node:child_process');
-    const fs = await import('node:fs/promises');
-    const child = createMockChild();
-    vi.mocked(spawn).mockReturnValue(child);
-    vi.mocked(fs.readdir).mockResolvedValue([...markerNames] as never);
-
-    const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput(), createMockContext());
-    await flushMicrotasks();
-    child.emit('close', 0);
-
-    await expect(promise).rejects.toThrow(/Antigravity (lifecycle|PostInvocation|Stop)/);
-    const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
-    expect(finalizePersistedSqlitePollSession).toHaveBeenCalledTimes(1);
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
+    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
+    errorSpy.mockRestore();
   });
 
   it('preserves the primary lifecycle failure when finalization also rejects', async () => {
     const { spawn } = await import('node:child_process');
-    const fs = await import('node:fs/promises');
     const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
-    vi.mocked(fs.readdir).mockResolvedValue([] as never);
     vi.mocked(finalizePersistedSqlitePollSession).mockRejectedValueOnce(new Error('finalizer unavailable'));
 
     const action = (await import('../src/actions/launch.js')).default;
     const promise = action(baseInput(), createMockContext());
     await flushMicrotasks();
-    child.emit('close', 0);
+    child.emit('close', 1);
 
-    await expect(promise).rejects.toThrow(/requires exactly one ready marker/);
+    await expect(promise).rejects.toThrow(/agy exited with code 1/);
     expect(finalizePersistedSqlitePollSession).toHaveBeenCalledTimes(1);
   });
 
@@ -515,13 +502,132 @@ describe('launch action — antigravity branch', () => {
     const action = (await import('../src/actions/launch.js')).default;
     const promise = action(baseInput({ executionMode }), createMockContext());
     await flushMicrotasks();
-    if (executionMode === 'background') {
-      child.stdout?.emit('data', Buffer.from(`${JSON.stringify({ conversation_id: 'conv-1', status: 'SUCCESS' })}\n`));
-    }
     child.emit('close', 0);
     await expect(promise).rejects.toThrow(/runtime hook failure \(watcher-setup: attach failed\)/);
     const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
     expect(transitionCardStatus).not.toHaveBeenCalled();
+  });
+
+  it('fails a background launch on the marker a real hook failure wrote, with exit status and stderr both clean', async () => {
+    const { spawn } = await import('node:child_process');
+    const fs = await import('node:fs/promises');
+    const realFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const { dispatchAntigravityHook } = await import('../../agent-hooks/src/antigravity/internal/transport.js');
+    const { HandlerFailure, handlePreInvocation } = await import(
+      '../../agent-hooks/src/antigravity/internal/handlers.js'
+    );
+    const { defaultAntigravityHandlerDeps } = await import('../../agent-hooks/src/antigravity/internal/deps.js');
+
+    // The marker store is a real directory: the hook produces the marker
+    // through its own failure policy and the action reads it back from disk, so
+    // this witnesses the kept producer/consumer pair rather than a fixture of
+    // it. Nothing here hand-writes a marker or fakes the read that finds one.
+    const cardsHome = await realFsp.mkdtemp(join(tmpdir(), 'agy-hook-failure-'));
+    const child = createMockChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    process.env['CARDS_HOME'] = cardsHome;
+    // The trigger is environment-only, exactly as the spike fires it: CARD_ID
+    // makes the hook a Cards action session instead of an inert foreign one.
+    process.env['CARD_ID'] = 'main-679';
+    vi.mocked(fs.readdir).mockImplementation(((directory: string) => realFsp.readdir(directory)) as never);
+    vi.mocked(fs.readFile).mockImplementation(((path: string, encoding: string) =>
+      realFsp.readFile(path, encoding)) as never);
+
+    try {
+      const action = (await import('../src/actions/launch.js')).default;
+      const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
+      await flushMicrotasks();
+
+      const spawnEnv = (vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string | undefined> }).env;
+      const sessionId = spawnEnv.ANTIGRAVITY_SESSION_ID as string;
+      process.env['ANTIGRAVITY_SESSION_ID'] = sessionId;
+
+      // One real handler failure through the real transport: the launcher did
+      // not hand the hook an action environment, which is a contract stage the
+      // hook fails closed on rather than guesses past.
+      const deps = {
+        ...defaultAntigravityHandlerDeps(),
+        cardsConfigDir: () => cardsHome,
+        io: {
+          ensureDirSync: (dir: string) => realFs.mkdirSync(dir, { recursive: true }),
+          writeTextFileSync: (path: string, data: string) => realFs.writeFileSync(path, data, 'utf8'),
+          existsSync: (path: string) => realFs.existsSync(path),
+          readTextFileSync: (path: string) => realFs.readFileSync(path, 'utf8'),
+          removeSync: (path: string) => realFs.rmSync(path, { force: true })
+        },
+        loadActionInput: () => null,
+        runReconciliationSweep: async () => {}
+      };
+      await expect(
+        dispatchAntigravityHook(
+          {
+            conversationId: CONVERSATION_ID,
+            workspacePaths: ['/test/workspace'],
+            transcriptPath: '/test/transcript',
+            artifactDirectoryPath: '/test/artifacts',
+            modelName: 'gemini-3-pro',
+            invocationNum: 1,
+            initialNumSteps: 0
+          },
+          handlePreInvocation,
+          deps
+        )
+      ).rejects.toBeInstanceOf(HandlerFailure);
+
+      // The reason carries the bracketed stage because the transport persists
+      // the HandlerFailure's own message — the same shape the committed spike
+      // capture carries (`{"stage":"input","reason":"[input] …"}`), so the
+      // action's rendering repeats the stage it already names.
+      const marker = join(cardsHome, 'antigravity', 'runtime', 'markers', sessionId, `${CONVERSATION_ID}.failure`);
+      expect(JSON.parse(await realFsp.readFile(marker, 'utf8'))).toEqual({
+        stage: 'action-env',
+        reason: '[action-env] the Cards action environment is missing or malformed'
+      });
+
+      // Every channel a launcher could watch except the marker is blind on this
+      // run: the child exits 0 and nothing reached its stderr.
+      child.emit('close', 0);
+      await expect(promise).rejects.toThrow(
+        /runtime hook failure \(action-env: \[action-env\] the Cards action environment is missing or malformed\)/
+      );
+      const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+      expect(transitionCardStatus).not.toHaveBeenCalled();
+    } finally {
+      delete process.env['CARDS_HOME'];
+      delete process.env['CARD_ID'];
+      delete process.env['ANTIGRAVITY_SESSION_ID'];
+      await realFsp.rm(cardsHome, { recursive: true, force: true });
+    }
+  });
+
+  it('settles a background launch whose lifecycle markers are absent or late instead of rejecting it', async () => {
+    const { spawn } = await import('node:child_process');
+    const fs = await import('node:fs/promises');
+    const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    const action = (await import('../src/actions/launch.js')).default;
+
+    // Absent: the marker directory a hook would have created is not there.
+    vi.mocked(fs.readdir).mockRejectedValue(enoent);
+    const absentChild = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(absentChild);
+    const absentPromise = action(baseInput({ executionMode: 'background' }), createMockContext());
+    await flushMicrotasks();
+    absentChild.emit('close', 0);
+    await expect(absentPromise).resolves.toBeUndefined();
+
+    // Late: the directory exists and is empty — the markers simply never came.
+    vi.mocked(fs.readdir).mockResolvedValue([] as never);
+    const lateChild = createMockChild();
+    vi.mocked(spawn).mockReturnValueOnce(lateChild);
+    const latePromise = action(baseInput({ executionMode: 'background' }), createMockContext());
+    await flushMicrotasks();
+    lateChild.emit('close', 0);
+    await expect(latePromise).resolves.toBeUndefined();
+
+    // Neither run was rejected, and both kept the completion path they earned.
+    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+    expect(transitionCardStatus).toHaveBeenCalledTimes(2);
   });
 
   it('fails an interactive action on a nonzero child exit', async () => {
@@ -555,7 +661,7 @@ describe('launch action — antigravity branch', () => {
     expect(transitionCardStatus).not.toHaveBeenCalled();
   });
 
-  it('spawns child-owned agy -p --output-format stream-json and settles on the SUCCESS final record', async () => {
+  it('spawns child-owned agy -p --output-format stream-json and settles on a clean exit', async () => {
     const { spawn } = await import('node:child_process');
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
@@ -575,14 +681,10 @@ describe('launch action — antigravity branch', () => {
 
     const opts = vi.mocked(spawn).mock.calls[0]![2] as { cwd: string; stdio: unknown };
     expect(opts.cwd).toBe(WORKTREE_PATH);
-    // Background handlers are console-less and own the stream-json stdout;
-    // stderr is piped for diagnostic capture.
-    expect(opts.stdio).toEqual(['ignore', 'pipe', 'pipe']);
+    // Background handlers are console-less: the stream-json transcript has no
+    // reader, so stdout is ignored and only the diagnostic stderr is piped.
+    expect(opts.stdio).toEqual(['ignore', 'ignore', 'pipe']);
 
-    child.stdout?.emit(
-      'data',
-      Buffer.from(`${JSON.stringify({ conversation_id: 'conv-1', status: 'SUCCESS', response: 'done' })}\n`)
-    );
     child.emit('close', 0);
     await promise;
 
@@ -596,25 +698,7 @@ describe('launch action — antigravity branch', () => {
     expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
   });
 
-  it('fails a background launch that exits zero without the expected final record', async () => {
-    const { spawn } = await import('node:child_process');
-    const child = createMockChild();
-    vi.mocked(spawn).mockReturnValue(child);
-
-    const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
-    await flushMicrotasks();
-
-    child.emit('close', 0);
-    await expect(promise).rejects.toThrow(/exited 0 without the expected final stream-json record/);
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
-
-    const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
-  });
-
-  it('fails a background launch on nonzero exit, signal termination, unsuccessful status, and malformed stream', async () => {
+  it('fails a background launch on nonzero exit and signal termination', async () => {
     const { spawn } = await import('node:child_process');
     const action = (await import('../src/actions/launch.js')).default;
 
@@ -632,28 +716,52 @@ describe('launch action — antigravity branch', () => {
     signalled.emit('close', null, 'SIGTERM');
     await expect(signalPromise).rejects.toThrow(/terminated on signal SIGTERM/);
 
-    const unsuccessful = createMockChild();
-    vi.mocked(spawn).mockReturnValueOnce(unsuccessful);
-    const unsuccessfulPromise = action(baseInput({ executionMode: 'background' }), createMockContext());
-    await flushMicrotasks();
-    unsuccessful.stdout?.emit(
-      'data',
-      Buffer.from(`${JSON.stringify({ conversation_id: 'conv-1', status: 'ERROR' })}\n`)
-    );
-    unsuccessful.emit('close', 0);
-    await expect(unsuccessfulPromise).rejects.toThrow(/final record status is 'ERROR'/);
-
-    const malformed = createMockChild();
-    vi.mocked(spawn).mockReturnValueOnce(malformed);
-    const malformedPromise = action(baseInput({ executionMode: 'background' }), createMockContext());
-    await flushMicrotasks();
-    malformed.stdout?.emit('data', Buffer.from('not json\n'));
-    malformed.emit('close', 0);
-    await expect(malformedPromise).rejects.toThrow(/non-JSON line/);
     const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
-    expect(finalizePersistedSqlitePollSession).toHaveBeenCalledTimes(4);
+    expect(finalizePersistedSqlitePollSession).toHaveBeenCalledTimes(2);
     const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
     expect(transitionCardStatus).not.toHaveBeenCalled();
+  });
+
+  it('does not fail a truncated run when Cards itself requested the termination', async () => {
+    const { spawn } = await import('node:child_process');
+    const child = createMockChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+    // The group "exits" (ESRCH on the existence probe) as soon as SIGTERM is
+    // sent, simulating a cooperative child — same shape as the onCancel test
+    // below, so the truncation latch is the only thing under test here.
+    let exited = false;
+    killSpy.mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 'SIGTERM') {
+        exited = true;
+        return true;
+      }
+      if (exited) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      return true;
+    }) as typeof process.kill);
+
+    const context = createMockContext();
+    const action = (await import('../src/actions/launch.js')).default;
+    const promise = action(baseInput({ executionMode: 'background' }), context);
+    await flushMicrotasks();
+
+    const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+    await onCancel();
+    // The notice is the same one the committed captures carry; here it was
+    // Cards' own cancellation that ended the turn, so the partial output is the
+    // expected shape of a termination the user asked for, not a silent cut.
+    child.stderr?.emit(
+      'data',
+      Buffer.from('[agy] print timeout after 5m0s with turn in progress; returning partial output\n')
+    );
+    child.emit('close', 0);
+    await expect(promise).resolves.toBeUndefined();
+
+    // The run keeps the ordinary completion path a card-requested termination
+    // has always taken; the latch adds no failure to it.
+    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
+    killSpy.mockRestore();
   });
 
   it('registers onCancel that drains the owned process group', async () => {

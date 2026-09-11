@@ -1,7 +1,7 @@
 /**
  * Tests for the Antigravity PostInvocation handler contract: the
- * idle/route/merge/shutdown decision, at-most-once injection, the durable
- * decision/idle markers, and the pending-shutdown acknowledgement.
+ * idle/route/merge/shutdown decision, at-most-once injection, and the
+ * pending-shutdown acknowledgement.
  *
  * @summary Tests for the Antigravity PostInvocation handler
  */
@@ -58,8 +58,8 @@ function cardsHome(): string {
   return join(root, 'cards-home');
 }
 
-function marker(kind: 'route' | 'idle' | 'failure'): string {
-  return markerPath(cardsHome(), SESSION_ID, CONVERSATION_ID, kind);
+function failureMarker(): string {
+  return markerPath(cardsHome(), SESSION_ID, CONVERSATION_ID, 'failure');
 }
 
 /**
@@ -109,11 +109,10 @@ describe('PostInvocation merge route', () => {
     expect(JSON.stringify(result?.output)).not.toContain('"decision"');
   });
 
-  it('records the durable route marker and consumes the session once-marker', async () => {
+  it('consumes the session once-marker when it injects the merge route', async () => {
     const { failure, recorders } = await run({ unmergedCommitCount: () => 3 });
     expect(failure).toBeNull();
     expect(recorders.markers.routeNudged.has(SESSION_ID)).toBe(true);
-    expect(JSON.parse(defaultAntigravityIo.readTextFileSync(marker('route')))).toEqual({ kind: 'merge' });
   });
 
   it('injects at most once while the route marker is consumed', async () => {
@@ -169,7 +168,6 @@ describe('PostInvocation shutdown route', () => {
     expect(message).toContain(join(root, 'skills', 'card', 'references', 'shutdown.md'));
     expect(message).toContain('cards "$CARD_ID" shutdown');
     expect(recorders.markers.exitNudged.has(SESSION_ID)).toBe(true);
-    expect(JSON.parse(defaultAntigravityIo.readTextFileSync(marker('route')))).toEqual({ kind: 'shutdown' });
   });
 
   it('prefers the merge route when both routes condition on the same invocation', async () => {
@@ -212,7 +210,6 @@ describe('PostInvocation pending-shutdown acknowledgement', () => {
       { socketPath: pendingRequest.socketPath, requestId: pendingRequest.requestId }
     ]);
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(marker('idle'))).toBe(true);
   });
 
   it('waits without acknowledging while the process tree is not drained', async () => {
@@ -231,16 +228,14 @@ describe('PostInvocation pending-shutdown acknowledgement', () => {
     });
     expect(failure?.stage).toBe('decision');
     expect(recorders.shutdownAcks).toEqual([]);
-    expect(defaultAntigravityIo.existsSync(marker('failure'))).toBe(true);
+    expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
   });
 });
 
 describe('PostInvocation idle and failure invariants', () => {
-  it('records the durable idle marker when no step is required', async () => {
+  it('injects no step when no route is due', async () => {
     const { result } = await run({});
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(marker('idle'))).toBe(true);
-    expect(defaultAntigravityIo.existsSync(marker('route'))).toBe(false);
   });
 
   it('fails closed on decision errors without injecting a guessed route', async () => {
@@ -250,20 +245,18 @@ describe('PostInvocation idle and failure invariants', () => {
       }
     });
     expect(failure?.stage).toBe('decision');
-    expect(defaultAntigravityIo.existsSync(marker('failure'))).toBe(true);
-    expect(defaultAntigravityIo.existsSync(marker('idle'))).toBe(false);
+    expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
   });
 
   it('fails closed on invalid invocation input', async () => {
     const { failure } = await run({}, makeInvocationInput(root, { invocationNum: -1 }));
     expect(failure?.stage).toBe('input');
-    expect(defaultAntigravityIo.existsSync(marker('failure'))).toBe(true);
+    expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
   });
 
   it('stays inert without a Cards action environment', async () => {
     delete process.env['CARD_ID'];
     const { result } = await run({ unmergedCommitCount: () => 3 });
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(marker('route'))).toBe(false);
   });
 });

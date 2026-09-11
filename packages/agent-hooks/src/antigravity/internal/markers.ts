@@ -3,16 +3,20 @@
  *
  * The Antigravity adapter is a set of one-shot subprocesses: unlike the
  * OpenCode plugins, no state survives between hook invocations, so the
- * launcher-facing protocol lives entirely on disk. Every handler terminates
- * its conversation's protocol in exactly one durable marker:
+ * launcher-facing protocol lives entirely on disk. Two durable markers
+ * survive; the action path's proof markers (`route`, `idle`, `drain-ready`)
+ * are retired, because an action's outcome rides the native exit status and
+ * the bounded stderr latch, and positive launcher-written proof was never
+ * what the launcher needed to learn:
  *
  * | Marker | Written by | Meaning |
  * |---|---|---|
- * | `ready` | PreInvocation | Registration, card context, and watcher setup succeeded; the launcher may proceed. |
+ * | `ready` | Assistant PreInvocation | Registration and workspace/window identity succeeded; the launcher may attribute the session. |
  * | `failure` | any handler | The contract failed at `stage` with `reason`; the launcher must fail the action. |
- * | `route` | PostInvocation | A route step was injected this session (`merge` or `shutdown`). |
- * | `idle` | PostInvocation | The decision machinery ran and required no next step. |
- * | `drain-ready` | Stop | Idempotent cleanup finished; the launcher may settle. |
+ *
+ * `failure` is the one marker the native process cannot replace: a failing
+ * hook leaves `agy` exiting 0 with an empty stderr and a `SUCCESS` record, so
+ * the marker is that class's only channel.
  *
  * Markers live under `<cards-config-dir>/antigravity/runtime/markers/`, keyed
  * first by the Cards session id the launcher exported pre-spawn (the launcher
@@ -29,8 +33,8 @@
 import { join } from 'node:path';
 import type { AntigravityIo } from './io.js';
 
-/** The five runtime marker kinds. */
-export type RuntimeMarkerKind = 'ready' | 'failure' | 'route' | 'idle' | 'drain-ready';
+/** The runtime marker kinds. */
+export type RuntimeMarkerKind = 'ready' | 'failure';
 
 /** Placeholder for a marker whose input carried no conversation id. */
 export const UNKNOWN_CONVERSATION = 'unknown-conversation';
@@ -56,12 +60,6 @@ export interface FailureMarkerPayload {
   stage: string;
   /** Human-readable reason the launcher surfaces. */
   reason: string;
-}
-
-/** Which route a `route` marker records as already injected. */
-export interface RouteMarkerPayload {
-  /** Which route was injected this session. */
-  kind: 'merge' | 'shutdown';
 }
 
 /**
