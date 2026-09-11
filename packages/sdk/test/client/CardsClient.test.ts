@@ -725,12 +725,15 @@ describe('CardsClient', () => {
       httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
       const client = new CardsClient(options, httpClient);
 
-      await client.executeAction('card-123', 'launch', undefined, false, undefined, ['vg-b', 'vg-a']);
-      await client.executeAction('card-123', 'launch', undefined, false, undefined, []);
+      await client.executeAction('card-123', 'launch', 'request-1', 'message-1', undefined, false, undefined, [
+        'vg-b',
+        'vg-a'
+      ]);
+      await client.executeAction('card-123', 'launch', 'request-2', 'message-2', undefined, false, undefined, []);
 
       expect(httpClient.requests.map(({ body }) => body)).toEqual([
-        { variableGroupIds: ['vg-b', 'vg-a'] },
-        { variableGroupIds: [] }
+        { requestId: 'request-1', messageId: 'message-1', variableGroupIds: ['vg-b', 'vg-a'] },
+        { requestId: 'request-2', messageId: 'message-2', variableGroupIds: [] }
       ]);
     });
   });

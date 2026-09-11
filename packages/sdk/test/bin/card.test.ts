@@ -662,8 +662,8 @@ describe('card binary', () => {
         await executeAction('card-1', 'launch', { ...actionIdentity, variableGroupIds: ['vg-b', 'vg-a'] });
         await executeAction('card-1', 'launch', { ...actionIdentity, variableGroupIds: [] });
         expect(actionRequests.map(({ body }) => body)).toEqual([
-          { variableGroupIds: ['vg-b', 'vg-a'] },
-          { variableGroupIds: [] }
+          { ...actionIdentity, variableGroupIds: ['vg-b', 'vg-a'] },
+          { ...actionIdentity, variableGroupIds: [] }
         ]);
       } finally {
         logSpy.mockRestore();
