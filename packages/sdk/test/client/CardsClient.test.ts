@@ -346,6 +346,34 @@ describe('CardsClient', () => {
   });
 
   describe('Branch Operations', () => {
+    it.skip('ownership-safe create sends intent and returns the registration revision', async () => {
+      const httpClient = new TestHttpClient();
+      const url = 'http://localhost:3000/cards/card-123/branches';
+      httpClient.responses.set(url, { outcome: 'created', revision: 'opaque-revision' });
+      const client = new CardsClient(options, httpClient);
+
+      await expect(
+        client.addBranch('card-123', { name: 'feature/test', parentBranch: 'main', intent: 'create' })
+      ).resolves.toEqual({ outcome: 'created', revision: 'opaque-revision' });
+      expect(httpClient.requests[0]).toMatchObject({
+        method: 'POST',
+        url,
+        body: { name: 'feature/test', parentBranch: 'main', intent: 'create' }
+      });
+    });
+
+    it.skip('ownership-safe conditional remove sends the revision and returns preserved', async () => {
+      const httpClient = new TestHttpClient();
+      const url = 'http://localhost:3000/cards/card-123/branches/feature%2Ftest?expectedRevision=opaque-revision';
+      httpClient.responses.set(url, { outcome: 'preserved' });
+      const client = new CardsClient(options, httpClient);
+
+      await expect(
+        client.removeBranch('card-123', 'feature/test', { expectedRevision: 'opaque-revision' })
+      ).resolves.toEqual({ outcome: 'preserved' });
+      expect(httpClient.requests[0]).toMatchObject({ method: 'DELETE', url });
+    });
+
     it('should GET /cards/:id/branches when getting branches', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
