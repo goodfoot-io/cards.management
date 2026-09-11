@@ -179,6 +179,25 @@ function createMockChild(overrides?: Partial<ChildProcess>): ChildProcess {
   } as unknown as ChildProcess;
 }
 
+/**
+ * Minimal event-emitter stand-in for `child.stderr`, matching the
+ * `on`/`emit` shape `createMockChild` uses for the child process itself.
+ */
+function createMockStderr(): {
+  on: (event: string, cb: (chunk: Buffer) => void) => void;
+  emit: (chunk: string) => void;
+} {
+  const handlers = new Map<string, (chunk: Buffer) => void>();
+  return {
+    on: (event: string, cb: (chunk: Buffer) => void) => {
+      handlers.set(event, cb);
+    },
+    emit: (chunk: string) => {
+      handlers.get('data')?.(Buffer.from(chunk));
+    }
+  };
+}
+
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
     cardId: 'card-123',
@@ -1723,6 +1742,82 @@ describe('claude-session shared utilities', () => {
       } else {
         delete process.env['EXIT_WHEN_DONE'];
       }
+    });
+
+    it('overrides CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS to 0 in background mode, even when the parent env has a finite value', async () => {
+      // Reproduces main-678: Claude's own print-mode background-task wait
+      // ceiling (600s) terminates background actions before Cards decides
+      // to. Cards must own the lifetime by forcing this print-only setting
+      // to unlimited (0) on every background child, regardless of what the
+      // parent process env inherited.
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+      const saved = process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'];
+      process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'] = '600000';
+
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnClaudeSession(baseInput({ executionMode: 'background' }), context, {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
+      expect(spawnOpts.env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS).toBe('0');
+
+      child.emit('close', 0);
+      await promise;
+
+      if (saved !== undefined) {
+        process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'] = saved;
+      } else {
+        delete process.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS'];
+      }
+    });
+
+    it('fails the action when Claude emits its background wait-ceiling diagnostic across split stderr chunks, even though the child exits 0', async () => {
+      // Reproduces main-678: the remote logs show Claude's print-mode
+      // ceiling diagnostic immediately before an exit-0 "action completed"
+      // log. Cards must recognize that diagnostic (latched across chunk
+      // boundaries) as a failure through the same channel used elsewhere in
+      // spawnClaudeSession (e.g. the settle-failure throw), rather than
+      // reporting the interrupted run as a success.
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+
+      const stderr = createMockStderr();
+      const child = createMockChild({ stderr: stderr as unknown as ChildProcess['stderr'] });
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnClaudeSession(baseInput({ executionMode: 'background' }), context, {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      // Split the diagnostic across two stderr chunks, as observed in the
+      // remote logs, and never invoke onCancel/onAgentShutdown — this is an
+      // unrequested termination, not a Cards-initiated one.
+      stderr.emit('Background tasks still running after 600s; term');
+      stderr.emit('inating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.');
+
+      child.emit('close', 0);
+
+      await expect(promise).rejects.toThrow(/600s/);
     });
   });
 });
