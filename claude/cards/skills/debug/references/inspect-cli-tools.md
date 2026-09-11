@@ -59,17 +59,19 @@ Routes through `POST /execute-command` with `{command: "cards.reportIssue", args
 
 ### `create-worktree`
 
-**Purpose**: create git worktrees with monorepo symlink wiring, optionally card-bound.
+**Purpose**: create git worktrees with monorepo symlink wiring and inherit card binding from the invoking checkout when no explicit card ID is supplied.
 
 **Usage**: `create-worktree [--card-id <id>] [--parent-branch <name>] <branch|tag|sha>`
+
+**Card selection**: the effective card ID is an explicit, nonempty `--card-id`, otherwise the trimmed `.cards/CARD_ID` at the nearest Git checkout containing the invoking directory. The checkout boundary is authoritative: nested repositories do not inherit from a containing checkout, and ambient `CARD_ID` is ignored. No effective card ID means fully offline creation. `--parent-branch` is valid for either explicit or inherited binding.
 
 **Exit codes**: 0 success, 2 general failure, 3 path-policy (`.worktreeignore`/`.worktreeinclude`) load or provisioning failure. The invoking checkout root supplies both policy files and source content. The offline and card-bound forms use the same `createWorktree()` materialization; card-bound creation additionally performs registration/outfitting. Configuration and enumeration fail before policy-controlled links, while later copy/symlink failures can occur after partial provisioning and trigger cleanup.
 
 **Output**: one JSON object with `branch`, absolute `worktree`, `baseSha`, numeric `copiedFromInclude` (regular files and recreated source symlinks actually copied by the include executor), and numeric `reroutedSymlinks` (internal workspace symlinks recreated by the `node_modules` rerouter). These fields are counts, not path arrays, and do not enumerate policy matches or materialized ancestors. There is no supported dry-run/classification CLI.
 
-**Auth** (with `--card-id`): Bearer token from `~/.cards/cards-api.json`.
+**Auth** (with an effective card ID): Bearer token from `~/.cards/cards-api.json`.
 
-**Without `--card-id`**: Fully offline — no API client, no parent branch, no hooks, no attribution.
+**Bound completion**: selected-card failures fail closed. The success JSON is emitted only after registration, `.cards/CARD_ID`, shared hooks, attribution, and optional parent lineage are complete, so it is safe to treat that output as worker readiness. Failure rolls back invocation-owned registration and materialization rather than degrading to offline creation.
 
 ### `remove-worktree`
 
@@ -148,7 +150,7 @@ All CLIs authenticate via Bearer token from the API discovery file.
 3. Construct `CardsClient` with `baseUrl: http://{host}:{port}` and `accessToken`
 4. Token sent as `Authorization: Bearer {accessToken}` header
 
-**Test mode**: `API_TEST_MODE=1` forces mock values (`localhost:9999`, token `test-token`).
+**Test mode**: `API_TEST_MODE=1` forces mock values (host `localhost`, port `9999`, token `test-token`).
 
 ## Platform-Specific Behavior
 

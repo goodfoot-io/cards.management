@@ -23,8 +23,10 @@ Cross-package contracts (types, wire shapes, storage layouts) are yours to decid
 Before a package's first dispatch, from the card worktree, create its branch and worktree at the card tip:
 
 ```bash
-create-worktree "implement/$CARD_ID/[package]"   # prints {"branch":…,"worktree":…}
+create-worktree --parent-branch "$WORKSPACE_BRANCH" "implement/$CARD_ID/[package]"   # inherits this checkout's card
 ```
+
+Run this from the card worktree: flagless card selection reads its trimmed `.cards/CARD_ID` at the invoking checkout boundary (not ambient `CARD_ID`), while `--parent-branch` remains available for that inherited binding. Do not dispatch the worker until the JSON is printed; it is emitted only after registration, marker, hooks, attribution, and parent lineage are complete. Any selected-card provisioning failure fails closed and must be resolved rather than treating the child as an offline checkout.
 
 Pass the printed values as `[WORKER_BRANCH]` and `[WORKER_WORKTREE]`. The worktree persists across tasks and worker refreshes. Never run git inside a worker's worktree; never let a worker run git in the card worktree.
 

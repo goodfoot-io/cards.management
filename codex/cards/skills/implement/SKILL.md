@@ -8,6 +8,7 @@ description: Worktree workflow for implementing a task — create a worktree, cr
 1. **Record the starting point** before doing anything else:
    - `ORIGIN_DIR=$(pwd)` — the directory to return to and merge into.
    - `ORIGIN_BRANCH` — the branch currently checked out there.
+   - Confirm this checkout is unbound (`.cards/CARD_ID` is absent or empty). Flagless `create-worktree` inherits a trimmed marker from the nearest invoking Git checkout, so a bound origin would create another checkout for that existing card instead of the fresh-card workflow below. Ambient `CARD_ID` is ignored, and a nested repository forms its own inheritance boundary.
 
 2. **Create a worktree** with the `create-worktree` CLI — Codex CLI has no built-in worktree tool:
    `create-worktree <task-branch>`

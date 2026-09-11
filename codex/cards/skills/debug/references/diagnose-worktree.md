@@ -110,7 +110,7 @@ Ranked by probability:
 - **Policy files** — they need not be tracked or regular files. Absence means no patterns, and a non-dangling symlink is followed. A directory, unreadable target, dangling policy-file symlink, invalid matcher input, or other load failure is a `WorktreeIncludeError`. “Dangling symlink at a config path” refers to `.worktreeignore` or `.worktreeinclude` itself, not a matched source symlink.
 - **Deadlines** — the initial `discoverIgnoredPaths()` Git scan has its own fixed 30-second timeout and does not use `CARDS_WORKTREE_POLICY_TIMEOUT_MS`. Once configs are loaded, one environment-controlled budget (default `30000` ms) is shared across per-directory Git scans, tracked-symlink scanning, workspace discovery, and see-through filesystem walks; each Git call is additionally killed when its remaining window expires. Invalid non-positive/non-numeric overrides fail closed.
 - **Failure classification, timing, and cleanup** — config loading and the environment-controlled policy-expansion enumeration throw `WorktreeIncludeError` and map to exit 3. The separate initial ignored-path discovery scan is a general failure and maps to exit 2. Both finish before any policy-controlled source path is linked, although `git worktree add`, Git-config preparation, or unrelated `.cards` setup may already have begun. A later policy provisioning failure maps to exit 3 and can happen after some policy paths were linked or copied. Settle waits for in-flight work, then removes the partial directory and Git registration and deletes only a branch that invocation created. Cleanup failure is reported and leaves manual recovery work.
-- **Same materializer in both modes** — offline `create-worktree <ref>` and `create-worktree --card-id <id>` both call the same path-policy materializer. The card-bound path adds API registration, branch lineage, hooks, and attribution around it.
+- **Same materializer in both modes** — offline and card-bound creation call the same path-policy materializer. The effective card ID is an explicit, nonempty `--card-id`, otherwise the trimmed `.cards/CARD_ID` at the nearest invoking Git checkout; ambient `CARD_ID` never selects it, and discovery stops before any containing checkout when invoked from a nested repository. No effective ID means offline. The card-bound path adds API registration, optional `--parent-branch` lineage, hooks, and attribution around materialization.
 - **No preflight command** — there is no supported dry-run or classification CLI. Verify inputs with Git and inspect the created filesystem; internal `classify()` is not a public command.
 
 **Recovery**:
@@ -148,13 +148,13 @@ Fix the pattern or file permissions, then re-run `create-worktree` — there is 
 
 **Recovery**: No action needed — the code handles this. If a path comparison fails, run both sides through `path.resolve()`. **Risk**: **safe**.
 
-### `create-worktree` Fails (No Card ID, Server Unreachable) — LOW probability
+### `create-worktree` Fails (Selected Card, Server Unreachable) — LOW probability
 
-**Evidence**: `create-worktree --card-id <id>` fails because it can't reach the Cards API server.
+**Evidence**: `create-worktree --card-id <id>` or flagless `create-worktree` from a card-bound checkout fails because it can't reach the Cards API server.
 
-**Cause**: When `--card-id` is given, the CLI must reach the server for branch registration. Without `--card-id`, the CLI is fully offline.
+**Cause**: An effective card ID requires complete card provisioning. Explicit `--card-id` wins; otherwise a marker inherited from the nearest invoking checkout selects the card. The CLI fails closed if registration, marker creation, hooks, attribution, or parent lineage cannot complete, and emits success JSON only after all of them are ready. An unbound invoking checkout has no effective card ID and stays fully offline; ambient `CARD_ID` does not change either result.
 
-**Recovery**: Verify the server is running (load `diagnose-server-health.md`), or create the worktree without `--card-id` and attach separately. **Risk**: **safe**.
+**Recovery**: Verify the server is running (load `diagnose-server-health.md`). If offline creation is intended, invoke the command from an unbound checkout; moving into a nested repository also establishes its own checkout boundary, but do not use that accidentally to evade a required binding. **Risk**: **safe**.
 
 ## Escalation
 
