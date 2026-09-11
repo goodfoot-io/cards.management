@@ -363,7 +363,7 @@ export async function spawnAntigravitySession(
   context.onCancel(async () => {
     cardsTerminationRequested = true;
     context.logger.info(`${input.actionName} action cancelled, terminating agy`, { sessionId });
-    const result = await termination.terminate('cancel');
+    const result = await termination.terminate();
     const finalization = await finalizeTranscript();
     const log =
       finalization.kind === 'flushed'
@@ -379,7 +379,7 @@ export async function spawnAntigravitySession(
   context.onAgentShutdown(async () => {
     cardsTerminationRequested = true;
     context.logger.info(`${input.actionName} agent signalled shutdown, terminating agy`, { sessionId });
-    const result = await termination.terminate('shutdown');
+    const result = await termination.terminate();
     const finalization = await finalizeTranscript();
     const log =
       finalization.kind === 'flushed'
@@ -460,7 +460,7 @@ export async function spawnAntigravitySession(
     // on every normal close before any success evidence or settlement. It runs
     // ahead of the checks below, including the truncation latch, so a latched
     // run is still drained rather than abandoned with its group alive.
-    const normalDrain = await termination.terminate('normal-exit');
+    const normalDrain = await termination.terminate();
     if (outcome.signal) {
       throw new AntigravitySessionFailureError(
         'signal-termination',

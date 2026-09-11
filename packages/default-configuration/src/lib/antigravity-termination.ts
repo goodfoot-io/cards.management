@@ -18,11 +18,6 @@ import { type ChildProcess, execFile } from 'node:child_process';
 export type AntigravityTerminationResult = 'graceful' | 'forced' | 'failed';
 
 /**
- * Why the owned tree is being drained.
- */
-export type AntigravityTerminationReason = 'cancel' | 'shutdown' | 'normal-exit';
-
-/**
  * Options for {@link createAntigravityTerminationController}.
  */
 export interface AntigravityTerminationOptions {
@@ -42,10 +37,13 @@ export interface AntigravityTerminationController {
    * Drains the owned process tree exactly once; concurrent callers share the
    * same escalation promise.
    *
-   * @param reason - Why the tree is being drained.
+   * Every caller drains the same way — cancellation, shutdown, and the
+   * normal-close drain differ in their own logging and in what they do with
+   * the outcome, not in how the tree is terminated — so it takes no reason.
+   *
    * @returns The escalation outcome.
    */
-  terminate(reason: AntigravityTerminationReason): Promise<AntigravityTerminationResult>;
+  terminate(): Promise<AntigravityTerminationResult>;
 }
 
 function delay(milliseconds: number): Promise<void> {
@@ -148,7 +146,7 @@ export function createAntigravityTerminationController(
   let termination: Promise<AntigravityTerminationResult> | undefined;
 
   return {
-    terminate(_reason: AntigravityTerminationReason): Promise<AntigravityTerminationResult> {
+    terminate(): Promise<AntigravityTerminationResult> {
       if (termination !== undefined) return termination;
 
       termination = (async () => {

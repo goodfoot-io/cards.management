@@ -88,7 +88,7 @@ describe('Antigravity termination controller', () => {
     const child = launch("process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1e9)");
     const termination = await controller(child, { gracefulTimeoutMs: 500, forceTimeoutMs: 500 });
 
-    await expect(termination.terminate('shutdown')).resolves.toBe('graceful');
+    await expect(termination.terminate()).resolves.toBe('graceful');
   });
 
   it('forces a TERM-ignoring process and still resolves within the configured bound', async () => {
@@ -102,7 +102,7 @@ describe('Antigravity termination controller', () => {
     const termination = await controller(child, { gracefulTimeoutMs: 50, forceTimeoutMs: 500 });
     const startedAt = Date.now();
 
-    await expect(termination.terminate('shutdown')).resolves.toBe('forced');
+    await expect(termination.terminate()).resolves.toBe('forced');
     expect(Date.now() - startedAt).toBeLessThan(1_000);
   });
 
@@ -123,21 +123,21 @@ describe('Antigravity termination controller', () => {
       descendantPids.add(descendantPid);
       const termination = await controller(wrapper, { gracefulTimeoutMs: 50, forceTimeoutMs: 500 });
 
-      await expect(termination.terminate('shutdown')).resolves.toBe('forced');
+      await expect(termination.terminate()).resolves.toBe('forced');
       await waitForExit(descendantPid);
       expect(isAlive(descendantPid)).toBe(false);
     }
   );
 
-  it('deduplicates concurrent cancel and shutdown requests onto one termination', async () => {
+  it('deduplicates concurrent termination requests onto one promise', async () => {
     const child = launch("process.on('SIGTERM', () => process.exit(0)); setInterval(() => {}, 1e9)");
     const termination = await controller(child, { gracefulTimeoutMs: 500, forceTimeoutMs: 500 });
 
-    const cancelled = termination.terminate('cancel');
-    const shutdown = termination.terminate('shutdown');
+    const first = termination.terminate();
+    const second = termination.terminate();
 
-    expect(shutdown).toBe(cancelled);
-    await expect(cancelled).resolves.toBe('graceful');
+    expect(second).toBe(first);
+    await expect(first).resolves.toBe('graceful');
   });
 
   it('reports failed when signalling the owned tree fails', async () => {
@@ -147,6 +147,6 @@ describe('Antigravity termination controller', () => {
     };
     const termination = await controller(child, { gracefulTimeoutMs: 50, forceTimeoutMs: 50, signalTree });
 
-    await expect(termination.terminate('shutdown')).resolves.toBe('failed');
+    await expect(termination.terminate()).resolves.toBe('failed');
   });
 });
