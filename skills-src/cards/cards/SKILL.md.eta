@@ -277,5 +277,5 @@ cd "$REPO" && git add "attachments/$ATT_NAME" "attachments/${ATT_NAME}.meta.json
 - **active**: The agent is actively working on this card. Set automatically when an action handler starts; do not set directly.
 - **needs_review**: This card is awaiting feedback from the user (includes plan approval and implementation review). Set automatically when an action handler exits; do not set directly.
 - **done**: The card is complete and needs no additional review.
-- **archived**: This card has been archived and is no longer in the active workflow.
+- **archived**: This card has been archived and is no longer in the active workflow. Before setting a card to this status, add a comment (see Adding a Comment) recording the retirement reason — why the card is being retired rather than carried forward as done, what evidence was reviewed, and what disposition (if any) applies to its current description/notes. Write it so a reader who only sees the archived card understands why, without relying on prior comment history.
 </card-status>
