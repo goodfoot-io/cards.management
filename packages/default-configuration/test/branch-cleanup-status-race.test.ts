@@ -1,4 +1,4 @@
-import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
+import { type ChildProcess, execFile, execFileSync, spawn } from 'node:child_process';
 import * as fsSyncNs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -33,11 +33,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * @summary Reproduction: the watcher must read a settled card status at spawn time
  */
 
-// Only the agent/watcher process launches are mocked — execFile/execFileSync
-// stay real so all git work runs against the fixture repositories.
+// Agent/watcher process launches and the CLI-presence probe are mocked.
+// execFileSync stays real so all git work runs against fixture repositories.
 vi.mock('node:child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:child_process')>();
-  return { ...actual, spawn: vi.fn() };
+  return { ...actual, execFile: vi.fn(), spawn: vi.fn() };
 });
 
 // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
@@ -116,6 +116,34 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
 }
 
 beforeEach(() => {
+  vi.mocked(execFile).mockImplementation(((command: string, args: readonly string[], ...rest: unknown[]) => {
+    const callback = rest.at(-1);
+    if ((command === 'which' || command === 'where') && args[0] === 'claude' && typeof callback === 'function') {
+      callback(null, { stdout: '/usr/local/bin/claude\n', stderr: '' });
+      return createMockChild();
+    }
+    if (command === 'git' && args.join(' ') === 'rev-parse --abbrev-ref HEAD' && typeof callback === 'function') {
+      callback(null, { stdout: 'main\n', stderr: '' });
+      return createMockChild();
+    }
+    if (command === 'git' && typeof callback === 'function') {
+      const options = (rest[0] ?? {}) as { cwd?: string; env?: NodeJS.ProcessEnv };
+      try {
+        const stdout = execFileSync(command, [...args], {
+          cwd: options.cwd,
+          env: options.env,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe']
+        });
+        callback(null, { stdout, stderr: '' });
+      } catch (error) {
+        callback(error, { stdout: '', stderr: error instanceof Error ? error.message : String(error) });
+      }
+      return createMockChild();
+    }
+    throw new Error(`Unexpected execFile call: ${command} ${args.join(' ')}`);
+  }) as typeof execFile);
+
   // Resolve realpath so the /proc cwd comparison matches (on some systems
   // /tmp is a symlink to /private/tmp etc).
   wsRepo = fsSyncNs.realpathSync(fsSyncNs.mkdtempSync(path.join(os.tmpdir(), 'status-race-ws-')));
