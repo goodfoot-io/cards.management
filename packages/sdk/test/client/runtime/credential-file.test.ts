@@ -4,7 +4,7 @@
  * @module
  */
 
-import { mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { chmod, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,6 +39,15 @@ const FILE: RuntimeCredentialFile = {
       role: 'agent-handler',
       producerId: 'agent-1',
       secret: 'agent-secret',
+      issuedAt: 1
+    },
+    {
+      credentialId: 'hook-credential',
+      requestId: 'request-1',
+      executionId: 'execution-1',
+      role: 'agent-hook',
+      producerId: 'hook-1',
+      secret: 'hook-secret',
       issuedAt: 1
     }
   ]
@@ -93,6 +102,21 @@ describe('runtime credential file', () => {
     symlinkSync(target, credentialPath);
 
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/symbolic link/i);
+    expect(() => writeRuntimeCredentialFile(credentialPath, FILE)).toThrow(/symbolic link|exist/i);
+  });
+
+  it.skip('rejects permissive or symbolic-link parent directories', async () => {
+    if (process.platform !== 'win32') {
+      await chmod(directory, 0o755);
+      expect(() => writeRuntimeCredentialFile(credentialPath, FILE)).toThrow(/directory.*permissions/i);
+      await chmod(directory, 0o700);
+    }
+
+    const realParent = join(directory, 'real');
+    const linkedParent = join(directory, 'linked');
+    mkdirSync(realParent, { mode: 0o700 });
+    symlinkSync(realParent, linkedParent);
+    expect(() => writeRuntimeCredentialFile(join(linkedParent, 'credential.json'), FILE)).toThrow(/symbolic link/i);
   });
 
   it.skip('rejects mismatched request and execution identity bindings', () => {
@@ -101,7 +125,7 @@ describe('runtime credential file', () => {
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/invalid runtime credential file/i);
   });
 
-  it.skip('rejects duplicate role credentials and an absent explicitly requested role', () => {
+  it.skip('rejects duplicate, missing, and non-child role credentials', () => {
     writeFileSync(
       credentialPath,
       JSON.stringify({ ...FILE, credentials: [FILE.credentials[0], FILE.credentials[0]] }),
@@ -109,7 +133,14 @@ describe('runtime credential file', () => {
     );
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/invalid runtime credential file/i);
 
-    writeFileSync(credentialPath, JSON.stringify(FILE), { mode: 0o600 });
-    expect(() => loadRuntimeCredential('server', credentialPath)).toThrow(/server/);
+    writeFileSync(
+      credentialPath,
+      JSON.stringify({
+        ...FILE,
+        credentials: [...FILE.credentials.slice(0, 2), { ...FILE.credentials[2], role: 'extension-dispatcher' }]
+      }),
+      { mode: 0o600 }
+    );
+    expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/invalid runtime credential file/i);
   });
 });

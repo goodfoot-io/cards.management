@@ -1253,6 +1253,9 @@ async function htmlCommand(args: string[]): Promise<void> {
  * @param opts.selectedAgent - Optional one-shot coding-agent override.
  * @param opts.variableGroupIds - Ordered one-shot variable-group selection.
  *   Omitted to preserve persisted selection; an empty array selects none.
+ * @remarks `requestId` and `messageId` are an intermediate programmatic ingress
+ * contract. Milestone 4 must mint and persist them at the outermost CLI caller;
+ * accepting flags here does not itself provide end-user retry persistence.
  */
 export async function executeAction(
   cardId: string,
@@ -1657,7 +1660,9 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
           const requestId = actionFlags['request-id']?.[0];
           const messageId = actionFlags['message-id']?.[0];
           if (requestId === undefined || messageId === undefined) {
-            throw new Error('action requires --request-id and --message-id from the original caller');
+            throw new Error(
+              'action requires --request-id and --message-id from an outer caller that persists retry identity'
+            );
           }
           if (selectedAgent !== undefined && !isCodingAgentId(selectedAgent)) {
             throw new Error(`invalid coding agent "${selectedAgent}"; expected one of: ${CODING_AGENT_IDS.join(', ')}`);

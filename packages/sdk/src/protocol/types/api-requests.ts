@@ -35,6 +35,7 @@
 
 import type { Card, CardRelation } from './card.js';
 import type { CodingAgentId } from './coding-agent.js';
+import type { OriginalCallerRequestId } from './runtime-admission.js';
 import type { ExecutionMode } from './settings.js';
 import type { CardStatus } from './status.js';
 import type { TimelineItem } from './timeline.js';
@@ -581,7 +582,7 @@ export type EnvironmentsResponse = EnvironmentInfo[];
  */
 export interface ExecuteActionRequest {
   /** Stable original caller identity, persisted before the first attempt. */
-  requestId: string;
+  requestId: OriginalCallerRequestId;
 
   /** Stable launch-message identity, persisted before the first attempt. */
   messageId: string;

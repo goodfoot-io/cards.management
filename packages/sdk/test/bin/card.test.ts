@@ -685,7 +685,7 @@ describe('card binary', () => {
       }
     });
 
-    it('omits the request body when no execution mode is given', async () => {
+    it('sends only stable identity when no execution options are given', async () => {
       cards.set('card-1', { id: 'card-1', title: 'Test', status: 'todo' });
 
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});

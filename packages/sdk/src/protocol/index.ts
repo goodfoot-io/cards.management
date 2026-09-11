@@ -344,4 +344,9 @@ export {
 // --- Input Constraints ---
 // --- Card Gates ---
 // --- Runtime Protocol: Launch Admission ---
-export { type RuntimeCredentialFile, runtimeCredentialFileSchema } from './types/runtime-credential-file.js';
+export {
+  CHILD_RUNTIME_CREDENTIAL_ROLES,
+  type ChildRuntimeCredentialRole,
+  type RuntimeCredentialFile,
+  runtimeCredentialFileSchema
+} from './types/runtime-credential-file.js';

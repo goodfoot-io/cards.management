@@ -21,6 +21,7 @@ import type {
   CardSnapshotMessage,
   CardSubscribeFailedMessage
 } from './journal.js';
+import type { OriginalCallerRequestId } from './runtime-admission.js';
 import type { ActionResult, ExecutionMode } from './settings.js';
 import type { CardStatus } from './status.js';
 import type { StreamMeta } from './stream.js';
@@ -391,7 +392,7 @@ export interface ActionExecuteRequestEvent {
   /** Correlation ID linking the request to its result. */
   correlationId: string;
   /** Stable original caller identity, reused unchanged by every retry. */
-  requestId: string;
+  requestId: OriginalCallerRequestId;
   /** Stable launch-message identity, reused unchanged by every retry. */
   messageId: string;
   /** ID of the card whose action is being executed. */

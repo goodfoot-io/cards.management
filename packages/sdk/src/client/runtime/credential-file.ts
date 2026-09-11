@@ -4,7 +4,11 @@
  * @module
  */
 
-import type { IssuedRoleCredential, ProducerRole, RuntimeCredentialFile } from '../../protocol/types/index.js';
+import type {
+  ChildRuntimeCredentialRole,
+  IssuedRoleCredential,
+  RuntimeCredentialFile
+} from '../../protocol/types/index.js';
 
 /** Credential and bound identity loaded for one explicit runtime producer role. */
 export interface LoadedRuntimeCredential {
@@ -14,7 +18,8 @@ export interface LoadedRuntimeCredential {
 }
 
 /**
- * Atomically writes a credential handoff with owner-only permissions.
+ * Atomically writes a credential handoff without following an existing destination link.
+ * The parent must itself be an owner-only, non-symlink directory.
  * @param _path - Destination path passed to the child through one environment variable.
  * @param _value - Strictly bound execution, scope, request, and role credentials.
  * @throws Until the implementation phase.
@@ -24,7 +29,8 @@ export function writeRuntimeCredentialFile(_path: string, _value: RuntimeCredent
 }
 
 /**
- * Reads and validates an owner-protected credential handoff.
+ * Reads and validates an owner-protected credential handoff without following links.
+ * The containing directory must itself be owner-only and non-symlink.
  * @param _path - Credential-file path, defaulting to CARDS_RUNTIME_CREDENTIAL_FILE.
  * @returns The strictly validated credential handoff.
  * @throws Until the implementation phase.
@@ -40,6 +46,6 @@ export function readRuntimeCredentialFile(_path?: string): RuntimeCredentialFile
  * @returns The credential together with its bound execution and scope.
  * @throws Until the implementation phase.
  */
-export function loadRuntimeCredential(_role: ProducerRole, _path?: string): LoadedRuntimeCredential {
+export function loadRuntimeCredential(_role: ChildRuntimeCredentialRole, _path?: string): LoadedRuntimeCredential {
   throw new Error('Not Implemented');
 }
