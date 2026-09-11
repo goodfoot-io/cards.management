@@ -78,7 +78,8 @@ export const CARDS_AGENT_EFFORT_ENV_VAR = 'CARDS_AGENT_EFFORT';
  *
  * @param controls - Optional action-selected execution controls.
  * @returns Safe argv tail containing complete flag/value pairs.
- * @throws {Error} Until the Phase 3 argv implementation replaces this stub.
+ * @throws {Error} When a selected model or effort value is blank.
+ * @throws {Error} When a selected model or effort value contains a NUL byte.
  */
 export function buildAntigravityExecutionControlArgs(controls: AntigravityExecutionControls): string[] {
   const args: string[] = [];
