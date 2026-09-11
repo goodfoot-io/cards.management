@@ -67,7 +67,7 @@ describe('runtime credential file', () => {
     await rm(directory, { recursive: true, force: true });
   });
 
-  it.skip('atomically writes a strict owner-only credential file and reads it back', async () => {
+  it('atomically writes a strict owner-only credential file and reads it back', async () => {
     writeRuntimeCredentialFile(credentialPath, FILE);
 
     expect(JSON.parse(readFileSync(credentialPath, 'utf8'))).toEqual(FILE);
@@ -75,7 +75,7 @@ describe('runtime credential file', () => {
     expect(readRuntimeCredentialFile(credentialPath)).toEqual(FILE);
   });
 
-  it.skip('loads only the explicitly requested role through the path-only environment key', () => {
+  it('loads only the explicitly requested role through the path-only environment key', () => {
     writeRuntimeCredentialFile(credentialPath, FILE);
     process.env[CARDS_ENV_VARS.RUNTIME_CREDENTIAL_FILE] = credentialPath;
 
@@ -85,10 +85,10 @@ describe('runtime credential file', () => {
       scope: FILE.scope,
       credential: FILE.credentials[1]
     });
-    expect(Object.keys(process.env)).not.toContain('agent-secret');
+    expect(Object.values(process.env)).not.toContain('agent-secret');
   });
 
-  it.skip('rejects files accessible by group or other users where POSIX modes are supported', async () => {
+  it('rejects files accessible by group or other users where POSIX modes are supported', async () => {
     if (process.platform === 'win32') return;
     writeFileSync(credentialPath, JSON.stringify(FILE), { mode: 0o600 });
     await chmod(credentialPath, 0o640);
@@ -96,7 +96,7 @@ describe('runtime credential file', () => {
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/permissions/i);
   });
 
-  it.skip('rejects symbolic links instead of following a credential path through another inode', () => {
+  it('rejects symbolic links instead of following a credential path through another inode', () => {
     const target = join(directory, 'target.json');
     writeFileSync(target, JSON.stringify(FILE), { mode: 0o600 });
     symlinkSync(target, credentialPath);
@@ -105,7 +105,7 @@ describe('runtime credential file', () => {
     expect(() => writeRuntimeCredentialFile(credentialPath, FILE)).toThrow(/symbolic link|exist/i);
   });
 
-  it.skip('rejects permissive or symbolic-link parent directories', async () => {
+  it('rejects permissive or symbolic-link parent directories', async () => {
     if (process.platform !== 'win32') {
       await chmod(directory, 0o755);
       expect(() => writeRuntimeCredentialFile(credentialPath, FILE)).toThrow(/directory.*permissions/i);
@@ -119,13 +119,13 @@ describe('runtime credential file', () => {
     expect(() => writeRuntimeCredentialFile(join(linkedParent, 'credential.json'), FILE)).toThrow(/symbolic link/i);
   });
 
-  it.skip('rejects mismatched request and execution identity bindings', () => {
+  it('rejects mismatched request and execution identity bindings', () => {
     writeFileSync(credentialPath, JSON.stringify({ ...FILE, requestId: 'different-request' }), { mode: 0o600 });
 
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/invalid runtime credential file/i);
   });
 
-  it.skip('rejects duplicate, missing, and non-child role credentials', () => {
+  it('rejects duplicate, missing, and non-child role credentials', () => {
     writeFileSync(
       credentialPath,
       JSON.stringify({ ...FILE, credentials: [FILE.credentials[0], FILE.credentials[0]] }),
@@ -142,5 +142,10 @@ describe('runtime credential file', () => {
       { mode: 0o600 }
     );
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/invalid runtime credential file/i);
+  });
+
+  it('rejects a non-regular credential path before reading it', () => {
+    mkdirSync(credentialPath, { mode: 0o700 });
+    expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/regular file/i);
   });
 });

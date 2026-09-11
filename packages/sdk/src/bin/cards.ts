@@ -1659,13 +1659,13 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
           const selectedAgent = actionFlags['agent']?.[0];
           const requestId = actionFlags['request-id']?.[0];
           const messageId = actionFlags['message-id']?.[0];
+          if (selectedAgent !== undefined && !isCodingAgentId(selectedAgent)) {
+            throw new Error(`invalid coding agent "${selectedAgent}"; expected one of: ${CODING_AGENT_IDS.join(', ')}`);
+          }
           if (requestId === undefined || messageId === undefined) {
             throw new Error(
               'action requires --request-id and --message-id from an outer caller that persists retry identity'
             );
-          }
-          if (selectedAgent !== undefined && !isCodingAgentId(selectedAgent)) {
-            throw new Error(`invalid coding agent "${selectedAgent}"; expected one of: ${CODING_AGENT_IDS.join(', ')}`);
           }
           return executeAction(command, actionId, {
             requestId,
