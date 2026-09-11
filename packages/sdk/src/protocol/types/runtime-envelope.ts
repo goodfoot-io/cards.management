@@ -79,7 +79,7 @@ export interface RuntimeEnvelope<TType extends RuntimeMessageType = RuntimeMessa
 /**
  * Schema for the envelope's type-independent fields. The payload is validated
  * separately against the schema registered for the message type, because a
- * single discriminated union over 23 payload shapes produces error messages
+ * single discriminated union over every payload shape produces error messages
  * that name the wrong branch.
  */
 export const envelopeHeaderSchema = z
