@@ -112,6 +112,62 @@ echo "HOOKS_LOG_ANCHOR=${HOOKS_LOG_ANCHOR:-unset}${HOOKS_LOG_OVERRIDE_SET:+ (com
 [ -n "$HOOKS_LOG_UNREADABLE" ] && echo "HOOKS_LOG_ANCHOR is INCONCLUSIVE — jq could not parse:$HOOKS_LOG_UNREADABLE"
 ```
 
+### Check build-directory coherence
+
+Use this helper before trusting a build identity. It fails closed on incomplete or malformed build markers and on artifacts that may be newer than their stamp; it reads only the build directory supplied by the caller.
+
+```bash
+report_incoherent_build() {
+  dir=$1; label=$2; stamp="$dir/build-target.json"; marker="$dir/build-incomplete.json"
+  if [ -f "$marker" ]; then
+    marker_pending=$(jq -r 'if (.pending | type) == "array" and (.pending | length) > 0 then (.pending | join(", ")) else empty end' "$marker" 2>/dev/null)
+    marker_since=$(jq -r 'if (.since | type) == "number" then (.since | tostring) else empty end' "$marker" 2>/dev/null)
+    marker_note=$(jq -r 'if (.note | type) == "string" and (.note | length) > 0 then .note else empty end' "$marker" 2>/dev/null)
+    marker_reason=$(jq -r 'if .reason == "withheld" or .reason == "partial" then .reason else empty end' "$marker" 2>/dev/null)
+    if [ -z "$marker_pending" ] || [ -z "$marker_since" ] || [ -z "$marker_note" ] || [ -z "$marker_reason" ]; then
+      echo "BUILD MARKER UNREADABLE — $label ($dir) holds a build-incomplete.json that does not carry a non-empty .pending array, a numeric .since, a .reason of \"withheld\" or \"partial\", and a non-empty .note. Its directory cannot be called clean."
+      echo "Remedy: read $marker by hand. Only a build writes this file and only a build covering every target removes it, so a shape no reader recognises means a truncated write, something else writing that name, or no jq on PATH — all of which leave the build state unknown."
+      return 0
+    fi
+    if [ "$marker_reason" = withheld ]; then
+      echo "BUILD INCOMPLETE — $label ($dir) has produced no successful bundle this session for: $marker_pending (since $marker_since). Any build-target.json beside it describes the last build that COMPLETED; the artifacts that have rebuilt since are the ones it does not describe."
+    else
+      echo "BUILD INCOMPLETE — $label ($dir) has no bundle from the build it was stamped with for: $marker_pending (since $marker_since). Those targets hold whatever an earlier build left beside a stamp that does not describe them."
+    fi
+    [ -f "$stamp" ] || echo "  (there is no build-target.json beside it: this session has never completed a build, so there is no identity to compare anything against.)"
+    echo "Remedy: $marker_note"
+    return 0
+  fi
+  if [ ! -f "$stamp" ]; then
+    echo "NOT CHECKED — $label ($dir) holds no build-target.json and no marker, so nothing in it was examined."
+    return 2
+  fi
+  newer=; tied=; compared=0
+  for f in "$dir"/*; do
+    [ -f "$f" ] || continue
+    case "${f##*/}" in build-target.json|build-incomplete.json) continue ;; esac
+    compared=$((compared + 1))
+    if [ "$f" -nt "$stamp" ]; then newer="${f##*/}"; break; fi
+    [ "$stamp" -nt "$f" ] || tied="${f##*/}"
+  done
+  if [ -n "$newer" ]; then
+    echo "STAMP OLDER THAN ARTIFACT — $label ($dir): $newer was written after build-target.json, so the stamp does not describe the artifacts beside it."
+    echo "Remedy: a build wrote an artifact without stamping — check the build terminal for errors, then rebuild."
+    return 0
+  fi
+  if [ "$compared" -eq 0 ]; then
+    echo "COULD NOT ORDER — $label ($dir) holds a stamp and no other top-level artifact, so nothing was compared against it."
+    return 2
+  fi
+  if [ -n "$tied" ]; then
+    echo "COULD NOT ORDER — $label ($dir): $tied carries the same mtime as build-target.json, so their order is unknown. Not a clean result."
+    return 2
+  fi
+  echo "stamp is the newest of $compared top-level artifacts in $label ($dir)."
+  return 1
+}
+```
+
 ## 2. Route by Symptom
 
 Load only the file(s) whose symptom matches.
