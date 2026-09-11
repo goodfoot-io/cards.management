@@ -31,7 +31,9 @@
  * serialize deterministically, skip the write entirely when the bytes already
  * match, stage inside the same directory, then `rename` onto the target so a
  * reader never observes a partial profile. Concurrent launchers merge
- * optimistically and re-verify their own entry, retrying bounded times.
+ * optimistically and re-verify their own entry, retrying bounded times; see
+ * {@link mergeTrustedPath} for the one interleaving that is left unguarded and
+ * why.
  *
  * @summary Native Antigravity workspace-trust preparation for action launches
  * @module lib/antigravity-workspace-trust
@@ -346,7 +348,8 @@ async function backoff(attempt: number): Promise<void> {
 
 /**
  * Merges one checkout into `trustedWorkspaces` with a bounded optimistic
- * merge, so a parallel launcher's addition is never silently dropped.
+ * merge, so a parallel launcher's addition survives every interleaving except
+ * the read→rename gap described below.
  *
  * Each attempt reads the profile as it is now, appends the checkout, writes it
  * atomically, and re-reads to confirm the entry survived; a writer that was
@@ -357,6 +360,16 @@ async function backoff(attempt: number): Promise<void> {
  * when both writers prepared from the same document. Entries other writers
  * added in the meantime are preserved — the merge always starts from the bytes
  * on disk, never from the stale document this call first read.
+ *
+ * One interleaving is deliberately left unguarded. If two writers both clear
+ * the pre-rename base check and then rename in the order that discards the
+ * earlier entry, each re-read confirms only its *own* entry, so both report
+ * success and the loser never retries. The pre-rename check narrows the window
+ * to the read→rename gap but cannot close it: POSIX offers no compare-and-swap
+ * `rename`. Closing it would take a lock file, whose failure mode is worse —
+ * a lock left behind by a crash blocks *every* launch, whereas this race only
+ * costs one action a fallback to the native folder-trust dialog. The gap is
+ * microseconds wide and only reachable by launches prepared concurrently.
  *
  * @param settingsPath - Settings file to update.
  * @param trustedPath - Physical checkout path to record.
