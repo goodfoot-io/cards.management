@@ -498,17 +498,27 @@ export async function createWorktreeForCard(
   } catch (outfitError) {
     // Atomicity: the worktree dir + git branch now exist on disk but outfit
     // failed partway (e.g. addBranch rejected), so no fully-registered worktree
-    // exists. Roll the worktree back so no orphaned, unregistered worktree is
-    // left behind (the exact debt this orchestrator exists to prevent).
+    // exists. First quiesce createWorktree's asynchronous materialization: its
+    // copy/symlink/config work owns paths inside the worktree and must not race
+    // teardown. Settlement failure is cleanup context; outfitError remains the
+    // primary failure that caused rollback.
+    const rollbackFailures: string[] = [];
+    try {
+      await result.settle;
+    } catch (settleError) {
+      rollbackFailures.push(`settle=${settleError instanceof Error ? settleError.message : String(settleError)}`);
+    }
     try {
       await removeWorktree(result.path);
-    } catch (rollbackError) {
-      // Surface the original outfit failure as the cause, but make the
-      // partial-rollback visible: the worktree could not be cleaned up.
+    } catch (cleanupError) {
+      rollbackFailures.push(`rollback=${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
+    }
+    if (rollbackFailures.length > 0) {
       throw new Error(
-        `createWorktreeForCard: outfit failed and worktree rollback also failed at ${result.path}: ` +
+        `createWorktreeForCard: outfit failed and rollback was incomplete at ${result.path}: ` +
           `outfit=${outfitError instanceof Error ? outfitError.message : String(outfitError)}; ` +
-          `rollback=${rollbackError instanceof Error ? rollbackError.message : String(rollbackError)}`
+          rollbackFailures.join('; '),
+        { cause: outfitError }
       );
     }
     throw outfitError;

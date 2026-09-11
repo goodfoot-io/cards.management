@@ -294,6 +294,10 @@ describe('createWorktreeForCard', () => {
   });
 
   it('propagates addBranch rejection', async () => {
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      settle: Promise.resolve(undefined) as unknown as EarlyWorktreeResult['settle']
+    });
     const client = makeClient({
       addBranch: async () => {
         throw new Error('API failure');
@@ -304,8 +308,8 @@ describe('createWorktreeForCard', () => {
   });
 
   it('rolls back the worktree and rethrows the original error when addBranch rejects', async () => {
-    // Give createWorktree a settle that resolves so the test does not depend on
-    // the never-resolving default; the rollback path must not await it anyway.
+    // Give createWorktree a settle that resolves so rollback can quiesce before
+    // removing the worktree.
     vi.mocked(createWorktree).mockResolvedValue({
       path: EARLY_PATH,
       settle: Promise.resolve(undefined) as unknown as EarlyWorktreeResult['settle']
@@ -322,6 +326,46 @@ describe('createWorktreeForCard', () => {
     // The just-created worktree is rolled back so no orphan remains on disk.
     expect(removeWorktree).toHaveBeenCalledOnce();
     expect(removeWorktree).toHaveBeenCalledWith(EARLY_PATH);
+  });
+
+  it('waits for deferred settlement before teardown when addBranch rejects', async () => {
+    let resolveSettle!: () => void;
+    const settle = new Promise<void>((resolve) => {
+      resolveSettle = resolve;
+    }) as unknown as EarlyWorktreeResult['settle'];
+    vi.mocked(createWorktree).mockResolvedValue({ path: EARLY_PATH, settle });
+    let addAttempted = false;
+    const client = makeClient({
+      addBranch: async () => {
+        addAttempted = true;
+        throw new Error('API failure');
+      }
+    });
+
+    const creation = createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
+    await vi.waitFor(() => expect(addAttempted).toBe(true));
+    expect(removeWorktree).not.toHaveBeenCalled();
+
+    resolveSettle();
+    await expect(creation).rejects.toThrow('API failure');
+    expect(removeWorktree).toHaveBeenCalledOnce();
+  });
+
+  it('waits for deferred settlement before teardown when the outfit disk phase fails', async () => {
+    let resolveSettle!: () => void;
+    const settle = new Promise<void>((resolve) => {
+      resolveSettle = resolve;
+    }) as unknown as EarlyWorktreeResult['settle'];
+    vi.mocked(createWorktree).mockResolvedValue({ path: EARLY_PATH, settle });
+    vi.mocked(writeCardBoundFile).mockRejectedValue(new Error('marker write failed'));
+
+    const creation = createWorktreeForCard(makeClient(), 'cards/main-95/1', BASE_OPTIONS);
+    await vi.waitFor(() => expect(writeCardBoundFile).toHaveBeenCalled());
+    expect(removeWorktree).not.toHaveBeenCalled();
+
+    resolveSettle();
+    await expect(creation).rejects.toThrow('marker write failed');
+    expect(removeWorktree).toHaveBeenCalledOnce();
   });
 
   it('does not leave settle as an unhandled rejection on the addBranch-rejection path', async () => {
@@ -371,6 +415,27 @@ describe('createWorktreeForCard', () => {
     await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow(
       /outfit=API failure; rollback=rollback boom/
     );
+  });
+
+  it('aggregates settlement and cleanup failures while retaining the outfit failure as cause', async () => {
+    const outfitError = new Error('API failure');
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      settle: Promise.reject(new Error('settlement boom')) as EarlyWorktreeResult['settle']
+    });
+    vi.mocked(removeWorktree).mockRejectedValue(new Error('rollback boom'));
+    const client = makeClient({
+      addBranch: async () => {
+        throw outfitError;
+      }
+    });
+
+    const failure = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS).catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/outfit=API failure; settle=settlement boom; rollback=rollback boom/);
+    expect((failure as Error).cause).toBe(outfitError);
   });
 });
 
