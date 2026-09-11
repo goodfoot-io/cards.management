@@ -139,7 +139,7 @@ beforeEach(async () => {
   });
   vi.mocked(execFileSync).mockImplementation(() => '');
 
-  vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+  vi.mocked(syncFs.readFileSync).mockImplementation((filePath: Parameters<typeof syncFs.readFileSync>[0]) => {
     throw Object.assign(new Error(`mock: unhandled readFileSync: ${String(filePath)}`), { code: 'ENOENT' });
   });
 
@@ -160,19 +160,15 @@ beforeEach(async () => {
   vi.mocked(checkWorktreeExists).mockResolvedValue(false);
 
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, {
-      cwd: opts.cwd,
-      cardId: opts.cardId,
-      compiledScriptPaths: opts.compiledScriptPaths
-    })
-  );
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => createWorktree(ref, { cwd: opts.cwd }));
   vi.mocked(createWorktree).mockResolvedValue({
     path: WORKTREE_PATH,
     settle: Promise.resolve({
       branch: 'cards/card-123/1',
       worktree: WORKTREE_PATH,
-      baseSha: 'abc123'
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
     })
   });
 
@@ -258,7 +254,14 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
     configPath: '/test/config',
     extensionPath: '/test/extension',
     codingAgent: AGENT,
-    ...overrides
+    ...overrides,
+    // Spreading a `Partial` widens these back to `| undefined`; both are
+    // required by `ActionInput`, and both defaults mirror what the suite
+    // exports in `beforeEach` / what the dispatcher supplies
+    // (`opts?.exitWhenDone ?? false`). Supplying them after the spread keeps
+    // the literal assignable without narrowing what a caller may override.
+    exitWhenDone: overrides?.exitWhenDone ?? false,
+    marketplacePath: overrides?.marketplacePath ?? '/test/extension/dist/marketplace'
   };
 }
 
