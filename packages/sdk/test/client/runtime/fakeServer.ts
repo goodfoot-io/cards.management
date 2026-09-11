@@ -34,6 +34,10 @@ export interface FakeRuntimeServerScript {
   readonly withholdResumeAck?: boolean;
   /** Never acknowledge client messages, so sends stay outstanding. */
   readonly withholdAcceptance?: boolean;
+  /** Ignore heartbeat frames so the client's liveness deadline expires. */
+  readonly withholdHeartbeatResponse?: boolean;
+  /** Send a command immediately after registration, before synchronization completes. */
+  readonly commandBeforeSynchronization?: boolean;
 }
 
 /** A running fake runtime server. */
@@ -120,8 +124,13 @@ export class FakeRuntimeServer {
    * Sends one valid server command on a selected connection generation.
    * @param messageId - Stable command identity.
    * @param connectionIndex - Zero-based accepted socket index, defaulting to the newest.
+   * @param overrides - Envelope fields used to exercise authorization refusal.
    */
-  sendCommand(messageId: string, connectionIndex = this.connections.length - 1): void {
+  sendCommand(
+    messageId: string,
+    connectionIndex = this.connections.length - 1,
+    overrides: Readonly<Record<string, unknown>> = {}
+  ): void {
     this.connections[connectionIndex]?.send(
       JSON.stringify({
         ...this.envelope('execution.cancelCommand', {
@@ -129,7 +138,8 @@ export class FakeRuntimeServer {
           overridesIdleRequirement: false
         }),
         messageId,
-        requestId: 'req-1'
+        requestId: 'req-1',
+        ...overrides
       })
     );
   }
@@ -178,6 +188,18 @@ export class FakeRuntimeServer {
           fencedGeneration: null
         };
         socket.send(JSON.stringify(registration));
+        if (this.script.commandBeforeSynchronization === true) {
+          socket.send(
+            JSON.stringify({
+              ...this.envelope('execution.cancelCommand', {
+                reason: 'user',
+                overridesIdleRequirement: false
+              }),
+              messageId: 'early-command',
+              requestId: 'req-1'
+            })
+          );
+        }
         if (envelope.type === 'runtime.resume' && this.script.withholdResumeAck !== true) {
           socket.send(
             JSON.stringify(
@@ -191,6 +213,8 @@ export class FakeRuntimeServer {
         }
         return;
       }
+
+      if (envelope.type === 'runtime.heartbeat' && this.script.withholdHeartbeatResponse === true) return;
 
       if (this.script.withholdAcceptance !== true) {
         socket.send(

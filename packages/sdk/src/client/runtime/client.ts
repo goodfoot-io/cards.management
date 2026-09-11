@@ -6,13 +6,16 @@ import type {
   RuntimeMessageType
 } from '../../protocol/types/index.js';
 import {
+  authorizeMessage,
   deliveryClassFor,
   parseEnvelope,
   RUNTIME_MESSAGE_CONTRACTS,
   RUNTIME_PROTOCOL_VERSION,
   registrationOutcomeSchema
 } from '../../protocol/types/index.js';
+import { DEFAULT_BACKOFF_POLICY, nextBackoffDelayMs } from './backoff.js';
 import { buildHandshakeRequest } from './handshake.js';
+import { DEFAULT_HEARTBEAT_POLICY } from './heartbeat.js';
 import type { ClientOutbox } from './outbox/index.js';
 import { reconcileOutboxOnStartup } from './outbox/index.js';
 import { collectOutstandingMessageIds, synchronize } from './synchronization.js';
@@ -21,6 +24,7 @@ import type {
   OutboundMessage,
   RuntimeClient,
   RuntimeClientOptions,
+  RuntimeInboundMessageType,
   SendOutcome,
   SynchronizationReport
 } from './types.js';
@@ -107,6 +111,15 @@ class RuntimeClientImpl implements RuntimeClient {
   private synchronization: SynchronizationReport | null = null;
   private hasRecovered = false;
   private readonly waiters = new Set<PendingFrame>();
+  private readonly deliveredMessageIds = new Set<string>();
+  private readonly queuedInbound = new Map<WebSocket, RuntimeEnvelope<RuntimeInboundMessageType>[]>();
+  private connectInFlight: Promise<ConnectResult> | null = null;
+  private connectAbort: AbortController | null = null;
+  private lifecycleAbort: AbortController | null = null;
+  private lifecyclePromise: Promise<void> | null = null;
+  private heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastInboundAt = 0;
+  private heartbeatSentAt: number | null = null;
 
   constructor(options: RuntimeClientOptions) {
     this.options = options;
@@ -121,12 +134,29 @@ class RuntimeClientImpl implements RuntimeClient {
   }
 
   async connect(): Promise<ConnectResult> {
+    if (this.connectInFlight !== null) return this.connectInFlight;
+    const controller = new AbortController();
+    this.connectAbort = controller;
+    const attempt = this.performConnect(controller.signal);
+    this.connectInFlight = attempt;
+    try {
+      return await attempt;
+    } finally {
+      if (this.connectInFlight === attempt) this.connectInFlight = null;
+      if (this.connectAbort === controller) this.connectAbort = null;
+    }
+  }
+
+  private async performConnect(signal: AbortSignal): Promise<ConnectResult> {
     if (this.currentState === 'fenced') {
       return { status: 'unavailable', detail: 'connection is fenced under this generation' };
     }
     this.currentState = 'connecting';
 
-    const target = await this.options.discover();
+    const target = await Promise.race([
+      this.options.discover(),
+      new Promise<null>((resolve) => signal.addEventListener('abort', () => resolve(null), { once: true }))
+    ]);
     if (target === null) {
       this.currentState = 'disconnected';
       return { status: 'unavailable', detail: 'no runtime endpoint was discovered' };
@@ -135,7 +165,10 @@ class RuntimeClientImpl implements RuntimeClient {
     const request = buildHandshakeRequest(target, this.options.credential);
     const Socket = globalThis.WebSocket as unknown as SocketFactory;
     const socket = new Socket(request.url, { headers: request.headers });
+    signal.addEventListener('abort', () => socket.close(), { once: true });
+    const previousSocket = this.socket;
     this.socket = socket;
+    if (previousSocket !== null && previousSocket.readyState <= 1) previousSocket.close(1000, 'superseded locally');
     this.currentState = 'authenticating';
 
     const outstanding = await collectOutstandingMessageIds(this.options.outbox, this.executionId());
@@ -166,15 +199,34 @@ class RuntimeClientImpl implements RuntimeClient {
 
     this.synchronization = synchronization;
     this.currentState = 'connected';
+    this.flushInbound(socket);
     return { status: 'connected', generation: registration.generation, resumed, synchronization };
   }
 
   async start(): Promise<ConnectResult> {
-    throw new Error('Not Implemented');
+    if (this.lifecycleAbort !== null) {
+      return this.connectedResult();
+    }
+    const controller = new AbortController();
+    this.lifecycleAbort = controller;
+    const first = await this.connect();
+    if (controller.signal.aborted) return first;
+    if (first.status === 'connected') this.startHeartbeat(this.socket);
+    this.lifecyclePromise = this.maintainConnections(controller.signal);
+    return first;
   }
 
   async stop(): Promise<void> {
-    throw new Error('Not Implemented');
+    const controller = this.lifecycleAbort;
+    this.lifecycleAbort = null;
+    controller?.abort();
+    this.connectAbort?.abort();
+    this.stopHeartbeat();
+    this.closeSocket();
+    await this.lifecyclePromise;
+    this.lifecyclePromise = null;
+    this.synchronization = null;
+    if (this.currentState !== 'fenced') this.currentState = 'disconnected';
   }
 
   async send<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<SendOutcome> {
@@ -207,11 +259,7 @@ class RuntimeClientImpl implements RuntimeClient {
   }
 
   async close(): Promise<void> {
-    this.closeSocket();
-    this.synchronization = null;
-    if (this.currentState !== 'fenced') {
-      this.currentState = 'disconnected';
-    }
+    await this.stop();
   }
 
   private closeSocket(): void {
@@ -363,17 +411,34 @@ class RuntimeClientImpl implements RuntimeClient {
 
   private attachFrameRouter(socket: WebSocket): void {
     socket.addEventListener('message', (event: MessageEvent) => {
+      const frame = String(event.data);
       let envelope: RuntimeEnvelope;
       try {
-        envelope = parseEnvelope(JSON.parse(String(event.data)));
+        envelope = parseEnvelope(JSON.parse(frame));
       } catch {
         return;
       }
+      const authorization = authorizeMessage(envelope, {
+        authenticatedRole: 'server',
+        authenticatedProducerId: envelope.producer.producerId,
+        peerDirection: 'server-to-client',
+        admittedScope: this.options.identity.scope,
+        currentOwnership: this.options.identity.ownership,
+        executionAdmitted: true,
+        frameBytes: Buffer.byteLength(frame, 'utf8')
+      });
+      if (!authorization.authorized || socket !== this.socket) return;
+      this.lastInboundAt = Date.now();
+      this.heartbeatSentAt = null;
       for (const waiter of [...this.waiters]) {
         if (waiter.socket === socket && waiter.matches(envelope)) {
           this.waiters.delete(waiter);
           waiter.settle(envelope);
         }
+      }
+      if (this.isInboundCommand(envelope)) {
+        if (this.currentState === 'connected') this.deliverInbound(socket, envelope);
+        else this.queuedInbound.set(socket, [...(this.queuedInbound.get(socket) ?? []), envelope]);
       }
     });
     socket.addEventListener('close', () => {
@@ -386,6 +451,8 @@ class RuntimeClientImpl implements RuntimeClient {
       if (this.currentState === 'connected') {
         this.currentState = 'disconnected';
       }
+      this.queuedInbound.delete(socket);
+      if (socket === this.socket) this.stopHeartbeat();
     });
   }
 
@@ -480,6 +547,125 @@ class RuntimeClientImpl implements RuntimeClient {
       this.options.authorities
     );
     return { ...report, reconciliation };
+  }
+
+  private connectedResult(): ConnectResult {
+    if (this.currentState === 'connected' && this.currentGeneration !== null && this.synchronization !== null) {
+      return {
+        status: 'connected',
+        generation: this.currentGeneration,
+        resumed: true,
+        synchronization: this.synchronization
+      };
+    }
+    return { status: 'unavailable', detail: 'runtime client lifecycle is already started' };
+  }
+
+  private async maintainConnections(signal: AbortSignal): Promise<void> {
+    let retry = 0;
+    while (!signal.aborted && this.currentState !== 'fenced') {
+      const socket = this.socket;
+      if (this.currentState === 'connected' && socket !== null) {
+        retry = 0;
+        await this.waitForSocketClose(socket, signal);
+        if (signal.aborted) return;
+      }
+      await this.delay(nextBackoffDelayMs(retry, this.options.backoff ?? DEFAULT_BACKOFF_POLICY), signal);
+      if (signal.aborted) return;
+      retry += 1;
+      const result = await this.connect();
+      if (signal.aborted) return;
+      if (result.status === 'connected') {
+        retry = 0;
+        this.startHeartbeat(this.socket);
+      } else if (result.status === 'refused') {
+        return;
+      }
+    }
+  }
+
+  private waitForSocketClose(socket: WebSocket, signal: AbortSignal): Promise<void> {
+    if (socket !== this.socket || socket.readyState >= 2) return Promise.resolve();
+    return new Promise((resolve) => {
+      const done = (): void => {
+        socket.removeEventListener('close', done);
+        signal.removeEventListener('abort', done);
+        resolve();
+      };
+      socket.addEventListener('close', done, { once: true });
+      signal.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  private delay(milliseconds: number, signal: AbortSignal): Promise<void> {
+    if (signal.aborted) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(done, milliseconds);
+      function done(): void {
+        clearTimeout(timer);
+        signal.removeEventListener('abort', done);
+        resolve();
+      }
+      signal.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  private startHeartbeat(socket: WebSocket | null): void {
+    this.stopHeartbeat();
+    if (socket === null || this.lifecycleAbort === null) return;
+    const policy = this.options.heartbeat ?? DEFAULT_HEARTBEAT_POLICY;
+    this.lastInboundAt = Date.now();
+    const tick = (): void => {
+      if (this.lifecycleAbort === null || socket !== this.socket || this.currentState !== 'connected') return;
+      const now = Date.now();
+      if (this.heartbeatSentAt !== null && now - this.heartbeatSentAt >= policy.intervalMs * policy.missedLimit) {
+        socket.close(4000, 'heartbeat-expired');
+        return;
+      }
+      if (this.heartbeatSentAt === null && now - this.lastInboundAt >= policy.intervalMs) {
+        this.heartbeatSentAt = now;
+        socket.send(
+          JSON.stringify(
+            this.envelopeFor({
+              type: 'runtime.heartbeat',
+              payload: { sentAt: new Date(now).toISOString() },
+              messageId: `heartbeat-${now}`,
+              execution: null
+            })
+          )
+        );
+      }
+      this.heartbeatTimer = setTimeout(tick, policy.intervalMs);
+    };
+    this.heartbeatTimer = setTimeout(tick, policy.intervalMs);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer !== null) clearTimeout(this.heartbeatTimer);
+    this.heartbeatTimer = null;
+    this.heartbeatSentAt = null;
+  }
+
+  private isInboundCommand(envelope: RuntimeEnvelope): envelope is RuntimeEnvelope<RuntimeInboundMessageType> {
+    return (
+      envelope.type === 'execution.cancelCommand' ||
+      envelope.type === 'execution.switchToInteractiveCommand' ||
+      envelope.type === 'execution.agentShutdownCommand' ||
+      envelope.type === 'execution.executeRequest' ||
+      envelope.type === 'watcher.stopCommand'
+    );
+  }
+
+  private deliverInbound(socket: WebSocket, envelope: RuntimeEnvelope<RuntimeInboundMessageType>): void {
+    if (socket !== this.socket || this.deliveredMessageIds.has(envelope.messageId)) return;
+    this.deliveredMessageIds.add(envelope.messageId);
+    void Promise.resolve(this.options.onMessage(envelope)).catch(() => undefined);
+  }
+
+  private flushInbound(socket: WebSocket): void {
+    const queued = this.queuedInbound.get(socket) ?? [];
+    this.queuedInbound.delete(socket);
+    for (const envelope of queued) this.deliverInbound(socket, envelope);
   }
 
   private executionId(): string {

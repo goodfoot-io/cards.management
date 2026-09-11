@@ -26,6 +26,7 @@ import {
   type RuntimeCredentialFile,
   runtimeCredentialFileSchema
 } from '../../protocol/types/index.js';
+import { createRuntimeClient } from './client.js';
 import type { RuntimeClient, RuntimeClientOptions } from './types.js';
 
 function assertProtectedDirectory(path: string): void {
@@ -172,9 +173,22 @@ export function loadRuntimeCredential(role: ChildRuntimeCredentialRole, path?: s
  * Builds a runtime client wholly from one protected role handoff plus caller-owned services.
  * @param options - Explicit role, optional file path, and caller-owned transport dependencies.
  * @returns A disconnected runtime client ready to start.
- * @throws Until the bootstrap implementation is completed after contract approval.
  */
 export function createRuntimeClientFromCredentialFile(options: RuntimeClientBootstrapOptions): RuntimeClient {
-  void options;
-  throw new Error('Not Implemented');
+  const { role, credentialFilePath, ...services } = options;
+  const loaded = loadRuntimeCredential(role, credentialFilePath);
+  return createRuntimeClient({
+    ...services,
+    identity: {
+      subject: { kind: 'execution', executionId: loaded.execution.executionId },
+      scope: loaded.scope,
+      producer: { role, producerId: loaded.credential.producerId },
+      ownership: loaded.ownership
+    },
+    credential: {
+      requestId: loaded.credential.requestId,
+      credentialId: loaded.credential.credentialId,
+      secret: loaded.credential.secret
+    }
+  });
 }

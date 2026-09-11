@@ -323,20 +323,36 @@ describe('closing', () => {
 });
 
 describe('inbound commands and owned lifecycle', () => {
-  it.skip('delivers a typed server command only after registration and synchronization', async () => {
-    server = await FakeRuntimeServer.start();
+  it('delivers a typed server command only after registration and synchronization', async () => {
+    server = await FakeRuntimeServer.start({ commandBeforeSynchronization: true });
     const delivered: string[] = [];
     client = createRuntimeClient(
       optionsFor(server, { onMessage: (envelope) => void delivered.push(envelope.messageId) })
     );
 
     await client.connect();
-    expect(delivered).toEqual([]);
+    expect(delivered).toEqual(['early-command']);
     server.sendCommand('command-1');
-    await vi.waitFor(() => expect(delivered).toEqual(['command-1']));
+    await vi.waitFor(() => expect(delivered).toEqual(['early-command', 'command-1']));
   });
 
-  it.skip('does not expose registration, resume acknowledgments, or receipts as commands', async () => {
+  it('rejects a server command whose admitted scope or ownership is not authorized', async () => {
+    server = await FakeRuntimeServer.start();
+    const delivered: string[] = [];
+    client = createRuntimeClient(
+      optionsFor(server, { onMessage: (envelope) => void delivered.push(envelope.messageId) })
+    );
+    await client.connect();
+
+    server.sendCommand('wrong-scope', undefined, {
+      scope: { repositoryId: 'other', workspacePath: '/elsewhere', cardId: 'main-other' }
+    });
+    server.sendCommand('stale-owner', undefined, { ownership: { ownerId: 'server-a', generation: 0 } });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(delivered).toEqual([]);
+  });
+
+  it('does not expose registration, resume acknowledgments, or receipts as commands', async () => {
     server = await FakeRuntimeServer.start();
     const delivered: string[] = [];
     client = createRuntimeClient(
@@ -349,7 +365,7 @@ describe('inbound commands and owned lifecycle', () => {
     expect(delivered).toEqual([]);
   });
 
-  it.skip('fences stale-socket commands and deduplicates a replayed command messageId', async () => {
+  it('fences stale-socket commands and deduplicates a replayed command messageId', async () => {
     server = await FakeRuntimeServer.start();
     const delivered: string[] = [];
     client = createRuntimeClient(
@@ -365,7 +381,7 @@ describe('inbound commands and owned lifecycle', () => {
     await vi.waitFor(() => expect(delivered).toEqual(['command-1']));
   });
 
-  it.skip('rediscovers and reconnects after transport loss until explicitly stopped', async () => {
+  it('rediscovers and reconnects after transport loss until explicitly stopped', async () => {
     server = await FakeRuntimeServer.start();
     let discoveries = 0;
     client = createRuntimeClient(
@@ -385,5 +401,34 @@ describe('inbound commands and owned lifecycle', () => {
     const stoppedAt = discoveries;
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(discoveries).toBe(stoppedAt);
+  });
+
+  it('reconnects a silent heartbeat transport without changing execution lifecycle', async () => {
+    server = await FakeRuntimeServer.start({ withholdHeartbeatResponse: true });
+    let discoveries = 0;
+    client = createRuntimeClient(
+      optionsFor(server, {
+        discover: async () => {
+          discoveries += 1;
+          return { host: '127.0.0.1', port: server?.port ?? 0, accessToken: 'token-1' };
+        },
+        backoff: { initialMs: 1, capMs: 2, jitter: () => 0 },
+        heartbeat: { intervalMs: 5, missedLimit: 2 }
+      })
+    );
+
+    await client.start();
+    await vi.waitFor(() => expect(discoveries).toBeGreaterThan(1));
+    expect(client.state).toBe('connected');
+    await client.stop();
+  });
+
+  it('serializes concurrent starts into one connection attempt', async () => {
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server));
+
+    await Promise.all([client.start(), client.start()]);
+
+    expect(server.handshakes).toHaveLength(1);
   });
 });

@@ -154,7 +154,7 @@ describe('runtime credential file', () => {
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/regular file/i);
   });
 
-  it.skip('bootstraps complete client identity and authentication from one explicit child role', async () => {
+  it('bootstraps complete client identity and authentication from one explicit child role', async () => {
     writeRuntimeCredentialFile(credentialPath, FILE);
     const server = await FakeRuntimeServer.start();
     const client = createRuntimeClientFromCredentialFile({
