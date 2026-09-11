@@ -15,7 +15,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 type TerminationResult = 'graceful' | 'forced' | 'failed';
 type SignalTree = (child: ChildProcess, signal: NodeJS.Signals) => void | Promise<void>;
 type TerminationController = {
-  terminate(reason: 'cancel' | 'shutdown'): Promise<TerminationResult>;
+  terminate(): Promise<TerminationResult>;
 };
 
 const children = new Set<ChildProcess>();
