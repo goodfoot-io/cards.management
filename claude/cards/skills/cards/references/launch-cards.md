@@ -26,11 +26,28 @@ ordering, not a DAG solve:
 
 ## 3. Launch Each Card and Wait for `needs_review`
 
+By default, omit `--variable-group`; the launch then uses the normal variable-group
+selection persisted in the webview. When the caller requests specific groups for a
+dispatch, discover safe summaries and their IDs first:
+
+```bash
+cards variable-group list [--workspace-path <path>] [--jsonpath <expr>]
+```
+
+The summaries contain only `id`, `name`, optional `description`, `variableCount`,
+and `secretCount`; variable values and secrets are never returned. Append one
+`--variable-group <id>` per requested group, preserving the caller's order:
+
 For each card ID in order:
 
 ```bash
 cards <id> action launch --exit-when-done
+cards <id> action launch --exit-when-done --variable-group <id-a> --variable-group <id-b>
 ```
+
+Use the second form only when groups were explicitly selected for that card. It
+attaches exactly those IDs to that dispatch and does not mutate the webview's
+persisted toggles, so selections do not carry into later launches automatically.
 
 - This call returns immediately with `{"success": true|false}` — it does **not**
   block until the launched work finishes, regardless of which flags are passed.

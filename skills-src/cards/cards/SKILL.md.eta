@@ -54,7 +54,7 @@ After composing a complex or uncertain card — a deep card, a design touching s
 
 ## `cards` CLI
 
-`cards` is a plugin-provided executable on `PATH` covering get, create, list, search, attach, action, and watch. Invoke it directly as a bare command.
+`cards` is a plugin-provided executable on `PATH` covering get, create, list, search, variable-group discovery, attach, action, and watch. Invoke it directly as a bare command.
 
 **Get a card** — Fetch card details by ID. The response includes `repositoryPath` for filesystem access:
 ```
@@ -131,15 +131,26 @@ Search responses are flattened — gates are top-level booleans and commit field
 
 Options: `--workspace-path <path>`, `--status <status>`, `--limit <n>`, `--offset <n>`
 
+**List variable groups** — Discover the groups available for action dispatches in a workspace:
+```
+cards variable-group list
+cards variable-group list --workspace-path <path>
+cards variable-group list --jsonpath <expr>
+```
+Each summary contains `id`, `name`, optional `description`, `variableCount`, and `secretCount`. The command never returns variable values or secrets. Use the group `id`, not its display name, when launching an action.
+
 **Execute an action** — Execute an action on a card via the server relay:
 ```
 cards <card-id> action <action-id>
 cards <card-id> action <action-id> --background
 cards <card-id> action <action-id> --background --exit-when-done
+cards <card-id> action <action-id> --variable-group <id> --variable-group <id>
 ```
 The action ID is the lowercase identifier from the action definition (e.g., `launch`). Requires a connected extension client.
 
 Actions run interactively by default. `--background` is rejected with a 400 error for an action that does not support background mode. `--exit-when-done` signals the agent to exit cleanly once the action completes rather than leaving the session open.
+
+`--variable-group` is ordered and repeatable. When supplied, the action receives exactly those group IDs for that dispatch only; it does not change the variable-group toggles persisted in the webview. When the flag is omitted, dispatch retains the normal persisted variable-group selection.
 
 **Signal shutdown** — From inside a running action, tell Cards the agent reached a terminal state (after a merge, after recording a blocker, after all tasks complete). Check `EXIT_WHEN_DONE` first; if true, finish or roll back in-progress commits, then:
 ```
@@ -159,7 +170,7 @@ Blocks until the first eligible commit, outputs formatted commit details, attrib
 
 The CLI auto-detects the workspace from `pwd`. Cards are scoped to the branch you're working on — in a worktree, the card belongs to that worktree's branch (e.g., branch `feature` -> prefix `feature-`).
 
-Use `--workspace-path` only if the user explicitly requests creating a card in a different repository.
+Use `--workspace-path` only if the user explicitly requests operating on a different repository, including variable-group discovery for that repository.
 
 ## Card Repository
 
