@@ -8,6 +8,7 @@
 
 import type {
   ActionResult,
+  AddBranchResponse,
   Card,
   CodingAgentId,
   CompareRequest,
@@ -16,6 +17,7 @@ import type {
   ExecuteActionRequest,
   ExecutionMode,
   HttpClient,
+  RemoveBranchResponse,
   StreamMeta,
   TimelineItem,
   VariableGroupsResponse
@@ -802,13 +804,20 @@ export class CardsClient {
    * @param options.sessionId - Claude Code session ID forwarded as `X-Cards-Session-Id` header so the card repo post-commit hook can attribute the commit.
    * @returns Promise resolving when the branch is added.
    */
-  async addBranch(cardId: string, data: AddBranchRequest, options?: { sessionId?: string }): Promise<void> {
+  async addBranch(
+    cardId: string,
+    data: AddBranchRequest,
+    options?: { sessionId?: string }
+  ): Promise<AddBranchResponse> {
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches`);
     const headers: Record<string, string> = {};
     if (options?.sessionId) {
       headers['X-Cards-Session-Id'] = options.sessionId;
     }
-    await this.request(() => this.getHttpClient().post<unknown>(url, data, { headers }), false);
+    void url;
+    void headers;
+    void data;
+    throw new Error('Not Implemented');
   }
 
   /**
@@ -818,15 +827,24 @@ export class CardsClient {
    * @param name - Branch name to remove (will be URL-encoded).
    * @param options - Optional parameters.
    * @param options.sessionId - Claude Code session ID forwarded as `X-Cards-Session-Id` header so the card repo post-commit hook can attribute the commit.
+   * @param options.expectedRevision - Delete only the registration with this opaque revision; preserve a newer registration.
    * @returns Promise resolving when the branch is removed.
    */
-  async removeBranch(cardId: string, name: string, options?: { sessionId?: string }): Promise<void> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(name)}`);
+  async removeBranch(
+    cardId: string,
+    name: string,
+    options?: { sessionId?: string; expectedRevision?: string }
+  ): Promise<RemoveBranchResponse> {
+    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(name)}`, {
+      expectedRevision: options?.expectedRevision
+    });
     const headers: Record<string, string> = {};
     if (options?.sessionId) {
       headers['X-Cards-Session-Id'] = options.sessionId;
     }
-    return this.request(() => this.getHttpClient().delete(url, { headers }));
+    void url;
+    void headers;
+    throw new Error('Not Implemented');
   }
 
   // --- Tag Operations ---

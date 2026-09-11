@@ -44,8 +44,12 @@ export type {
 // --- Branch Types ---
 export type {
   AddBranchRequest,
+  AddBranchResponse,
   BranchesResponse,
   BranchInfo,
+  BranchRegistrationIntent,
+  RemoveBranchRequest,
+  RemoveBranchResponse,
   WorkspaceBranch
 } from './branch.js';
 export {

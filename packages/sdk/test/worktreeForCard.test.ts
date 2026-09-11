@@ -285,6 +285,7 @@ describe('createWorktreeForCard', () => {
     const client = makeClient({
       addBranch: async (...args) => {
         addBranchArgs.push(args as Parameters<CardsClient['addBranch']>);
+        return { outcome: 'upserted', revision: 'test-revision' };
       }
     });
 
@@ -416,6 +417,7 @@ describe('removeWorktreeForCard', () => {
     const client = makeClient({
       removeBranch: async (...args) => {
         removeBranchArgs.push(args as Parameters<CardsClient['removeBranch']>);
+        return { outcome: 'removed' };
       }
     });
 
@@ -438,6 +440,7 @@ describe('removeWorktreeForCard', () => {
     const client = makeClient({
       removeBranch: async () => {
         callOrder.push('removeBranch');
+        return { outcome: 'removed' };
       }
     });
 

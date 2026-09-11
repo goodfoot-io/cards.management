@@ -47,6 +47,8 @@ export const COMMITS_DIR = 'commits';
  * the worktree is moved or deleted outside of the cards system.
  */
 export interface WorkspaceBranch {
+  /** Opaque ownership token rotated by every successful registration write. */
+  revision: string;
   /**
    * Optional absolute path to worktree directory (machine-specific, may be stale).
    * This path is advisory only and should be validated before use.
@@ -171,6 +173,11 @@ export interface BranchesResponse {
  */
 export interface AddBranchRequest {
   /**
+   * Registration write semantics. `create` requires the name to be absent;
+   * omitted intent retains the historical upsert behavior.
+   */
+  intent?: BranchRegistrationIntent;
+  /**
    * Branch name to track.
    * Must be a valid Git ref name (may contain slashes).
    */
@@ -187,4 +194,26 @@ export interface AddBranchRequest {
    * Used as the base ref for comparisons.
    */
   parentBranch: string;
+}
+
+/** Controls whether branch registration may replace an existing record. */
+export type BranchRegistrationIntent = 'create' | 'upsert';
+
+/** Successful response from POST /cards/:id/branches. */
+export interface AddBranchResponse {
+  outcome: 'created' | 'upserted';
+  /** Opaque token identifying the exact persisted registration version. */
+  revision: string;
+}
+
+/** Optional query contract for DELETE /cards/:id/branches/:branchName. */
+export interface RemoveBranchRequest {
+  /** Delete only when the persisted registration still owns this token. */
+  expectedRevision?: string;
+}
+
+/** Successful response from branch removal. */
+export interface RemoveBranchResponse {
+  /** `preserved` means a revision mismatch left the current record untouched. */
+  outcome: 'removed' | 'preserved';
 }
