@@ -45,6 +45,7 @@ vi.mock('node:fs/promises', () => ({
   mkdtemp: vi.fn(),
   readFile: vi.fn(),
   readdir: vi.fn(),
+  realpath: vi.fn(),
   rename: vi.fn(),
   rm: vi.fn(),
   stat: vi.fn(),
@@ -80,9 +81,45 @@ vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
 
 const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
 const AGENT = 'antigravity-cli';
+const ANTIGRAVITY_HOME = '/test/antigravity-cli';
 const _NOW_MS = 1_700_000_000_000;
 
 const originalFetch = globalThis.fetch;
+
+/**
+ * The Antigravity profile these branches start from: a project the user already
+ * approved, whose freshly created card worktree is the checkout under test. The
+ * checkout is already recorded as trusted, so workspace-trust preparation is a
+ * read-only pass here and these tests keep asserting launch mechanics.
+ */
+const PROFILE_SETTINGS = JSON.stringify({
+  toolPermission: 'always-proceed',
+  trustedWorkspaces: [WORKTREE_PATH]
+});
+
+/**
+ * Serves what mocked `fs.readFile` calls should see: the Antigravity profile,
+ * lifecycle ready markers, and ENOENT for anything else.
+ *
+ * @param path - Path the launcher tried to read.
+ * @returns The file contents that path should present.
+ * @throws {NodeJS.ErrnoException} When the path should not exist.
+ */
+function readMockFile(path: string): string {
+  if (path === `${ANTIGRAVITY_HOME}/settings.json`) {
+    return PROFILE_SETTINGS;
+  }
+  if (path.endsWith('/conv-1.ready')) {
+    const sessionId = path.split('/').at(-2) as string;
+    return JSON.stringify({
+      conversationId: 'conv-1',
+      sessionId,
+      transcriptPath: '/home/user/.gemini/antigravity-cli/conversations/conv-1.db',
+      modelName: 'gemini-3-pro'
+    });
+  }
+  throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+}
 
 /**
  * Encodes a grant payload the way the extension's single writer helper does:
@@ -118,6 +155,7 @@ beforeEach(async () => {
   process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
   process.env['API_TEST_MODE'] = '1';
   process.env['CARDS_AGENT_LAUNCH_GRANT'] = validGrant();
+  process.env['ANTIGRAVITY_HOME'] = ANTIGRAVITY_HOME;
   delete process.env['CARDS_HOME'];
   delete process.env['EXIT_WHEN_DONE'];
 
@@ -135,6 +173,10 @@ beforeEach(async () => {
     if (typeof cb === 'function') {
       if (key.startsWith('git rev-parse --abbrev-ref HEAD')) {
         cb(null, { stdout: 'main\n', stderr: '' });
+      } else if (key.startsWith('git rev-parse --git-common-dir')) {
+        // Repository identity for the workspace-trust preparation: the card
+        // worktree and the trusted project root report the same common dir.
+        cb(null, { stdout: '/test/workspace/.git\n', stderr: '' });
       } else {
         cb(new Error(`mock: unhandled command: ${key}`));
       }
@@ -183,19 +225,10 @@ beforeEach(async () => {
 
   const enoent = Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
   vi.mocked(fs.access).mockResolvedValue(undefined);
-  vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
-    const path = String(filePath);
-    if (path.endsWith('/conv-1.ready')) {
-      const sessionId = path.split('/').at(-2) as string;
-      return JSON.stringify({
-        conversationId: 'conv-1',
-        sessionId,
-        transcriptPath: '/home/user/.gemini/antigravity-cli/conversations/conv-1.db',
-        modelName: 'gemini-3-pro'
-      });
-    }
-    throw enoent;
-  });
+  vi.mocked(fs.readFile).mockImplementation(async (filePath) => readMockFile(String(filePath)));
+  // Physical-path resolution is identity in these tests: the fixture paths are
+  // already physical, and only the workspace-trust preparation uses realpath.
+  vi.mocked(fs.realpath).mockImplementation(async (filePath) => String(filePath));
   vi.mocked(fs.mkdir).mockResolvedValue(undefined);
   vi.mocked(fs.mkdtemp).mockImplementation(async (prefix: string | URL) => `${String(prefix)}XXXXXX`);
   vi.mocked(fs.cp).mockResolvedValue(undefined);
@@ -222,6 +255,7 @@ afterEach(() => {
   delete process.env['CARDS_AGENT_LAUNCH_GRANT'];
   delete process.env['CARDS_AGENT_MODEL'];
   delete process.env['CARDS_AGENT_EFFORT'];
+  delete process.env['ANTIGRAVITY_HOME'];
 });
 
 function createMockContext(): ActionContext {
@@ -510,7 +544,11 @@ describe('launch action — antigravity branch', () => {
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
     vi.mocked(fs.readdir).mockResolvedValue(['conversation.failure'] as never);
-    vi.mocked(fs.readFile).mockResolvedValue(JSON.stringify({ stage: 'watcher-setup', reason: 'attach failed' }));
+    vi.mocked(fs.readFile).mockImplementation(async (filePath) => {
+      const path = String(filePath);
+      if (path === `${ANTIGRAVITY_HOME}/settings.json`) return PROFILE_SETTINGS;
+      return JSON.stringify({ stage: 'watcher-setup', reason: 'attach failed' });
+    });
 
     const action = (await import('../src/actions/launch.js')).default;
     const promise = action(baseInput({ executionMode }), createMockContext());

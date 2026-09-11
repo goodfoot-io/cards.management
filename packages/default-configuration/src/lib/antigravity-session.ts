@@ -28,6 +28,7 @@ import {
   type SqlitePollFinalizationOutcome
 } from '@cards.management/sdk/transcript-sync';
 import { createAntigravityTerminationController } from './antigravity-termination.js';
+import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
 import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import {
   cleanupMergedBranches,
@@ -118,9 +119,10 @@ export class AntigravityStreamError extends Error {
 }
 
 /**
- * Named failure reasons for a completed-but-unsuccessful Antigravity launch.
- * Exit zero without the expected final record is failure, per the action
- * matrix lifecycle.
+ * Named failure reasons for an unsuccessful Antigravity launch. Exit zero
+ * without the expected final record is failure, per the action matrix
+ * lifecycle; a refused launch — one that never reached a session — is failure
+ * too, and names its refusal here.
  */
 export type AntigravitySessionFailureReason =
   | 'spawn-failure'
@@ -131,7 +133,8 @@ export type AntigravitySessionFailureReason =
   | 'process-tree-drain-failed'
   | 'transcript-finalization-degraded'
   | 'missing-final-record'
-  | 'unsuccessful-final-record';
+  | 'unsuccessful-final-record'
+  | 'workspace-trust-unresolved';
 
 /**
  * Error thrown when a launched Antigravity session ends without a successful
@@ -363,7 +366,8 @@ export function parseAntigravityFinalRecord(stdout: string): AntigravityFinalRec
  * @param options - Session-specific parameters.
  * @returns Resolves after the child exits and post-exit settle/cleanup ran.
  * @throws {LaunchGrantRefusalError} When `CARDS_AGENT_LAUNCH_GRANT` is absent, malformed, wrong-versioned, agent-mismatched, or expired — before any client, worktree, or session state is created.
- * @throws {AntigravitySessionFailureError} When a background launch ends without a successful structured outcome (spawn failure, nonzero exit, signal termination, missing final record, unsuccessful final record) or an interactive launch fails to spawn.
+ * @throws {AntigravitySessionFailureError} When a background launch ends without a successful structured outcome (spawn failure, nonzero exit, signal termination, missing final record, unsuccessful final record), when an interactive launch fails to spawn, or when a background launch cannot carry the authorized project's workspace trust into the checkout.
+ * @throws {AntigravityTrustError} When the native Antigravity profile exists but its workspace trust cannot be read or safely updated.
  * @throws {AntigravityStreamError} When the background stdout stream carries a non-JSON, non-blank line.
  * @throws {Error} When Cards API discovery fails or the worktree settle phase rejected.
  */
@@ -412,6 +416,43 @@ export async function spawnAntigravitySession(
   // an agent process; a rejected settle removes the worktree and must prevent
   // spawn entirely.
   if (settle) await settle;
+
+  // Carry the already authorized project's native folder trust into the exact
+  // checkout before any agent process is exposed to it. `agy` raises its native
+  // folder-trust dialog for a directory it has not been told to trust, and a
+  // freshly created card worktree always is one — even though it shares its
+  // repository identity with the approved project. The settle above removes the
+  // worktree when it rejects, so a failed worktree preparation never reaches
+  // this step.
+  const workspaceTrust = await prepareAntigravityWorkspaceTrust({
+    checkoutPath: cwd,
+    projectRoot: input.repoRoot,
+    settingsPath: resolveAntigravitySettingsPath()
+  });
+  if (workspaceTrust.kind === 'no-established-consent') {
+    if (!isInteractive) {
+      // A terminal can still answer the native dialog, so interactive launches
+      // keep the native consent as their fallback. A background launch has
+      // nobody to ask: the unresolved requirement is named here instead of
+      // surfacing later as an unexplained missing final record.
+      throw new AntigravitySessionFailureError(
+        'workspace-trust-unresolved',
+        `${input.actionName} action failed: Antigravity workspace trust for ${cwd} could not be carried ` +
+          `from the authorized project ${input.repoRoot} (${workspaceTrust.reason}), and a background ` +
+          'launch cannot answer the native folder-trust dialog'
+      );
+    }
+    context.logger.warn('Antigravity workspace trust not carried — the native folder-trust dialog will ask', {
+      cwd,
+      reason: workspaceTrust.reason
+    });
+  } else {
+    context.logger.info('Antigravity workspace trust prepared', {
+      cwd,
+      trustedPath: workspaceTrust.trustedPath,
+      outcome: workspaceTrust.kind
+    });
+  }
 
   const args = buildAntigravityArgs(prompt, input.executionMode, {
     model: options.model ?? process.env[CARDS_AGENT_MODEL_ENV_VAR],

@@ -16,19 +16,35 @@
  * directory, so the profile bytes the assertions inspect are the bytes the
  * launcher produced.
  *
+ * Beyond the launcher-level reproduction, the module's own contract is checked
+ * directly against injected `settingsPath`s: physical-path recording and
+ * idempotency, symlinked spellings, preservation of unrelated keys and entry
+ * order, concurrent preparations, fail-closed refusal of malformed documents,
+ * and consent that repository identity alone can establish. Rename-based atomic
+ * writes replace the target's inode, so an unchanged inode is positive evidence
+ * that a case performed no write at all.
+ *
  * @summary Tests Antigravity workspace-trust preparation before launch
  */
 
 import type { ChildProcess, SpawnOptions } from 'node:child_process';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { type ActionContext, type ActionInput, Logger } from '@cards.management/sdk/config';
 import { TestGitWorkspace } from '@cards.management/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { spawnAntigravitySession } from '../src/lib/antigravity-session.js';
+import { AntigravitySessionFailureError, spawnAntigravitySession } from '../src/lib/antigravity-session.js';
+import {
+  AntigravityTrustError,
+  type AntigravityTrustOutcome,
+  type AntigravityTrustRequest,
+  prepareAntigravityWorkspaceTrust,
+  resolveAntigravitySettingsPath,
+  resolveDefaultAntigravityHome
+} from '../src/lib/antigravity-workspace-trust.js';
 
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
@@ -107,6 +123,12 @@ let settingsPath: string;
 
 /** Temporary Cards config directory (`CARDS_HOME`) receiving lifecycle markers. */
 let cardsHome: string;
+
+/** Every `agy` spawn the launcher performed during the current test. */
+const agySpawns: SpawnedAgy[] = [];
+
+/** Additional fixture repositories created by a test, destroyed with the scratch directory. */
+const extraWorkspaces: TestGitWorkspace[] = [];
 
 /**
  * Encodes a grant payload the way the extension's single writer helper does:
@@ -216,6 +238,70 @@ async function readTrustedWorkspaces(): Promise<string[]> {
 }
 
 /**
+ * Reads the temporary profile's settings file as raw bytes.
+ *
+ * @returns The exact file contents.
+ */
+async function readSettingsText(): Promise<string> {
+  return await readFile(settingsPath, 'utf-8');
+}
+
+/**
+ * Reads a file's inode number.
+ *
+ * The atomic write replaces its target by renaming a staged file over it, so
+ * every real write yields a new inode: an unchanged inode is positive evidence
+ * that a case performed no write at all.
+ *
+ * @param path - File to stat.
+ * @returns The file's inode number.
+ */
+async function inodeOf(path: string): Promise<bigint> {
+  return (await stat(path)).ino;
+}
+
+/**
+ * Creates a directory alias (a symlinked spelling) for a fixture path.
+ *
+ * @param target - Directory the alias resolves to.
+ * @param name - Alias name inside the temp scratch directory.
+ * @returns Absolute path of the alias.
+ */
+async function createAlias(target: string, name: string): Promise<string> {
+  const aliasPath = join(scratchDir, name);
+  await symlink(target, aliasPath, 'dir');
+  return aliasPath;
+}
+
+/**
+ * Creates an unrelated fixture repository, cleaned up with the scratch directory.
+ *
+ * @returns Physical path of the new repository root.
+ */
+async function createSiblingWorkspace(): Promise<string> {
+  const sibling = new TestGitWorkspace();
+  await sibling.create();
+  extraWorkspaces.push(sibling);
+  return sibling.getPath();
+}
+
+/**
+ * Runs one workspace-trust preparation against the fixture checkout and the
+ * temporary profile.
+ *
+ * @param overrides - Request fields to override.
+ * @returns The preparation outcome.
+ */
+async function prepare(overrides: Partial<AntigravityTrustRequest> = {}): Promise<AntigravityTrustOutcome> {
+  return await prepareAntigravityWorkspaceTrust({
+    checkoutPath,
+    projectRoot: repoRoot,
+    settingsPath,
+    ...overrides
+  });
+}
+
+/**
  * Writes the runtime lifecycle markers a completed Antigravity session leaves
  * for the launcher's positive-evidence gate.
  *
@@ -266,11 +352,13 @@ function armAgySpawn(): Promise<SpawnedAgy> {
       return realSpawn(command, args as string[], options);
     }
     const child = createMockChild();
-    report({
+    const spawned: SpawnedAgy = {
       child,
       options,
       sessionId: String((options.env as Record<string, string | undefined>)['ANTIGRAVITY_SESSION_ID'])
-    });
+    };
+    agySpawns.push(spawned);
+    report(spawned);
     return child;
   });
 
@@ -313,6 +401,8 @@ beforeEach(async () => {
   settingsPath = join(antigravityHome, 'settings.json');
   cardsHome = join(scratchDir, 'cards-home');
   await mkdir(antigravityHome, { recursive: true });
+  agySpawns.length = 0;
+  extraWorkspaces.length = 0;
 
   process.env['API_TEST_MODE'] = '1';
   process.env['EXTENSION_PATH'] = '/test/extension';
@@ -358,6 +448,8 @@ afterEach(async () => {
   delete process.env['ANTIGRAVITY_HOME'];
   delete process.env['CARDS_HOME'];
   workspace.destroy();
+  for (const extra of extraWorkspaces) extra.destroy();
+  extraWorkspaces.length = 0;
   await rm(scratchDir, { recursive: true, force: true });
 });
 
@@ -379,5 +471,234 @@ describe('spawnAntigravitySession — workspace trust preparation', () => {
 
     const trusted = await readTrustedWorkspaces();
     expect(trusted).toContain(await realpath(checkoutPath));
+  });
+
+  it('adds no second entry when a later launch reaches the same checkout', async () => {
+    await writeSettings({ toolPermission: 'always-proceed', trustedWorkspaces: [repoRoot] });
+
+    const first = launch(baseInput());
+    const firstAgy = await first.spawned;
+    await writeLifecycleMarkers(firstAgy.sessionId);
+    firstAgy.child.emit('close', 0);
+    await first.done;
+
+    const afterFirstLaunch = await readTrustedWorkspaces();
+    const inode = await inodeOf(settingsPath);
+
+    const second = launch(baseInput());
+    const secondAgy = await second.spawned;
+    await writeLifecycleMarkers(secondAgy.sessionId);
+    secondAgy.child.emit('close', 0);
+    await second.done;
+
+    expect(afterFirstLaunch).toEqual([repoRoot, await realpath(checkoutPath)]);
+    expect(await readTrustedWorkspaces()).toEqual(afterFirstLaunch);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('fails a background launch that cannot carry trust, without spawning or writing the profile', async () => {
+    await writeSettings({ toolPermission: 'always-proceed', trustedWorkspaces: [] });
+    const inode = await inodeOf(settingsPath);
+
+    const failure = await launch(baseInput({ executionMode: 'background' })).done.then(
+      () => undefined,
+      (error: unknown) => error
+    );
+
+    expect(failure).toBeInstanceOf(AntigravitySessionFailureError);
+    const named = failure as AntigravitySessionFailureError;
+    expect(named.reason).toBe('workspace-trust-unresolved');
+    expect(named.message).toContain(checkoutPath);
+    expect(named.message).toContain(repoRoot);
+    expect(named.message).toContain('repository-identity-untrusted');
+    expect(agySpawns).toHaveLength(0);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('lets an interactive launch proceed when trust cannot be carried, leaving the profile untouched', async () => {
+    await writeSettings({ toolPermission: 'always-proceed', trustedWorkspaces: [] });
+    const inode = await inodeOf(settingsPath);
+
+    const run = launch(baseInput());
+    const agy = await run.spawned;
+    await writeLifecycleMarkers(agy.sessionId);
+    agy.child.emit('close', 0);
+    await run.done;
+
+    expect(await readTrustedWorkspaces()).toEqual([]);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('carries no trust when worktree settlement rejects, before any spawn', async () => {
+    await writeSettings({ toolPermission: 'always-proceed', trustedWorkspaces: [repoRoot] });
+    const inode = await inodeOf(settingsPath);
+    const { createWorktree } = await import('@cards.management/sdk/worktree');
+    // The rejection is deliberate, and the launcher consumes it by awaiting
+    // settle; the no-op handler only keeps Node from reporting the rejection as
+    // unhandled in the window before that await is reached.
+    const settle = Promise.reject(new Error('worktree outfit failed'));
+    settle.catch(() => undefined);
+    vi.mocked(createWorktree).mockResolvedValue({ path: checkoutPath, settle });
+
+    await expect(launch(baseInput()).done).rejects.toThrow(/worktree outfit failed/);
+
+    expect(agySpawns).toHaveLength(0);
+    expect(await readTrustedWorkspaces()).toEqual([repoRoot]);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+});
+
+describe('prepareAntigravityWorkspaceTrust — recording', () => {
+  it('records a fresh checkout by its physical path and adds no duplicate on a second run', async () => {
+    await writeSettings({ trustedWorkspaces: [repoRoot] });
+    const physical = await realpath(checkoutPath);
+
+    expect(await prepare()).toEqual({ kind: 'prepared', trustedPath: physical });
+    expect(await readTrustedWorkspaces()).toEqual([repoRoot, physical]);
+
+    const inode = await inodeOf(settingsPath);
+    expect(await prepare()).toEqual({ kind: 'already-trusted', trustedPath: physical });
+    expect(await readTrustedWorkspaces()).toEqual([repoRoot, physical]);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('resolves a symlinked checkout spelling to the physical path and records it once', async () => {
+    await writeSettings({ trustedWorkspaces: [repoRoot] });
+    const alias = await createAlias(checkoutPath, 'checkout-alias');
+    const physical = await realpath(checkoutPath);
+
+    expect(await prepare({ checkoutPath: alias })).toEqual({ kind: 'prepared', trustedPath: physical });
+    expect(await readTrustedWorkspaces()).toEqual([repoRoot, physical]);
+
+    const inode = await inodeOf(settingsPath);
+    expect(await prepare({ checkoutPath: alias })).toEqual({ kind: 'already-trusted', trustedPath: physical });
+    expect(await readTrustedWorkspaces()).toEqual([repoRoot, physical]);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('counts a recorded alias of the physical path as the same entry, without rewriting the spelling', async () => {
+    const alias = await createAlias(checkoutPath, 'recorded-alias');
+    await writeSettings({ trustedWorkspaces: [repoRoot, alias] });
+    const inode = await inodeOf(settingsPath);
+
+    expect(await prepare()).toEqual({ kind: 'already-trusted', trustedPath: await realpath(checkoutPath) });
+    expect(await readTrustedWorkspaces()).toEqual([repoRoot, alias]);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('preserves unrelated keys, existing entries, entry order, and file formatting', async () => {
+    const otherProject = join(scratchDir, 'other-project');
+    const document = {
+      toolPermission: 'always-proceed',
+      dangerously_skip_permissions: false,
+      browser_policy: { allow: ['localhost'] },
+      execution_policy: 'sandboxed',
+      model: 'gemini-3-pro',
+      allowNonWorkspaceAccess: true,
+      customUnknownKey: [1, 'two', { three: true }],
+      trustedWorkspaces: [repoRoot, otherProject]
+    };
+    await writeSettings(document);
+
+    expect(await prepare()).toEqual({ kind: 'prepared', trustedPath: await realpath(checkoutPath) });
+
+    const text = await readSettingsText();
+    expect(text.endsWith('\n')).toBe(true);
+    expect(text).toContain('\n  "toolPermission"');
+    expect(JSON.parse(text)).toEqual({
+      ...document,
+      trustedWorkspaces: [repoRoot, otherProject, await realpath(checkoutPath)]
+    });
+  });
+
+  it('keeps both entries when two preparations run concurrently', async () => {
+    await writeSettings({ trustedWorkspaces: [repoRoot] });
+    const secondCheckout = await workspace.createWorktree('cards/card-123/2');
+    const physicalFirst = await realpath(checkoutPath);
+    const physicalSecond = await realpath(secondCheckout);
+
+    const outcomes = await Promise.all([prepare({ checkoutPath }), prepare({ checkoutPath: secondCheckout })]);
+
+    expect(outcomes).toEqual([
+      { kind: 'prepared', trustedPath: physicalFirst },
+      { kind: 'prepared', trustedPath: physicalSecond }
+    ]);
+    const entries = await readTrustedWorkspaces();
+    expect(entries).toContain(repoRoot);
+    expect(entries.filter((entry) => entry === physicalFirst)).toHaveLength(1);
+    expect(entries.filter((entry) => entry === physicalSecond)).toHaveLength(1);
+  });
+});
+
+describe('prepareAntigravityWorkspaceTrust — refusals', () => {
+  it('fails closed on a malformed or unexpected profile, leaving the file byte-identical', async () => {
+    const documents = [
+      '{ "trustedWorkspaces": [',
+      '[ "not", "an", "object" ]',
+      '{ "trustedWorkspaces": "nope" }',
+      '{ "trustedWorkspaces": [42] }',
+      '{ "trustedWorkspaces": [{}] }'
+    ];
+
+    for (const raw of documents) {
+      await writeFile(settingsPath, raw, 'utf-8');
+      const inode = await inodeOf(settingsPath);
+
+      await expect(prepare()).rejects.toThrow(AntigravityTrustError);
+      await expect(prepare()).rejects.toThrow(settingsPath);
+
+      expect(await readSettingsText()).toBe(raw);
+      expect(await inodeOf(settingsPath)).toBe(inode);
+    }
+  });
+
+  it('reads a profile that records no trust at all as no consent, without adding the key', async () => {
+    const raw = '{ "toolPermission": "always-proceed" }\n';
+    await writeFile(settingsPath, raw, 'utf-8');
+    const inode = await inodeOf(settingsPath);
+
+    expect(await prepare()).toEqual({ kind: 'no-established-consent', reason: 'repository-identity-untrusted' });
+    expect(await readSettingsText()).toBe(raw);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('never treats proximity to a trusted entry as consent', async () => {
+    const sibling = await createSiblingWorkspace();
+    const entries = [
+      sibling,
+      dirname(repoRoot),
+      join(scratchDir, 'never-existed'),
+      'https://github.com/example/project.git'
+    ];
+    await writeSettings({ trustedWorkspaces: entries });
+    const inode = await inodeOf(settingsPath);
+
+    expect(await prepare()).toEqual({ kind: 'no-established-consent', reason: 'repository-identity-untrusted' });
+    expect(await readTrustedWorkspaces()).toEqual(entries);
+    expect(await inodeOf(settingsPath)).toBe(inode);
+  });
+
+  it('reports a missing profile as no established consent and never creates one', async () => {
+    const missing = join(scratchDir, 'absent-profile', 'settings.json');
+
+    await expect(prepare({ settingsPath: missing })).resolves.toEqual({
+      kind: 'no-established-consent',
+      reason: 'settings-missing'
+    });
+    await expect(stat(missing)).rejects.toThrow();
+    await expect(stat(dirname(missing))).rejects.toThrow();
+  });
+});
+
+describe('Antigravity profile resolvers', () => {
+  it('resolves the profile directory from ANTIGRAVITY_HOME, then from the native location', () => {
+    process.env['ANTIGRAVITY_HOME'] = '/custom/antigravity';
+    expect(resolveDefaultAntigravityHome()).toBe('/custom/antigravity');
+    expect(resolveAntigravitySettingsPath()).toBe('/custom/antigravity/settings.json');
+
+    delete process.env['ANTIGRAVITY_HOME'];
+    const nativeHome = join(homedir(), '.gemini', 'antigravity-cli');
+    expect(resolveDefaultAntigravityHome()).toBe(nativeHome);
+    expect(resolveAntigravitySettingsPath()).toBe(join(nativeHome, 'settings.json'));
   });
 });
