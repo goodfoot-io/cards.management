@@ -114,8 +114,6 @@ describe('card binary', () => {
   let cards: Map<string, Record<string, unknown>>;
   /** Environment action summaries returned by GET /environments. */
   let environments: Array<Record<string, unknown>>;
-  /** Safe summaries returned by GET /variable-groups. */
-  let variableGroups: Array<Record<string, unknown>>;
   /** Branches registered via POST /cards/:id/branches. */
   let branches: Map<string, Array<{ name: string }>>;
   /** Commits registered via POST /cards/:id/commits. */
@@ -148,7 +146,6 @@ describe('card binary', () => {
   beforeEach(async () => {
     cards = new Map();
     environments = [];
-    variableGroups = [];
     branches = new Map();
     commits = new Map();
     files = new Map();
@@ -201,13 +198,6 @@ describe('card binary', () => {
       if (method === 'GET' && url.pathname === '/environments') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(environments));
-        return;
-      }
-
-      // GET /variable-groups
-      if (method === 'GET' && url.pathname === '/variable-groups') {
-        res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify(variableGroups));
         return;
       }
 
@@ -728,19 +718,6 @@ describe('card binary', () => {
         expect(process.exitCode).toBe(originalExitCode);
       } finally {
         process.exitCode = originalExitCode;
-        logSpy.mockRestore();
-      }
-    });
-  });
-
-  describe('listVariableGroups', () => {
-    it('lists groups for an explicit workspace and supports JSONPath output', async () => {
-      variableGroups = [{ id: 'vg-1', name: 'Deploy', description: 'Deployment', variableCount: 2, secretCount: 1 }];
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      try {
-        await listVariableGroups(['--workspace-path', '/tmp/workspace', '--jsonpath', '$[0].name']);
-        expect(logSpy).toHaveBeenCalledWith('Deploy');
-      } finally {
         logSpy.mockRestore();
       }
     });

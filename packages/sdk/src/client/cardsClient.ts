@@ -929,18 +929,6 @@ export class CardsClient {
   // --- Action Operations ---
 
   /**
-   * Lists safe variable-group summaries for this client's workspace.
-   *
-   * @returns Promise resolving to summaries without variable or secret material.
-   */
-  async listVariableGroups(): Promise<VariableGroupsResponse> {
-    const url = this.buildUrl('/variable-groups', {
-      workspacePath: this.options.workspacePath
-    });
-    return this.request(() => this.getHttpClient().get<VariableGroupsResponse>(url));
-  }
-
-  /**
    * Executes an action on a card via the server relay.
    *
    * @param cardId - Identifier of the card to execute the action on.
