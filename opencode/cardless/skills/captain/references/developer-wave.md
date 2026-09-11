@@ -1,8 +1,8 @@
 # Developer Team
 
-Persistent-worker delegation for implementation work you choose not to do inline. Loaded from `./implementation.md` for planned units and `./implementation-evaluation.md` for finding fixes. You are the lead: workers implement, test and commit in their package worktrees; you own every contract, gate, merge and integration in the lead checkout.
+Persistent-worker delegation for implementation work you choose not to do inline. You are the lead: workers implement, test and commit in their package worktrees; you own every contract, gate, merge and integration in the lead checkout.
 
-Read `./coordination.md` for this host's dispatch, continuation, messaging and retirement operations. The protocol below is the same across hosts. Missing host primitives are a capability blocker, never a reason to invent a tool or silently discard the persistent-worker process.
+Read `./coordination.md` for this host's dispatch, continuation, messaging and retirement operations. Missing host primitives are a capability blocker, never a reason to invent a tool or silently discard the persistent-worker process.
 
 <placeholder-variables>
 [WORKER_BRANCH] — `implement/[TASK_KEY]/[package]`, the recorded package branch.
@@ -106,7 +106,7 @@ Start every package whose first task consumes no peer contract concurrently, wit
 - `REPORT: BLOCKED` naming a false assumption or a self-defeating approach triggers `implementation.md`'s `<when-to-return-to-planning>` before reassignment.
 - `REPORT: BLOCKED` on a failure outside its package goes to the owning worker; if none owns it, apply `<pre-existing-diagnosis>`.
 - `HELD:` plus confirmed idle state means a committed partial step, not a green branch. Resume with `PROCEED` or `TASK:`; merge only after a green report. An accepted HOLD send or interrupt result is not that acknowledgment.
-- Idle/turn completion without a report, checkpoint or held message is unexplained. Reengage the recorded worker with what it was waiting on; do not infer success.
+- Idle/turn completion without a report, checkpoint or held message is unexplained. While a worker has an outstanding assignment, check its progress every five minutes: a new checkpoint, report or `HELD:`, or a moved package-branch tip. Reengage the recorded identity with what it was waiting on; do not infer progress from silence.
 
 When revision rounds stop producing information, usually by the third, split or re-scope the task or replace the worker with a fresh one carrying failed-attempt evidence. Route integration bugs to the owner; bug fixes reproduce first. Preserve every checkpoint and report in the worker ledger.
 
@@ -134,6 +134,6 @@ Never repurpose a worker for an unrelated package. Refresh after roughly six tas
 
 <model-selection>
 
-Default to the model/effort that reliably handles ordinary package work. Use the strongest appropriate tier for system-level or cross-cutting decisions, not as the roster default; a lighter model suits bounded, unambiguous work. Inherit the host's selected model unless a supported explicit override is appropriate. Use only options the host actually exposes; effort words in a prompt are guidance, not a claim that the API changed model settings.
+Default to the model/effort that reliably handles ordinary package work; a lighter model suits bounded, unambiguous work. Inherit the host's selected model unless a supported explicit override is appropriate. Use only options the host actually exposes; effort words in a prompt are guidance, not a claim that the API changed model settings.
 
 </model-selection>
