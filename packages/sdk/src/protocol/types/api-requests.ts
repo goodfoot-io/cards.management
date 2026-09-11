@@ -40,6 +40,27 @@ import type { CardStatus } from './status.js';
 import type { TimelineItem } from './timeline.js';
 
 // ============================================================================
+// Variable Group API Types
+// ============================================================================
+
+/** Safe metadata returned when discovering a configured variable group. */
+export interface VariableGroupSummary {
+  /** Stable variable-group identifier. */
+  id: string;
+  /** Human-readable variable-group name. */
+  name: string;
+  /** Optional human-readable description. */
+  description?: string;
+  /** Number of non-secret variables in the group. */
+  variableCount: number;
+  /** Number of committed secrets in the group. */
+  secretCount: number;
+}
+
+/** Response from `GET /variable-groups`. */
+export type VariableGroupsResponse = VariableGroupSummary[];
+
+// ============================================================================
 // Card API Types
 // ============================================================================
 

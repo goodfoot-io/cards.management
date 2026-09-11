@@ -17,7 +17,8 @@ import type {
   ExecutionMode,
   HttpClient,
   StreamMeta,
-  TimelineItem
+  TimelineItem,
+  VariableGroupsResponse
 } from '../protocol/index.js';
 import type {
   AddBranchRequest,
@@ -858,6 +859,15 @@ export class CardsClient {
       workspacePath: this.options.workspacePath
     });
     return this.request(() => this.getHttpClient().get<EnvironmentsResponse>(url));
+  }
+
+  /**
+   * Lists safe summaries of variable groups configured for this workspace.
+   *
+   * @returns Promise resolving to variable-group summaries.
+   */
+  async listVariableGroups(): Promise<VariableGroupsResponse> {
+    throw new Error('Not Implemented');
   }
 
   // --- Stream Operations ---

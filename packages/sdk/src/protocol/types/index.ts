@@ -36,6 +36,8 @@ export type {
   TimelineRequest,
   TimelineResponse,
   UpdateCardRequest,
+  VariableGroupSummary,
+  VariableGroupsResponse,
   WorkspacePostCommitRequest,
   WorkspacePostCommitResponse
 } from './api-requests.js';
