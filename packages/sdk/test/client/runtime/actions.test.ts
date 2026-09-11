@@ -69,9 +69,9 @@ describe('runtime action HTTP client', () => {
       response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION, credentials: [] }));
     });
 
-    await client?.launch(REQUEST);
+    await client?.launch('main-672', REQUEST);
 
-    expect(requests).toEqual([{ method: 'POST', url: '/runtime/actions', body: REQUEST }]);
+    expect(requests).toEqual([{ method: 'POST', url: '/cards/main-672/runtime/actions', body: REQUEST }]);
   });
 
   it('maps admitted and pending replay responses to accepted while preserving both IDs', async () => {
@@ -87,7 +87,7 @@ describe('runtime action HTTP client', () => {
       );
     });
 
-    await expect(client?.launch(REQUEST)).resolves.toMatchObject({
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
       status: 'accepted',
       requestId: 'request-1',
       messageId: 'message-1'
@@ -107,7 +107,10 @@ describe('runtime action HTTP client', () => {
       );
     });
 
-    await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'completed', requestId: 'request-1' });
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
+      status: 'completed',
+      requestId: 'request-1'
+    });
   });
 
   it('maps changed parameters under the same request ID to rejection', async () => {
@@ -117,7 +120,7 @@ describe('runtime action HTTP client', () => {
     });
 
     await expect(
-      client?.launch({ ...REQUEST, params: { ...REQUEST.params, actionId: 'review' } })
+      client?.launch('main-672', { ...REQUEST, params: { ...REQUEST.params, actionId: 'review' } })
     ).resolves.toMatchObject({
       status: 'rejected',
       reason: 'parameter-mismatch',
@@ -138,8 +141,8 @@ describe('runtime action HTTP client', () => {
       );
     });
 
-    await expect(client?.retrieve('request/one')).resolves.toMatchObject({ status: 'completed' });
-    expect(requests[0]?.url).toBe('/runtime/actions/request%2Fone');
+    await expect(client?.retrieve('main/card', 'request/one')).resolves.toMatchObject({ status: 'completed' });
+    expect(requests[0]?.url).toBe('/cards/main%2Fcard/runtime/actions/request%2Fone');
   });
 
   it('distinguishes authentication rejection, server unavailability, and invalid responses', async () => {
@@ -150,13 +153,22 @@ describe('runtime action HTTP client', () => {
       response.end(JSON.stringify(status === 202 ? { disposition: 'admitted' } : { error: 'no' }));
     });
 
-    await expect(client?.launch(REQUEST)).resolves.toMatchObject({
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
       status: 'rejected',
       reason: 'authentication-failed'
     });
-    await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'uncertain', reason: 'server-unavailable' });
-    await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'uncertain', reason: 'invalid-response' });
-    await expect(client?.launch(REQUEST)).resolves.toMatchObject({ status: 'uncertain', reason: 'invalid-response' });
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
+      status: 'uncertain',
+      reason: 'server-unavailable'
+    });
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
+      status: 'uncertain',
+      reason: 'invalid-response'
+    });
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
+      status: 'uncertain',
+      reason: 'invalid-response'
+    });
   });
 
   it('reports timeout and network failures as uncertainty without changing caller-owned IDs', async () => {
@@ -167,7 +179,7 @@ describe('runtime action HTTP client', () => {
       timeoutMs: 10
     });
 
-    await expect(client.launch(REQUEST)).resolves.toMatchObject({
+    await expect(client.launch('main-672', REQUEST)).resolves.toMatchObject({
       status: 'uncertain',
       requestId: 'request-1',
       messageId: 'message-1',
@@ -177,7 +189,7 @@ describe('runtime action HTTP client', () => {
     const networkClient = createRuntimeActionClient({
       discover: async () => ({ host: '127.0.0.1', port: 1, accessToken: 'access-token' })
     });
-    await expect(networkClient.launch(REQUEST)).resolves.toMatchObject({ reason: 'network-error' });
+    await expect(networkClient.launch('main-672', REQUEST)).resolves.toMatchObject({ reason: 'network-error' });
   });
 
   it('retries after client reconstruction with exactly the same persisted request and message IDs', async () => {
@@ -186,14 +198,40 @@ describe('runtime action HTTP client', () => {
       response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION, credentials: [] }));
     });
     const first = client;
-    await first?.launch(REQUEST);
+    await first?.launch('main-672', REQUEST);
     const port = (server?.address() as AddressInfo).port;
     const reconstructed = createRuntimeActionClient({
       discover: async () => ({ host: '127.0.0.1', port, accessToken: 'access-token' })
     });
 
-    await reconstructed.launch(REQUEST);
+    await reconstructed.launch('main-672', REQUEST);
 
     expect(requests.map(({ body }) => body)).toEqual([REQUEST, REQUEST]);
+  });
+
+  it('scopes the same retry and retrieval IDs to separately encoded card routes', async () => {
+    await listen((request, response) => {
+      response.writeHead(request.method === 'POST' ? 202 : 404, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify(
+          request.method === 'POST'
+            ? { disposition: 'admitted', execution: EXECUTION, credentials: [] }
+            : { status: 'not-found' }
+        )
+      );
+    });
+
+    await client?.launch('main/672', REQUEST);
+    await client?.launch('other card', REQUEST);
+    await client?.retrieve('main/672', REQUEST.requestId);
+    await client?.retrieve('other card', REQUEST.requestId);
+
+    expect(requests.map(({ url }) => url)).toEqual([
+      '/cards/main%2F672/runtime/actions',
+      '/cards/other%20card/runtime/actions',
+      '/cards/main%2F672/runtime/actions/request-1',
+      '/cards/other%20card/runtime/actions/request-1'
+    ]);
+    expect(requests.slice(0, 2).map(({ body }) => body)).toEqual([REQUEST, REQUEST]);
   });
 });

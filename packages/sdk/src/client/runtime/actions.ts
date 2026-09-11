@@ -218,8 +218,8 @@ export type RuntimeActionRetrievalResult =
 
 /** Typed durable action launch and retrieval client. */
 export interface RuntimeActionClient {
-  launch(request: RuntimeActionLaunchRequest): Promise<RuntimeActionLaunchResult>;
-  retrieve(requestId: OriginalCallerRequestId): Promise<RuntimeActionRetrievalResult>;
+  launch(cardId: string, request: RuntimeActionLaunchRequest): Promise<RuntimeActionLaunchResult>;
+  retrieve(cardId: string, requestId: OriginalCallerRequestId): Promise<RuntimeActionRetrievalResult>;
 }
 
 /**
@@ -294,8 +294,11 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
   };
 
   return {
-    async launch(request): Promise<RuntimeActionLaunchResult> {
-      const value = await transport('/runtime/actions', { method: 'POST', body: JSON.stringify(request) });
+    async launch(cardId, request): Promise<RuntimeActionLaunchResult> {
+      const value = await transport(`/cards/${encodeURIComponent(cardId)}/runtime/actions`, {
+        method: 'POST',
+        body: JSON.stringify(request)
+      });
       if (isHttpRejection(value)) {
         return { status: 'rejected', requestId: request.requestId, messageId: request.messageId, reason: value };
       }
@@ -339,8 +342,11 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
       }
       return { status: 'accepted', requestId: request.requestId, messageId: request.messageId, admission: response };
     },
-    async retrieve(requestId): Promise<RuntimeActionRetrievalResult> {
-      const value = await transport(`/runtime/actions/${encodeURIComponent(requestId)}`, { method: 'GET' });
+    async retrieve(cardId, requestId): Promise<RuntimeActionRetrievalResult> {
+      const value = await transport(
+        `/cards/${encodeURIComponent(cardId)}/runtime/actions/${encodeURIComponent(requestId)}`,
+        { method: 'GET' }
+      );
       if (isHttpRejection(value)) return { status: 'rejected', requestId, reason: value };
       if (isTransportUncertainty(value)) {
         return { status: 'uncertain', requestId, reason: value };
