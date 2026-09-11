@@ -98,7 +98,7 @@ Options:
                           Single primitive results are printed raw (no quotes);
                           object/array results and multi-match results are
                           printed as JSON. Supported on get, create, list,
-                          search, and action subcommands.
+                          search, variable-group list, and action subcommands.
                           Example: --jsonpath '$.repositoryPath'
 
 Commands:

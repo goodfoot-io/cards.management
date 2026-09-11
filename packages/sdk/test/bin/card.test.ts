@@ -802,6 +802,16 @@ describe('card binary', () => {
       }
     });
 
+    it('applies jsonpath output formatting advertised by global help', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await listVariableGroups(['--workspace-path', '/tmp/workspace', '--jsonpath', '$[0].name']);
+        expect(logSpy).toHaveBeenCalledWith('Shared tools');
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
     it('detects the current git workspace when no override is supplied', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
@@ -1140,6 +1150,14 @@ describe('card binary', () => {
       const result = runCard(['help']);
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Usage: card');
+    });
+
+    it('global help discloses jsonpath support for variable-group list', () => {
+      const result = runCard(['help']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.replace(/\s+/g, ' ')).toContain(
+        'Supported on get, create, list, search, variable-group list, and action subcommands.'
+      );
     });
 
     it('card list --help prints help text and exits 0', () => {
