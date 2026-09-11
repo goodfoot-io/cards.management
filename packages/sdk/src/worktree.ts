@@ -43,6 +43,26 @@ export class WorktreeScopeError extends Error {
   }
 }
 
+/** Settlement failure whose first cleanup attempt left resources behind. */
+export class WorktreeSettlementCleanupError extends Error {
+  /** The failure that initiated cleanup, without transient cleanup diagnostics. */
+  public readonly settlementCause: unknown;
+  /** Residual diagnostics observed by this cleanup attempt. */
+  public readonly cleanupFailures: readonly string[];
+
+  constructor(settlementCause: unknown, cleanupFailures: string[]) {
+    super(
+      `create-worktree: settlement failed and cleanup left residual resources: ` +
+        `settle=${settlementCause instanceof Error ? settlementCause.message : String(settlementCause)}; ` +
+        cleanupFailures.join('; '),
+      { cause: settlementCause }
+    );
+    this.name = 'WorktreeSettlementCleanupError';
+    this.settlementCause = settlementCause;
+    this.cleanupFailures = cleanupFailures;
+  }
+}
+
 const execFileAsync = promisify(execFile);
 
 /**
@@ -637,12 +657,7 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
       // misleading no-op after the worktree directory disappeared.
       const cleanupFailures = await cleanupFailedWorktree(repoRoot, worktreeDir, createdBranch ? ref : undefined);
       if (cleanupFailures.length > 0) {
-        throw new Error(
-          `create-worktree: settlement failed and cleanup left residual resources: ` +
-            `settle=${error instanceof Error ? error.message : String(error)}; ` +
-            cleanupFailures.join('; '),
-          { cause: error }
-        );
+        throw new WorktreeSettlementCleanupError(error, cleanupFailures);
       }
       throw error;
     }

@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CardsClient } from '../src/client/cardsClient.js';
-import type { EarlyWorktreeResult } from '../src/worktree.js';
+import { type EarlyWorktreeResult, WorktreeSettlementCleanupError } from '../src/worktree.js';
 import {
   BranchUnregisterError,
   createWorktreeForCard,
@@ -23,21 +23,25 @@ import {
 // Module-level fake for the worktree primitives
 // ---------------------------------------------------------------------------
 
-vi.mock('../src/worktree.js', () => ({
-  createWorktree: vi.fn(),
-  removeWorktree: vi.fn(),
-  cleanupFailedWorktree: vi.fn(async () => []),
-  writeCardBoundFile: vi.fn(),
-  clearCardBoundFile: vi.fn(),
-  appendWorktreeGitExcludes: vi.fn(),
-  // outfit/release internals — stubbed so the composition tests exercise the
-  // orchestration logic without real git or filesystem hook provisioning.
-  findGitRoots: vi.fn(async () => ({ sourceRoot: '/src', repoRoot: '/repo' })),
-  captureOriginalHooksPath: vi.fn(async () => '/repo/.git/hooks'),
-  provisionSharedHooksDir: vi.fn(async () => undefined),
-  gitConfigWithRetry: vi.fn(async () => undefined),
-  resolveHomeDir: vi.fn(() => '/home')
-}));
+vi.mock('../src/worktree.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/worktree.js')>();
+  return {
+    ...actual,
+    createWorktree: vi.fn(),
+    removeWorktree: vi.fn(),
+    cleanupFailedWorktree: vi.fn(async () => []),
+    writeCardBoundFile: vi.fn(),
+    clearCardBoundFile: vi.fn(),
+    appendWorktreeGitExcludes: vi.fn(),
+    // outfit/release internals — stubbed so the composition tests exercise the
+    // orchestration logic without real git or filesystem hook provisioning.
+    findGitRoots: vi.fn(async () => ({ sourceRoot: '/src', repoRoot: '/repo' })),
+    captureOriginalHooksPath: vi.fn(async () => '/repo/.git/hooks'),
+    provisionSharedHooksDir: vi.fn(async () => undefined),
+    gitConfigWithRetry: vi.fn(async () => undefined),
+    resolveHomeDir: vi.fn(() => '/home')
+  };
+});
 
 // Override only `execFile` (used for the git rev-parse in the bind path) but
 // keep every other real export. The cross-process bind lock's liveness check
@@ -282,21 +286,51 @@ describe('createWorktreeForCard', () => {
   });
 
   it('retries owned branch cleanup after inner settlement cleanup removed only the worktree', async () => {
+    const initiatingError = new Error('materialization failed');
     vi.mocked(createWorktree).mockResolvedValue({
       path: EARLY_PATH,
       repoRoot: '/repo',
       createdBranch: 'cards/main-95/1',
       settle: Promise.reject(
-        new Error('settlement failed; branch=cards/main-95/1 remains')
+        new WorktreeSettlementCleanupError(initiatingError, ['branch=cards/main-95/1 remains'])
       ) as EarlyWorktreeResult['settle']
     });
     vi.mocked(cleanupFailedWorktree).mockResolvedValue([]);
     const client = makeClient();
 
     const result = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
-    await expect(result.settle).rejects.toThrow('branch=cards/main-95/1 remains');
+    await expect(result.settle).rejects.toBe(initiatingError);
 
     expect(cleanupFailedWorktree).toHaveBeenCalledWith('/repo', EARLY_PATH, 'cards/main-95/1');
+  });
+
+  it('drops stale inner residuals when outfit and settlement fail but outer rollback succeeds', async () => {
+    const outfitError = new Error('API failure');
+    const settlementError = new Error('materialization failed');
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      repoRoot: '/repo',
+      createdBranch: 'cards/main-95/1',
+      settle: Promise.reject(
+        new WorktreeSettlementCleanupError(settlementError, ['branch=cards/main-95/1 remains'])
+      ) as EarlyWorktreeResult['settle']
+    });
+    vi.mocked(cleanupFailedWorktree).mockResolvedValue([]);
+    const client = makeClient({
+      addBranch: async () => {
+        throw outfitError;
+      }
+    });
+
+    const failure = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS).catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toContain('outfit and settlement failed, but rollback completed');
+    expect((failure as Error).message).toContain('settle=materialization failed');
+    expect((failure as Error).message).not.toContain('branch=cards/main-95/1 remains');
+    expect((failure as Error).message).not.toContain('rollback was incomplete');
+    expect((failure as Error).cause).toBe(outfitError);
   });
 
   it('never calls addBranch when createWorktree rejects', async () => {

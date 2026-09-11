@@ -33,11 +33,22 @@ import {
   provisionSharedHooksDir,
   removeWorktree,
   resolveHomeDir,
+  WorktreeSettlementCleanupError,
   writeCardBoundFile
 } from './worktree.js';
 import { createWorktreePerf } from './worktreePerf.js';
 
 const execFileAsync = promisify(execFile);
+
+/**
+ * Returns the initiating settle failure, excluding stale inner cleanup diagnostics.
+ *
+ * @param error - Settlement rejection from the lower worktree lifecycle.
+ * @returns The underlying initiating failure when cleanup was retried.
+ */
+function initiatingSettlementFailure(error: unknown): unknown {
+  return error instanceof WorktreeSettlementCleanupError ? error.settlementCause : error;
+}
 
 /**
  * Resolves the shared hooks dispatcher directory every card-bound worktree's
@@ -485,6 +496,7 @@ export async function createWorktreeForCard(
     // conditionally release only the registration revision created here before
     // removing the invocation-owned Git worktree and branch.
     const settle = result.settle.catch(async (settleError: unknown) => {
+      const initiatingError = initiatingSettlementFailure(settleError);
       const cleanupFailures: string[] = [];
       try {
         await client.removeBranch(cardId, ref, {
@@ -498,11 +510,11 @@ export async function createWorktreeForCard(
       if (cleanupFailures.length > 0) {
         throw new Error(
           `createWorktreeForCard: settlement failed and rollback was incomplete at ${result.path}: ` +
-            `settle=${settleError instanceof Error ? settleError.message : String(settleError)}; ` +
+            `settle=${initiatingError instanceof Error ? initiatingError.message : String(initiatingError)}; ` +
             cleanupFailures.join('; ')
         );
       }
-      throw settleError;
+      throw initiatingError;
     });
     return { path: result.path, settle };
   } catch (outfitError) {
@@ -512,18 +524,29 @@ export async function createWorktreeForCard(
     // copy/symlink/config work owns paths inside the worktree and must not race
     // teardown. Settlement failure is cleanup context; outfitError remains the
     // primary failure that caused rollback.
-    const rollbackFailures: string[] = [];
+    let settlementFailure: unknown;
     try {
       await result.settle;
     } catch (settleError) {
-      rollbackFailures.push(`settle=${settleError instanceof Error ? settleError.message : String(settleError)}`);
+      settlementFailure = initiatingSettlementFailure(settleError);
     }
-    rollbackFailures.push(...(await cleanupCreatedResources()));
+    const rollbackFailures = await cleanupCreatedResources();
     if (rollbackFailures.length > 0) {
       throw new Error(
         `createWorktreeForCard: outfit failed and rollback was incomplete at ${result.path}: ` +
           `outfit=${outfitError instanceof Error ? outfitError.message : String(outfitError)}; ` +
+          (settlementFailure === undefined
+            ? ''
+            : `settle=${settlementFailure instanceof Error ? settlementFailure.message : String(settlementFailure)}; `) +
           rollbackFailures.join('; '),
+        { cause: outfitError }
+      );
+    }
+    if (settlementFailure !== undefined) {
+      throw new Error(
+        `createWorktreeForCard: outfit and settlement failed, but rollback completed at ${result.path}: ` +
+          `outfit=${outfitError instanceof Error ? outfitError.message : String(outfitError)}; ` +
+          `settle=${settlementFailure instanceof Error ? settlementFailure.message : String(settlementFailure)}`,
         { cause: outfitError }
       );
     }
