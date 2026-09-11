@@ -7,15 +7,16 @@
 
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import * as net from 'node:net';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { resolveGlobalCardsConfigDir } from '../cards-config.js';
 
 /** Versioned pending request persisted for a Codex session. */
 export interface PendingShutdownRequest {
   version: 1;
   requestId: string;
-  socketPath: string;
+  messageId: string;
+  outcome: 'success' | 'blocked' | 'error';
+  message?: string;
 }
 
 /** Readiness message sent back to the action dispatcher after strict drain. */
@@ -24,10 +25,12 @@ export interface ShutdownReadyMessage {
   requestId: string;
 }
 
-const STATE_DIR = join(homedir(), '.cards', 'card-repo-commits');
-
 function pendingShutdownPath(sessionId: string): string {
-  return join(STATE_DIR, `${encodeURIComponent(sessionId)}.shutdown-request.json`);
+  return join(
+    resolveGlobalCardsConfigDir(),
+    'card-repo-commits',
+    `${encodeURIComponent(sessionId)}.shutdown-request.json`
+  );
 }
 
 /**
@@ -37,8 +40,8 @@ function pendingShutdownPath(sessionId: string): string {
  * @param request - Versioned correlated request and its action socket.
  */
 export function writePendingShutdownRequest(sessionId: string, request: PendingShutdownRequest): void {
-  mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
   const destination = pendingShutdownPath(sessionId);
+  mkdirSync(join(resolveGlobalCardsConfigDir(), 'card-repo-commits'), { recursive: true, mode: 0o700 });
   const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(request)}\n`, { encoding: 'utf8', mode: 0o600 });
   renameSync(temporary, destination);
@@ -60,7 +63,13 @@ export function readPendingShutdownRequest(sessionId: string): PendingShutdownRe
     throw error;
   }
   const value = JSON.parse(raw) as Partial<PendingShutdownRequest>;
-  if (value.version !== 1 || typeof value.requestId !== 'string' || typeof value.socketPath !== 'string') {
+  if (
+    value.version !== 1 ||
+    typeof value.requestId !== 'string' ||
+    typeof value.messageId !== 'string' ||
+    !['success', 'blocked', 'error'].includes(String(value.outcome)) ||
+    (value.message !== undefined && typeof value.message !== 'string')
+  ) {
     throw new Error(`Invalid pending shutdown request for session ${sessionId}`);
   }
   return value as PendingShutdownRequest;
@@ -75,22 +84,4 @@ export function readPendingShutdownRequest(sessionId: string): PendingShutdownRe
 export function clearPendingShutdownRequest(sessionId: string, requestId: string): void {
   const pending = readPendingShutdownRequest(sessionId);
   if (pending?.requestId === requestId) rmSync(pendingShutdownPath(sessionId), { force: true });
-}
-
-/**
- * Flush one shutdown-ready NDJSON line to the owning per-action socket.
- *
- * @param socketPath - Per-action socket captured in the pending marker.
- * @param message - Correlated readiness payload.
- */
-export function sendShutdownReady(socketPath: string, message: ShutdownReadyMessage): Promise<void> {
-  return new Promise<void>((resolve, reject) => {
-    const socket = net.createConnection(socketPath, () => {
-      socket.write(`${JSON.stringify(message)}\n`, (error) => {
-        if (error) return reject(error);
-        socket.end(resolve);
-      });
-    });
-    socket.on('error', reject);
-  });
 }

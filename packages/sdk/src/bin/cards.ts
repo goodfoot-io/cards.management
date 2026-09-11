@@ -11,7 +11,6 @@
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import * as net from 'node:net';
 import { homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
@@ -32,8 +31,10 @@ import {
   NetworkError
 } from '@cards.management/sdk/client';
 import { discoverApiInfo } from '@cards.management/sdk/client/discovery';
-import { clearPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
-import { CARDS_ENV_VARS, getSocketPath } from '@cards.management/sdk/config/env';
+import { createRuntimeClientFromCredentialFile, loadRuntimeCredential } from '@cards.management/sdk/client/runtime';
+import { createFileClientOutbox, resolveOutboxRoot } from '@cards.management/sdk/client/runtime/outbox';
+import { readPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
+import { CARDS_ENV_VARS } from '@cards.management/sdk/config/env';
 import { buildCardRepoLogBlock, buildWorkspaceRepoLogBlocks } from '@cards.management/sdk/context';
 import {
   type ActionResult,
@@ -51,7 +52,7 @@ import { cardsSharedHooksDir, outfitWorktreeForCard } from '@cards.management/sd
 import { appendCommitToSession, getSessionCommits, readSessionHeadSha } from '@cards.management/sessions/card-repo';
 import { JSONPath } from 'jsonpath-plus';
 import { minimatch } from 'minimatch';
-import type { ShutdownOutcome } from '../config/socket-client.js';
+import { resolveGlobalCardsConfigDir } from '../cards-config.js';
 import { compiledHookScriptPaths } from '../git-hooks.js';
 
 const execFileAsync = promisify(execFile);
@@ -1289,7 +1290,8 @@ export async function executeAction(
 /**
  * Valid outcomes for the `cards <card-id> shutdown` verb.
  */
-export const SHUTDOWN_OUTCOMES: readonly ShutdownOutcome[] = ['success', 'blocked', 'error'];
+export const SHUTDOWN_OUTCOMES = ['success', 'blocked', 'error'] as const;
+type ShutdownOutcome = (typeof SHUTDOWN_OUTCOMES)[number];
 
 /**
  * Signals "the agent is done" from inside a running action.
@@ -1314,18 +1316,6 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
   }
   const message = flags['message']?.at(-1);
 
-  let socketPath: string;
-  try {
-    socketPath = getSocketPath();
-  } catch {
-    console.error(
-      `cards shutdown: ${CARDS_ENV_VARS.SOCKET_PATH} is not set — this command can only signal a shutdown ` +
-        'from inside a running action (the action handler creates the per-action socket).'
-    );
-    process.exitCode = 1;
-    return;
-  }
-
   const sessionId = await resolveSessionId();
   if (!sessionId) {
     console.error(
@@ -1337,36 +1327,57 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
     return;
   }
 
-  const requestId = randomUUID();
-  writePendingShutdownRequest(sessionId, { version: 1, requestId, socketPath });
-
-  await new Promise<void>((resolve, reject) => {
-    const socket = net.createConnection(socketPath, () => {
-      const payload: { type: 'shutdownRequest'; requestId: string; outcome: ShutdownOutcome; message?: string } = {
-        type: 'shutdownRequest',
-        requestId,
-        outcome,
-        ...(message !== undefined ? { message } : {})
-      };
-      socket.write(`${JSON.stringify(payload)}\n`, (err) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        // Flush confirmed: the line reached the dispatcher's kernel buffer.
-        socket.end(() => resolve());
-      });
-    });
-    socket.on('error', reject);
-  }).catch((error: unknown) => {
-    clearPendingShutdownRequest(sessionId, requestId);
-    const detail = error instanceof Error ? error.message : String(error);
-    console.error(
-      `cards shutdown: failed to deliver shutdownRequest to ${socketPath} — ${detail}. ` +
-        'The signal only works while the owning action is still running.'
-    );
+  const existing = readPendingShutdownRequest(sessionId);
+  if (existing && (existing.outcome !== outcome || existing.message !== message)) {
+    console.error(`cards shutdown: pending request ${existing.requestId} has different parameters.`);
     process.exitCode = 1;
+    return;
+  }
+  const pending =
+    existing ??
+    ({
+      version: 1,
+      requestId: randomUUID(),
+      messageId: randomUUID(),
+      outcome,
+      ...(message ? { message } : {})
+    } as const);
+  if (!existing) writePendingShutdownRequest(sessionId, pending);
+
+  const info = await discoverApiInfo();
+  if (!info) {
+    console.error(`cards shutdown: runtime unavailable; retry request ${pending.requestId}.`);
+    process.exitCode = 1;
+    return;
+  }
+  const credential = loadRuntimeCredential('cli');
+  const client = createRuntimeClientFromCredentialFile({
+    role: 'cli',
+    outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
+    discover: async () => ({ host: info.host, port: info.port, accessToken: info.accessToken }),
+    onMessage: () => undefined
   });
+  try {
+    const connected = await client.connect();
+    if (connected.status !== 'connected') throw new Error(`runtime connection ${connected.status}`);
+    const result = await client.send({
+      type: 'execution.shutdownRequest',
+      payload: { outcome, ...(message !== undefined ? { message } : {}) },
+      messageId: pending.messageId,
+      requestId: pending.requestId,
+      execution: credential.execution,
+      deadlineMs: 5_000
+    });
+    if (result.status !== 'accepted') {
+      throw new Error(`${result.status}:${'reason' in result ? result.reason : 'not-accepted'}`);
+    }
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    console.error(`cards shutdown: acceptance unconfirmed for request ${pending.requestId} — ${detail}.`);
+    process.exitCode = 1;
+  } finally {
+    await client.close();
+  }
 }
 
 /**

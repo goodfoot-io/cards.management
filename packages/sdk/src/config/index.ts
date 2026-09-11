@@ -109,7 +109,6 @@ export {
   type PendingShutdownRequest,
   readPendingShutdownRequest,
   type ShutdownReadyMessage,
-  sendShutdownReady,
   writePendingShutdownRequest
 } from './shutdown.js';
 
