@@ -6,7 +6,7 @@
 
 import { z } from 'zod';
 import type { IssuedRoleCredential, OriginalCallerRequestId } from './runtime-admission.js';
-import { executionIdentitySchema, runtimeScopeSchema } from './runtime-identity.js';
+import { executionIdentitySchema, ownershipStampSchema, runtimeScopeSchema } from './runtime-identity.js';
 
 /** The complete and only set of credentials exposed to an admitted child process. */
 export const CHILD_RUNTIME_CREDENTIAL_ROLES = ['runtime-wrapper', 'agent-handler', 'agent-hook'] as const;
@@ -29,6 +29,7 @@ export interface RuntimeCredentialFile {
   readonly version: 1;
   readonly execution: z.infer<typeof executionIdentitySchema>;
   readonly scope: z.infer<typeof runtimeScopeSchema>;
+  readonly ownership: z.infer<typeof ownershipStampSchema>;
   readonly requestId: OriginalCallerRequestId;
   readonly credentials: readonly (IssuedRoleCredential & { readonly role: ChildRuntimeCredentialRole })[];
 }
@@ -39,6 +40,7 @@ export const runtimeCredentialFileSchema: z.ZodType<RuntimeCredentialFile> = z
     version: z.literal(1),
     execution: executionIdentitySchema,
     scope: runtimeScopeSchema,
+    ownership: ownershipStampSchema,
     requestId: z.string().min(1),
     credentials: z.array(issuedRoleCredentialSchema).length(CHILD_RUNTIME_CREDENTIAL_ROLES.length)
   })

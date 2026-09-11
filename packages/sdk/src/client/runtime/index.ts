@@ -24,8 +24,10 @@ export { createRuntimeActionClient } from './actions.js';
 export { DEFAULT_BACKOFF_POLICY, nextBackoffDelayMs } from './backoff.js';
 export { createRuntimeClient } from './client.js';
 export {
+  createRuntimeClientFromCredentialFile,
   type LoadedRuntimeCredential,
   loadRuntimeCredential,
+  type RuntimeClientBootstrapOptions,
   readRuntimeCredentialFile,
   writeRuntimeCredentialFile
 } from './credential-file.js';
@@ -52,6 +54,8 @@ export type {
   RuntimeClientOptions,
   RuntimeConnectTarget,
   RuntimeDiscovery,
+  RuntimeInboundHandler,
+  RuntimeInboundMessageType,
   SendOutcome,
   SendRejectionReason,
   SendUncertaintyReason,

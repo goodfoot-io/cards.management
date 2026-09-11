@@ -40,6 +40,7 @@ export interface FakeRuntimeServerScript {
 export class FakeRuntimeServer {
   private readonly server: WebSocketServer;
   private readonly sockets = new Set<WsSocket>();
+  private readonly connections: WsSocket[] = [];
   private script: FakeRuntimeServerScript;
 
   /** Upgrade request headers, one entry per connection attempt. */
@@ -115,13 +116,34 @@ export class FakeRuntimeServer {
     }
   }
 
+  /**
+   * Sends one valid server command on a selected connection generation.
+   * @param messageId - Stable command identity.
+   * @param connectionIndex - Zero-based accepted socket index, defaulting to the newest.
+   */
+  sendCommand(messageId: string, connectionIndex = this.connections.length - 1): void {
+    this.connections[connectionIndex]?.send(
+      JSON.stringify({
+        ...this.envelope('execution.cancelCommand', {
+          reason: 'user',
+          overridesIdleRequirement: false
+        }),
+        messageId,
+        requestId: 'req-1'
+      })
+    );
+  }
+
   /** Stops the server and releases the port. */
   async stop(): Promise<void> {
     this.dropConnections();
     await new Promise<void>((resolve) => this.server.close(() => resolve()));
   }
 
-  private envelope(type: 'runtime.accepted' | 'runtime.resumeAck', payload: unknown): unknown {
+  private envelope(
+    type: 'runtime.accepted' | 'runtime.resumeAck' | 'execution.cancelCommand',
+    payload: unknown
+  ): Record<string, unknown> {
     return {
       protocolVersion: RUNTIME_PROTOCOL_VERSION,
       messageId: `srv-${this.received.length}-${type}`,
@@ -143,6 +165,7 @@ export class FakeRuntimeServer {
       return;
     }
     this.sockets.add(socket);
+    this.connections.push(socket);
 
     socket.on('message', (raw: Buffer) => {
       const envelope = JSON.parse(raw.toString()) as RuntimeEnvelope;

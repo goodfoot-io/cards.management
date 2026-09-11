@@ -10,6 +10,7 @@ import type {
   PresentedCredential,
   ProducerIdentity,
   RegistrationRefusalReason,
+  RuntimeEnvelope,
   RuntimeMessageType,
   RuntimePayload,
   RuntimeScope
@@ -52,6 +53,19 @@ export interface RuntimeClientIdentity {
   readonly ownership: OwnershipStamp;
 }
 
+/** Server commands delivered to an authenticated producer after its synchronization barrier. */
+export type RuntimeInboundMessageType = Extract<
+  RuntimeMessageType,
+  | 'execution.cancelCommand'
+  | 'execution.switchToInteractiveCommand'
+  | 'execution.agentShutdownCommand'
+  | 'execution.executeRequest'
+  | 'watcher.stopCommand'
+>;
+
+/** Handles one authorized, generation-current server command. Durable commands remain caller-acknowledged. */
+export type RuntimeInboundHandler = (envelope: RuntimeEnvelope<RuntimeInboundMessageType>) => void | Promise<void>;
+
 /** Reconnect timing: exponential growth from `initialMs`, clamped at `capMs`, then jittered. */
 export interface BackoffPolicy {
   readonly initialMs: number;
@@ -74,6 +88,8 @@ export interface RuntimeClientOptions {
   readonly outbox: ClientOutbox;
   readonly authorities: ReconciliationAuthorities;
   readonly discover: RuntimeDiscovery;
+  /** Receives commands only after registration and synchronization complete. */
+  readonly onMessage: RuntimeInboundHandler;
   readonly backoff?: BackoffPolicy;
   readonly heartbeat?: HeartbeatPolicy;
   readonly now?: () => Date;
@@ -173,6 +189,10 @@ export interface RuntimeClient {
   /** Current generation once registered; `null` before the first successful registration. */
   readonly generation: ConnectionGeneration | null;
   connect(): Promise<ConnectResult>;
+  /** Starts owned reconnect and heartbeat work; resolves after the first attempt completes. */
+  start(): Promise<ConnectResult>;
+  /** Stops retry/heartbeat work and closes only this client's transport. */
+  stop(): Promise<void>;
   send<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<SendOutcome>;
   /** Closes under the current generation so a late close cannot evict a successor. */
   close(): Promise<void>;

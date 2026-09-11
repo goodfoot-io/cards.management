@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { OutboundMessage, RuntimeClient, RuntimeClientOptions } from '../../../src/client/runtime/index.js';
 import { createRuntimeClient } from '../../../src/client/runtime/index.js';
 import { MAX_CONTROL_FRAME_BYTES, RUNTIME_CREDENTIAL_HEADERS } from '../../../src/protocol/types/index.js';
@@ -37,6 +37,7 @@ const optionsFor = (
   outbox: new MemoryOutbox(),
   authorities: makeAcceptingAuthorities(),
   discover: async () => ({ host: '127.0.0.1', port: target.port, accessToken: 'token-1' }),
+  onMessage: () => undefined,
   ...overrides
 });
 
@@ -318,5 +319,71 @@ describe('closing', () => {
     client = createRuntimeClient(optionsFor(server));
 
     await expect(client.close()).resolves.toBeUndefined();
+  });
+});
+
+describe('inbound commands and owned lifecycle', () => {
+  it.skip('delivers a typed server command only after registration and synchronization', async () => {
+    server = await FakeRuntimeServer.start();
+    const delivered: string[] = [];
+    client = createRuntimeClient(
+      optionsFor(server, { onMessage: (envelope) => void delivered.push(envelope.messageId) })
+    );
+
+    await client.connect();
+    expect(delivered).toEqual([]);
+    server.sendCommand('command-1');
+    await vi.waitFor(() => expect(delivered).toEqual(['command-1']));
+  });
+
+  it.skip('does not expose registration, resume acknowledgments, or receipts as commands', async () => {
+    server = await FakeRuntimeServer.start();
+    const delivered: string[] = [];
+    client = createRuntimeClient(
+      optionsFor(server, { onMessage: (envelope) => void delivered.push(envelope.messageId) })
+    );
+
+    await client.connect();
+    server.acknowledge('not-pending');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(delivered).toEqual([]);
+  });
+
+  it.skip('fences stale-socket commands and deduplicates a replayed command messageId', async () => {
+    server = await FakeRuntimeServer.start();
+    const delivered: string[] = [];
+    client = createRuntimeClient(
+      optionsFor(server, { onMessage: (envelope) => void delivered.push(envelope.messageId) })
+    );
+    await client.connect();
+    server.rescript({ registration: { status: 'registered', generation: 2, fencedGeneration: 1 } as never });
+    await client.connect();
+
+    server.sendCommand('stale-command', 0);
+    server.sendCommand('command-1', 1);
+    server.sendCommand('command-1', 1);
+    await vi.waitFor(() => expect(delivered).toEqual(['command-1']));
+  });
+
+  it.skip('rediscovers and reconnects after transport loss until explicitly stopped', async () => {
+    server = await FakeRuntimeServer.start();
+    let discoveries = 0;
+    client = createRuntimeClient(
+      optionsFor(server, {
+        discover: async () => {
+          discoveries += 1;
+          return { host: '127.0.0.1', port: server?.port ?? 0, accessToken: `token-${discoveries}` };
+        },
+        backoff: { initialMs: 1, capMs: 2, jitter: () => 0 }
+      })
+    );
+
+    await client.start();
+    server.dropConnections();
+    await vi.waitFor(() => expect(discoveries).toBeGreaterThan(1));
+    await client.stop();
+    const stoppedAt = discoveries;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(discoveries).toBe(stoppedAt);
   });
 });

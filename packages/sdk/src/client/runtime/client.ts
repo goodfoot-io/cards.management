@@ -169,6 +169,14 @@ class RuntimeClientImpl implements RuntimeClient {
     return { status: 'connected', generation: registration.generation, resumed, synchronization };
   }
 
+  async start(): Promise<ConnectResult> {
+    throw new Error('Not Implemented');
+  }
+
+  async stop(): Promise<void> {
+    throw new Error('Not Implemented');
+  }
+
   async send<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<SendOutcome> {
     const socket = this.socket;
     if (this.currentState !== 'connected' || socket === null || this.synchronization === null) {

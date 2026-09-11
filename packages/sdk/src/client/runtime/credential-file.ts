@@ -26,6 +26,7 @@ import {
   type RuntimeCredentialFile,
   runtimeCredentialFileSchema
 } from '../../protocol/types/index.js';
+import type { RuntimeClient, RuntimeClientOptions } from './types.js';
 
 function assertProtectedDirectory(path: string): void {
   const status = lstatSync(path);
@@ -73,7 +74,15 @@ function cleanupOwnedTemporary(path: string, identity: { readonly dev: number; r
 export interface LoadedRuntimeCredential {
   readonly execution: RuntimeCredentialFile['execution'];
   readonly scope: RuntimeCredentialFile['scope'];
+  readonly ownership: RuntimeCredentialFile['ownership'];
   readonly credential: IssuedRoleCredential;
+}
+
+/** Inputs retained from the caller when bootstrapping a runtime client from protected credentials. */
+export interface RuntimeClientBootstrapOptions extends Omit<RuntimeClientOptions, 'identity' | 'credential'> {
+  readonly role: ChildRuntimeCredentialRole;
+  /** Explicit handoff path; defaults to CARDS_RUNTIME_CREDENTIAL_FILE. */
+  readonly credentialFilePath?: string;
 }
 
 /**
@@ -156,5 +165,16 @@ export function loadRuntimeCredential(role: ChildRuntimeCredentialRole, path?: s
   const value = readRuntimeCredentialFile(path);
   const credential = value.credentials.find((candidate) => candidate.role === role);
   if (credential === undefined) throw new Error(`Runtime credential file has no credential for role ${role}`);
-  return { execution: value.execution, scope: value.scope, credential };
+  return { execution: value.execution, scope: value.scope, ownership: value.ownership, credential };
+}
+
+/**
+ * Builds a runtime client wholly from one protected role handoff plus caller-owned services.
+ * @param options - Explicit role, optional file path, and caller-owned transport dependencies.
+ * @returns A disconnected runtime client ready to start.
+ * @throws Until the bootstrap implementation is completed after contract approval.
+ */
+export function createRuntimeClientFromCredentialFile(options: RuntimeClientBootstrapOptions): RuntimeClient {
+  void options;
+  throw new Error('Not Implemented');
 }

@@ -10,18 +10,22 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  createRuntimeClientFromCredentialFile,
   loadRuntimeCredential,
   readRuntimeCredentialFile,
   writeRuntimeCredentialFile
 } from '../../../src/client/runtime/index.js';
 import { CARDS_ENV_VARS, getRuntimeCredentialFilePath } from '../../../src/config/env.js';
 import type { RuntimeCredentialFile } from '../../../src/protocol/index.js';
+import { FakeRuntimeServer } from './fakeServer.js';
+import { MemoryOutbox, makeAcceptingAuthorities } from './index.js';
 
 const FILE: RuntimeCredentialFile = {
   version: 1,
   requestId: 'request-1',
   execution: { executionId: 'execution-1', launchRequestId: 'request-1' },
   scope: { repositoryId: 'github.com/cards/test', workspacePath: '/workspace', cardId: 'main-672' },
+  ownership: { ownerId: 'runtime-owner-1', generation: 4 },
   credentials: [
     {
       credentialId: 'wrapper-credential',
@@ -83,6 +87,7 @@ describe('runtime credential file', () => {
     expect(loadRuntimeCredential('agent-handler')).toEqual({
       execution: FILE.execution,
       scope: FILE.scope,
+      ownership: FILE.ownership,
       credential: FILE.credentials[1]
     });
     expect(Object.values(process.env)).not.toContain('agent-secret');
@@ -147,5 +152,31 @@ describe('runtime credential file', () => {
   it('rejects a non-regular credential path before reading it', () => {
     mkdirSync(credentialPath, { mode: 0o700 });
     expect(() => readRuntimeCredentialFile(credentialPath)).toThrow(/regular file/i);
+  });
+
+  it.skip('bootstraps complete client identity and authentication from one explicit child role', async () => {
+    writeRuntimeCredentialFile(credentialPath, FILE);
+    const server = await FakeRuntimeServer.start();
+    const client = createRuntimeClientFromCredentialFile({
+      role: 'agent-handler',
+      credentialFilePath: credentialPath,
+      outbox: new MemoryOutbox(),
+      authorities: makeAcceptingAuthorities(),
+      discover: async () => ({ host: '127.0.0.1', port: server.port, accessToken: 'access-token' }),
+      onMessage: () => undefined
+    });
+    try {
+      await client.connect();
+      expect(server.handshakes[0]).toMatchObject({ 'x-cards-runtime-credential-id': 'agent-credential' });
+      expect(server.received[0]).toMatchObject({
+        execution: FILE.execution,
+        scope: FILE.scope,
+        producer: { role: 'agent-handler', producerId: 'agent-1' },
+        ownership: FILE.ownership
+      });
+    } finally {
+      await client.close();
+      await server.stop();
+    }
   });
 });
