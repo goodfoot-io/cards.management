@@ -23,11 +23,11 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import type { JournalAcknowledgment, OutboxCorruption } from '../outbox/index.js';
-import { custodyShardDir, readResultCustody } from './store.js';
+import { custodyRecordsDir, readResultCustody, validateDurableResultCustodyRecord } from './store.js';
 import { DURABLE_RESULT_SCHEMA_VERSION, type DurableResultCustodyRecord } from './types.js';
 
 /**
- * What one execution's shard of the custody store holds.
+ * What the globally keyed custody store holds for one execution.
  *
  * Corruption is reported beside the message IDs rather than folded into them,
  * because the two directions of error are not equally safe. A message ID left
@@ -97,7 +97,12 @@ function parseCustody(text: string, filePath: string): DurableResultCustodyRecor
   if (typeof candidate.messageId !== 'string') {
     return { path: filePath, detail: 'missing or non-string field: messageId' };
   }
-  return candidate as DurableResultCustodyRecord;
+  return (
+    validateDurableResultCustodyRecord(parsed) ?? {
+      path: filePath,
+      detail: 'custody record is incomplete or its canonical identity does not match'
+    }
+  );
 }
 
 /**
@@ -112,7 +117,7 @@ function parseCustody(text: string, filePath: string): DurableResultCustodyRecor
  * @returns Message IDs held, plus any files that could not be trusted.
  */
 export async function listDurableResults(root: string, executionId: string): Promise<DurableResultInventory> {
-  const dir = custodyShardDir(root, executionId);
+  const dir = custodyRecordsDir(root);
 
   let names: string[];
   try {
@@ -143,7 +148,7 @@ export async function listDurableResults(root: string, executionId: string): Pro
     }
     const parsed = parseCustody(text, filePath);
     if ('schemaVersion' in parsed) {
-      messageIds.push(parsed.messageId);
+      if (parsed.executionId === executionId) messageIds.push(parsed.messageId);
     } else {
       corrupt.push(parsed);
     }

@@ -17,6 +17,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   createDurableResultReader,
+  DURABLE_RESULT_SCHEMA_VERSION,
   type DurableResultCustodyInput,
   describeDurableResult,
   listDurableResults,
@@ -203,7 +204,7 @@ describe('listing custody for one execution', () => {
 
   it('excludes a record whose message id is missing, since it can prove nothing', async () => {
     await takeResultCustody(root, makeRecord({ messageId: 'msg-a' }), CLOCK);
-    fs.writeFileSync(custodyFiles(root)[0] as string, JSON.stringify({ schemaVersion: 1 }));
+    fs.writeFileSync(custodyFiles(root)[0] as string, JSON.stringify({ schemaVersion: DURABLE_RESULT_SCHEMA_VERSION }));
 
     const inventory = await listDurableResults(root, 'exec-1');
 

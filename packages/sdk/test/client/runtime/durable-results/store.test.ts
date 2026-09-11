@@ -105,22 +105,44 @@ describe('taking custody', () => {
     expect((await readResultCustody(root, record.executionId, 'msg-a'))?.requestId).toBe('req-42');
   });
 
-  it('reports the second custody of one message as already held, not as a new copy', async () => {
+  it('reports the second custody of one message as matching, not as a new copy', async () => {
     const record = makeRecord({ messageId: 'msg-a' });
 
-    expect(await takeResultCustody(root, record, CLOCK)).toBe('created');
-    expect(await takeResultCustody(root, record, CLOCK)).toBe('exists');
+    expect(await takeResultCustody(root, record, CLOCK)).toMatchObject({ status: 'created' });
+    expect(await takeResultCustody(root, record, CLOCK)).toMatchObject({ status: 'matching' });
     expect(countFiles(root)).toBe(1);
   });
 
-  it.skip('acknowledges an identical immutable envelope and authoritative identity as matching', async () => {
+  it('acknowledges an identical immutable envelope and authoritative identity as matching', async () => {
     const input = custodyInput(makeRecord({ messageId: 'msg-a' }));
 
     await expect(takeStrictResultCustody(root, input, CLOCK)).resolves.toMatchObject({ status: 'created' });
     await expect(takeStrictResultCustody(root, input, CLOCK)).resolves.toMatchObject({ status: 'matching' });
   });
 
-  it.skip.each([
+  it('canonicalizes object keys deterministically before comparing a replay', async () => {
+    const input = custodyInput(makeRecord({ messageId: 'msg-canonical' }));
+    await takeStrictResultCustody(root, input, CLOCK);
+    const envelope = input.envelope;
+    const reordered: DurableResultCustodyInput = {
+      requestId: input.requestId,
+      envelope: {
+        payload: { ...envelope.payload },
+        type: envelope.type,
+        ownership: envelope.ownership,
+        producer: envelope.producer,
+        scope: envelope.scope,
+        execution: envelope.execution,
+        sentAt: envelope.sentAt,
+        messageId: envelope.messageId,
+        protocolVersion: envelope.protocolVersion
+      } as DurableResultCustodyInput['envelope']
+    };
+
+    await expect(takeStrictResultCustody(root, reordered, CLOCK)).resolves.toMatchObject({ status: 'matching' });
+  });
+
+  it.each([
     'payload',
     'request',
     'execution',
@@ -147,7 +169,7 @@ describe('taking custody', () => {
     expect(outcome).not.toHaveProperty('acknowledgment');
   });
 
-  it.skip('uses the authoritative request ID for cleanupComplete without inventing an envelope requestId', async () => {
+  it('uses the authoritative request ID for cleanupComplete without inventing an envelope requestId', async () => {
     const input = custodyInput(makeRecord({ requestId: 'authoritative-request' }));
     expect(input.envelope.requestId).toBeUndefined();
 
@@ -157,7 +179,7 @@ describe('taking custody', () => {
     );
   });
 
-  it.skip('returns unavailable without replacing corrupt existing evidence', async () => {
+  it('returns unavailable without replacing corrupt existing evidence', async () => {
     const input = custodyInput(makeRecord({ messageId: 'msg-a' }));
     await takeStrictResultCustody(root, input, CLOCK);
     const file = fs
@@ -171,13 +193,13 @@ describe('taking custody', () => {
     expect(fs.readFileSync(filePath, 'utf8')).toBe('{corrupt');
   });
 
-  it.skip('returns unavailable without writing an envelope larger than its protocol bound', async () => {
+  it('returns unavailable without writing an envelope larger than its protocol bound', async () => {
     const original = custodyInput(makeRecord({ messageId: 'msg-oversized' }));
     const input = {
       ...original,
       envelope: {
         ...original.envelope,
-        payload: { ...original.envelope.payload, detail: 'x'.repeat(2_000_000) } as never
+        payload: { ...original.envelope.payload, stderr: 'x'.repeat(2_000_000) } as never
       }
     } as DurableResultCustodyInput;
 
@@ -187,7 +209,7 @@ describe('taking custody', () => {
     expect(countFiles(root)).toBe(0);
   });
 
-  it.skip('returns unavailable without writing a non-durable envelope', async () => {
+  it('returns unavailable without writing a non-durable envelope', async () => {
     const original = custodyInput(makeRecord({ messageId: 'msg-non-durable' }));
     const input = {
       ...original,
@@ -236,7 +258,7 @@ describe('taking custody', () => {
 
     const digest = createHash('sha256').update('msg-a', 'utf8').digest('hex');
     const files = fs.readdirSync(root, { recursive: true }).map(String);
-    expect(files).toContain(path.join(createHash('sha256').update('exec-1', 'utf8').digest('hex'), `${digest}.json`));
+    expect(files).toContain(path.join('records', `${digest}.json`));
   });
 
   it('leaves no temporary file behind', async () => {
@@ -308,6 +330,21 @@ describe('the custodian reconciliation calls', () => {
     expect(countFiles(root)).toBe(1);
   });
 
+  it('does not admit a replay whose immutable result content changed', async () => {
+    const custodian = createFileResultCustodian({ root, now: CLOCK });
+    const record = makeRecord({ messageId: 'msg-a' });
+    await custodian.takeCustody(record);
+    const changed = {
+      ...record,
+      envelope: {
+        ...record.envelope,
+        payload: { ...record.envelope.payload, statusMutationDeferred: true }
+      }
+    } as OutboxRecord;
+
+    await expect(custodian.takeCustody(changed)).resolves.toMatchObject({ kind: 'not-admitted' });
+  });
+
   it('declines an intent that reached it by a routing mistake rather than storing it', async () => {
     const custodian = createFileResultCustodian({ root, now: CLOCK });
     const misrouted = { ...makeRecord({ messageId: 'msg-a' }), deliveryClass: 'durable-intent' as const };
@@ -327,7 +364,7 @@ describe('the custodian reconciliation calls', () => {
     expect(acceptance.kind).toBe('authority-unavailable');
   });
 
-  it('never says not-admitted, since judging legitimacy is not its job', async () => {
+  it('does not call a storage failure an identity conflict', async () => {
     const custodian = createFileResultCustodian({ root: path.join(root, 'file-in-the-way'), now: CLOCK });
     fs.writeFileSync(path.join(root, 'file-in-the-way'), 'not a directory');
 

@@ -20,11 +20,7 @@ export const DURABLE_RESULT_SCHEMA_VERSION = 2;
 /** Message types whose immutable envelopes may enter durable-result custody. */
 export type DurableResultMessageType = Extract<
   RuntimeMessageType,
-  | 'execution.launchAdmission'
-  | 'execution.launchOutcome'
-  | 'execution.agentTermination'
-  | 'execution.cleanupComplete'
-  | 'watcher.stopResult'
+  'execution.launchAdmission' | 'execution.launchOutcome' | 'execution.agentTermination' | 'execution.cleanupComplete'
 >;
 
 /** Strict custody input after the server resolved the authoritative original request. */

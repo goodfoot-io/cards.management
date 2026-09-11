@@ -12,7 +12,7 @@
  * The layout is deliberately flatter than the outbox's:
  *
  * ```text
- * <root>/<sha256(executionId)>/<sha256(messageId)>.json
+ * <root>/records/<sha256(messageId)>.json
  * ```
  *
  * There is no role segment. The outbox needs one because a live producer must be
@@ -20,9 +20,9 @@
  * drains this store, so a role directory would buy nothing and would let the same
  * message land twice under two roles.
  *
- * Both identifiers are hashed before they reach a path join, for the same reason
- * as in the outbox: they originate with callers, and a caller-supplied string in
- * a path is a traversal waiting to happen.
+ * The globally unique message ID is hashed before it reaches a path join. Keeping
+ * one global target per message is also what makes execution or scope drift on a
+ * replay observable as a conflict rather than a second accepted copy.
  *
  * The write path goes one step further than the outbox's, and the extra step is
  * the point of the module. The outbox flushes the file and links it; this store
@@ -36,9 +36,15 @@
  * @module runtime/durable-results/store
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import {
+  deliveryClassFor,
+  parseEnvelope,
+  RUNTIME_MESSAGE_CONTRACTS,
+  type RuntimeEnvelope
+} from '../../../protocol/index.js';
 import type { OutboxRecord, OutcomeAcceptance, RecoveredResultCustodian } from '../outbox/index.js';
 import {
   DURABLE_RESULT_SCHEMA_VERSION,
@@ -79,17 +85,13 @@ function digest(value: string): string {
 }
 
 /**
- * Computes the directory holding one execution's custody records.
- *
- * The execution ID becomes a digest here, which is the only place it is allowed
- * to influence a path at all.
+ * Computes the directory holding globally message-keyed custody records.
  *
  * @param root - Absolute custody root.
- * @param executionId - Execution the results belong to.
- * @returns Absolute path of that execution's shard.
+ * @returns Absolute path of the custody records directory.
  */
-export function custodyShardDir(root: string, executionId: string): string {
-  return path.join(root, digest(executionId));
+export function custodyRecordsDir(root: string): string {
+  return path.join(root, 'records');
 }
 
 /**
@@ -101,7 +103,76 @@ export function custodyShardDir(root: string, executionId: string): string {
  * @returns Absolute path of the custody file.
  */
 function custodyPath(root: string, executionId: string, messageId: string): string {
-  return path.join(custodyShardDir(root, executionId), `${digest(messageId)}.json`);
+  void executionId;
+  return path.join(custodyRecordsDir(root), `${digest(messageId)}.json`);
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === undefined) throw new TypeError('undefined has no canonical JSON representation');
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) as string;
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
+  const object = value as Record<string, unknown>;
+  const entries = Object.keys(object)
+    .filter((key) => object[key] !== undefined)
+    .sort()
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(object[key])}`);
+  return `{${entries.join(',')}}`;
+}
+
+function fingerprint(requestId: string, envelope: RuntimeEnvelope, canonicalEnvelope: string): string {
+  return digest(
+    canonicalJson({
+      requestId,
+      executionId: envelope.execution?.executionId,
+      scope: envelope.scope,
+      envelope: JSON.parse(canonicalEnvelope)
+    })
+  );
+}
+
+/**
+ * Strictly validates persisted custody and recomputes its canonical identity.
+ *
+ * @param raw - Parsed but untrusted storage content.
+ * @returns The verified record, or null when any persisted evidence is incomplete or inconsistent.
+ */
+export function validateDurableResultCustodyRecord(raw: unknown): DurableResultCustodyRecord | null {
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const record = raw as Partial<DurableResultCustodyRecord>;
+  if (
+    record.schemaVersion !== DURABLE_RESULT_SCHEMA_VERSION ||
+    typeof record.messageId !== 'string' ||
+    typeof record.executionId !== 'string' ||
+    typeof record.requestId !== 'string' ||
+    typeof record.fingerprint !== 'string' ||
+    typeof record.canonicalEnvelope !== 'string' ||
+    typeof record.custodiedAt !== 'string' ||
+    record.envelope === undefined
+  )
+    return null;
+  let envelope: RuntimeEnvelope;
+  try {
+    envelope = parseEnvelope(record.envelope);
+  } catch {
+    return null;
+  }
+  if (
+    canonicalJson(envelope) !== record.canonicalEnvelope ||
+    envelope.messageId !== record.messageId ||
+    envelope.execution?.executionId !== record.executionId ||
+    fingerprint(record.requestId, envelope, record.canonicalEnvelope) !== record.fingerprint
+  )
+    return null;
+  return record as DurableResultCustodyRecord;
+}
+
+async function syncDirectory(dir: string): Promise<void> {
+  const handle = await fs.open(dir, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -111,17 +182,111 @@ function custodyPath(root: string, executionId: string, messageId: string): stri
  * custody: a reconciliation pass that crashed after writing and before retiring
  * must be able to run again and reach the same conclusion.
  *
- * @param _root - Absolute custody root.
- * @param _input - Validated result envelope plus server-resolved original request ID.
- * @param _now - Clock supplying the custody timestamp.
+ * @param root - Absolute custody root.
+ * @param input - Validated result envelope plus server-resolved original request ID.
+ * @param now - Clock supplying the custody timestamp.
  * @returns Created or matching custody with acknowledgment, conflict, or unavailable.
  */
 export async function takeResultCustody(
-  _root: string,
-  _input: DurableResultCustodyInput,
-  _now: () => Date
+  root: string,
+  input: DurableResultCustodyInput,
+  now: () => Date
 ): Promise<DurableResultCustodyOutcome> {
-  throw new Error('Not Implemented');
+  let envelope: RuntimeEnvelope;
+  let canonicalEnvelope: string;
+  try {
+    const candidate = input.envelope as RuntimeEnvelope;
+    const candidateContract = RUNTIME_MESSAGE_CONTRACTS[candidate.type];
+    const candidateCanonical = canonicalJson(input.envelope);
+    if (
+      candidateContract !== undefined &&
+      Buffer.byteLength(candidateCanonical, 'utf8') > candidateContract.maxFrameBytes
+    ) {
+      return {
+        status: 'unavailable',
+        detail: `canonical envelope exceeds ${candidateContract.maxFrameBytes}-byte protocol bound`
+      };
+    }
+    envelope = parseEnvelope(input.envelope);
+    canonicalEnvelope = canonicalJson(envelope);
+  } catch (error) {
+    return { status: 'unavailable', detail: `invalid durable-result envelope: ${(error as Error).message}` };
+  }
+  const contract = RUNTIME_MESSAGE_CONTRACTS[envelope.type];
+  if (deliveryClassFor(envelope.type) !== 'durable-result') {
+    return { status: 'unavailable', detail: `message type '${envelope.type}' is not durable-result` };
+  }
+  if (Buffer.byteLength(canonicalEnvelope, 'utf8') > contract.maxFrameBytes) {
+    return {
+      status: 'unavailable',
+      detail: `canonical envelope exceeds ${contract.maxFrameBytes}-byte protocol bound`
+    };
+  }
+  const executionId = envelope.execution?.executionId;
+  if (typeof executionId !== 'string' || input.requestId.length === 0) {
+    return { status: 'unavailable', detail: 'durable result lacks authoritative request or execution identity' };
+  }
+  if (
+    envelope.execution?.launchRequestId !== input.requestId ||
+    (envelope.requestId !== undefined && envelope.requestId !== input.requestId)
+  ) {
+    return { status: 'conflict', detail: 'envelope request identity conflicts with authoritative request' };
+  }
+
+  const identityFingerprint = fingerprint(input.requestId, envelope, canonicalEnvelope);
+  const target = custodyPath(root, executionId, envelope.messageId);
+  const dir = path.dirname(target);
+  const custody: DurableResultCustodyRecord = {
+    schemaVersion: DURABLE_RESULT_SCHEMA_VERSION,
+    messageId: envelope.messageId,
+    executionId,
+    requestId: input.requestId,
+    fingerprint: identityFingerprint,
+    canonicalEnvelope,
+    envelope,
+    custodiedAt: now().toISOString()
+  };
+
+  try {
+    await fs.mkdir(dir, { recursive: true });
+    const temp = path.join(dir, `.tmp-${randomUUID()}`);
+    let linked = false;
+    try {
+      const handle = await fs.open(temp, 'wx');
+      try {
+        await handle.writeFile(`${JSON.stringify(custody, null, 2)}\n`, 'utf8');
+        await handle.sync();
+      } finally {
+        await handle.close();
+      }
+      try {
+        await fs.link(temp, target);
+        linked = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      }
+    } finally {
+      await fs.rm(temp, { force: true });
+    }
+    if (linked) {
+      await syncDirectory(dir);
+      return {
+        status: 'created',
+        acknowledgment: { messageId: envelope.messageId, acknowledgedAt: custody.custodiedAt }
+      };
+    }
+    const existing = await readCustodyByMessage(root, envelope.messageId);
+    if (existing === null) return { status: 'unavailable', detail: 'existing custody record is corrupt or incomplete' };
+    if (existing.fingerprint !== identityFingerprint || existing.canonicalEnvelope !== canonicalEnvelope) {
+      return { status: 'conflict', detail: 'messageId is already held for different immutable content or identity' };
+    }
+    return {
+      status: 'matching',
+      acknowledgment: { messageId: existing.messageId, acknowledgedAt: existing.custodiedAt }
+    };
+  } catch (error) {
+    return { status: 'unavailable', detail: `custody storage unavailable: ${(error as Error).message}` };
+  }
 }
 
 /**
@@ -137,17 +302,28 @@ export async function readResultCustody(
   executionId: string,
   messageId: string
 ): Promise<DurableResultCustodyRecord | null> {
+  const record = await readCustodyByMessage(root, messageId);
+  return record?.executionId === executionId ? record : null;
+}
+
+async function readCustodyByMessage(root: string, messageId: string): Promise<DurableResultCustodyRecord | null> {
   let text: string;
   try {
-    text = await fs.readFile(custodyPath(root, executionId, messageId), 'utf-8');
+    text = await fs.readFile(custodyPath(root, '', messageId), 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
       return null;
     }
     throw error;
   }
-  const parsed = JSON.parse(text) as DurableResultCustodyRecord;
-  return parsed.schemaVersion === DURABLE_RESULT_SCHEMA_VERSION ? parsed : null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  const record = validateDurableResultCustodyRecord(parsed);
+  return record;
 }
 
 /**
