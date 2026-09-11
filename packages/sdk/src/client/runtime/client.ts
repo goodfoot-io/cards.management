@@ -93,8 +93,10 @@ type NodeWebSocketInit = { readonly headers: Readonly<Record<string, string>> };
 type SocketFactory = new (url: string, init: NodeWebSocketInit) => WebSocket;
 
 interface PendingFrame {
+  readonly socket: WebSocket;
   readonly matches: (envelope: RuntimeEnvelope) => boolean;
   readonly settle: (envelope: RuntimeEnvelope) => void;
+  readonly close: () => void;
 }
 
 class RuntimeClientImpl implements RuntimeClient {
@@ -105,7 +107,6 @@ class RuntimeClientImpl implements RuntimeClient {
   private synchronization: SynchronizationReport | null = null;
   private hasRecovered = false;
   private readonly waiters = new Set<PendingFrame>();
-  private connectionLost: (() => void)[] = [];
 
   constructor(options: RuntimeClientOptions) {
     this.options = options;
@@ -137,7 +138,13 @@ class RuntimeClientImpl implements RuntimeClient {
     this.socket = socket;
     this.currentState = 'authenticating';
 
-    const registration = await this.openAndRegister(socket);
+    const outstanding = await collectOutstandingMessageIds(this.options.outbox, this.executionId());
+    const resumed = this.currentGeneration !== null || outstanding.length > 0;
+    const opening = this.openingMessage(resumed, outstanding);
+    const resumeAcknowledgment = resumed
+      ? this.waitForFrame(socket, (envelope) => envelope.type === 'runtime.resumeAck', undefined)
+      : null;
+    const registration = await this.openAndRegister(socket, opening);
     if (registration === null) {
       this.currentState = 'disconnected';
       return { status: 'unavailable', detail: 'the connection closed before registration' };
@@ -149,10 +156,9 @@ class RuntimeClientImpl implements RuntimeClient {
     }
 
     this.currentGeneration = registration.generation;
-    const resumed = registration.fencedGeneration !== null;
     this.currentState = 'synchronizing';
 
-    const synchronization = await this.runBarrier(socket, resumed);
+    const synchronization = await this.runBarrier(resumeAcknowledgment);
     if (synchronization === null) {
       this.currentState = 'disconnected';
       return { status: 'unavailable', detail: 'the connection closed during synchronization' };
@@ -260,7 +266,17 @@ class RuntimeClientImpl implements RuntimeClient {
   private async awaitAcceptance<TType extends RuntimeMessageType>(
     message: OutboundMessage<TType>
   ): Promise<SendOutcome> {
+    const socket = this.socket;
+    if (socket === null) {
+      return {
+        status: 'uncertain',
+        messageId: message.messageId,
+        reason: 'connection-lost',
+        requestId: message.requestId
+      };
+    }
     const accepted = await this.waitForFrame(
+      socket,
       (envelope) =>
         envelope.type === 'runtime.accepted' &&
         (envelope.payload as { acknowledgedMessageId?: string }).acknowledgedMessageId === message.messageId,
@@ -300,7 +316,10 @@ class RuntimeClientImpl implements RuntimeClient {
     });
   }
 
-  private async openAndRegister(socket: WebSocket): Promise<RegistrationOutcome | null> {
+  private async openAndRegister(
+    socket: WebSocket,
+    opening: OutboundMessage<'runtime.register'> | OutboundMessage<'runtime.resume'>
+  ): Promise<RegistrationOutcome | null> {
     const opened = await new Promise<boolean>((resolve) => {
       socket.addEventListener('open', () => resolve(true), { once: true });
       socket.addEventListener('error', () => resolve(false), { once: true });
@@ -310,20 +329,27 @@ class RuntimeClientImpl implements RuntimeClient {
       return null;
     }
 
+    this.attachFrameRouter(socket);
     const registration = new Promise<RegistrationOutcome | null>((resolve) => {
       const onMessage = (event: MessageEvent): void => {
-        socket.removeEventListener('message', onMessage);
-        const parsed = registrationOutcomeSchema.safeParse(JSON.parse(String(event.data)));
-        resolve(parsed.success ? parsed.data : null);
+        let value: unknown;
+        try {
+          value = JSON.parse(String(event.data));
+        } catch {
+          return;
+        }
+        const parsed = registrationOutcomeSchema.safeParse(value);
+        if (parsed.success) {
+          socket.removeEventListener('message', onMessage);
+          resolve(parsed.data);
+        }
       };
       socket.addEventListener('message', onMessage);
       socket.addEventListener('close', () => resolve(null), { once: true });
     });
 
+    socket.send(JSON.stringify(this.envelopeFor(opening)));
     const outcome = await registration;
-    if (outcome !== null && outcome.status === 'registered') {
-      this.attachFrameRouter(socket);
-    }
     return outcome;
   }
 
@@ -336,18 +362,18 @@ class RuntimeClientImpl implements RuntimeClient {
         return;
       }
       for (const waiter of [...this.waiters]) {
-        if (waiter.matches(envelope)) {
+        if (waiter.socket === socket && waiter.matches(envelope)) {
           this.waiters.delete(waiter);
           waiter.settle(envelope);
         }
       }
     });
     socket.addEventListener('close', () => {
-      this.waiters.clear();
-      const listeners = this.connectionLost;
-      this.connectionLost = [];
-      for (const listener of listeners) {
-        listener();
+      for (const waiter of [...this.waiters]) {
+        if (waiter.socket === socket) {
+          this.waiters.delete(waiter);
+          waiter.close();
+        }
       }
       if (this.currentState === 'connected') {
         this.currentState = 'disconnected';
@@ -356,27 +382,29 @@ class RuntimeClientImpl implements RuntimeClient {
   }
 
   private async waitForFrame(
+    socket: WebSocket,
     matches: (envelope: RuntimeEnvelope) => boolean,
     deadlineMs: number | undefined
   ): Promise<RuntimeEnvelope | 'timeout' | 'closed'> {
     return new Promise((resolve) => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const waiter: PendingFrame = {
+        socket,
         matches,
         settle: (envelope) => {
           if (timer !== undefined) {
             clearTimeout(timer);
           }
           resolve(envelope);
+        },
+        close: () => {
+          if (timer !== undefined) {
+            clearTimeout(timer);
+          }
+          resolve('closed');
         }
       };
       this.waiters.add(waiter);
-      this.connectionLost.push(() => {
-        if (timer !== undefined) {
-          clearTimeout(timer);
-        }
-        resolve('closed');
-      });
       if (deadlineMs !== undefined) {
         timer = setTimeout(() => {
           this.waiters.delete(waiter);
@@ -386,10 +414,11 @@ class RuntimeClientImpl implements RuntimeClient {
     });
   }
 
-  private async runBarrier(socket: WebSocket, resumed: boolean): Promise<SynchronizationReport | null> {
+  private openingMessage(
+    resumed: boolean,
+    outstanding: readonly string[]
+  ): OutboundMessage<'runtime.register'> | OutboundMessage<'runtime.resume'> {
     const executionId = this.executionId();
-    const outstanding = resumed ? await collectOutstandingMessageIds(this.options.outbox, executionId) : [];
-
     const execution = { executionId, launchRequestId: this.options.credential.requestId };
     const base = {
       revision: 0,
@@ -398,7 +427,7 @@ class RuntimeClientImpl implements RuntimeClient {
       workRevision: 0
     } as const;
 
-    const opening: OutboundMessage<'runtime.register'> | OutboundMessage<'runtime.resume'> = resumed
+    return resumed
       ? {
           type: 'runtime.resume',
           payload: { ...base, outstandingMessageIds: [...outstanding] },
@@ -411,15 +440,21 @@ class RuntimeClientImpl implements RuntimeClient {
           messageId: `register-${String(this.currentGeneration ?? 0)}`,
           execution
         };
+  }
 
-    const reply = this.waitForFrame((envelope) => envelope.type === 'runtime.resumeAck', undefined);
-    socket.send(JSON.stringify(this.envelopeFor(opening)));
-    const acknowledgment = await reply;
+  private async runBarrier(
+    resumeAcknowledgment: Promise<RuntimeEnvelope | 'timeout' | 'closed'> | null
+  ): Promise<SynchronizationReport | null> {
+    const executionId = this.executionId();
+    const acknowledgment = resumeAcknowledgment === null ? null : await resumeAcknowledgment;
     if (acknowledgment === 'timeout' || acknowledgment === 'closed') {
       return null;
     }
 
-    const payload = acknowledgment.payload as { workRevision: number; acceptedMessageIds: readonly string[] };
+    const payload =
+      acknowledgment === null
+        ? { workRevision: 0, acceptedMessageIds: [] as readonly string[] }
+        : (acknowledgment.payload as { workRevision: number; acceptedMessageIds: readonly string[] });
     const report = await synchronize({
       outbox: this.options.outbox,
       authorities: this.options.authorities,

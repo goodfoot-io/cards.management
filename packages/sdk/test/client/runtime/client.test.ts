@@ -79,13 +79,15 @@ describe('connecting', () => {
   });
 
   it('treats displacing its own earlier connection as a resume', async () => {
-    server = await FakeRuntimeServer.start({
-      registration: { status: 'registered', generation: 2, fencedGeneration: 1 } as never
-    });
+    server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server));
+    await client.connect();
+    server.dropConnections();
+    server.rescript({ registration: { status: 'registered', generation: 2, fencedGeneration: 1 } as never });
     const result = await client.connect();
 
     expect(result).toMatchObject({ status: 'connected', resumed: true });
+    expect(server.received.map(({ type }) => type)).toEqual(['runtime.register', 'runtime.resume']);
   });
 
   it('surfaces a registration refusal with the server reason rather than a generic failure', async () => {
@@ -148,8 +150,10 @@ describe('synchronization before new work', () => {
   });
 
   it('reports the server work revision rather than a locally assumed one', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(makeRecordInput({ messageId: 'resume-me' }));
     server = await FakeRuntimeServer.start({ workRevision: 12 });
-    client = createRuntimeClient(optionsFor(server));
+    client = createRuntimeClient(optionsFor(server, { outbox }));
     const result = await client.connect();
 
     expect(result).toMatchObject({ synchronization: { workRevision: 12 } });

@@ -22,7 +22,7 @@ import { TEST_EXECUTION, TEST_OWNERSHIP, TEST_SCOPE } from './index.js';
 
 /** How the fake server should behave for one test. */
 export interface FakeRuntimeServerScript {
-  /** Registration frame sent immediately after upgrade. */
+  /** Registration outcome sent after the client presents its opening envelope. */
   readonly registration?: RegistrationOutcome;
   /** Work revision reported in the synchronization reply. */
   readonly workRevision?: number;
@@ -144,30 +144,28 @@ export class FakeRuntimeServer {
     }
     this.sockets.add(socket);
 
-    const registration: RegistrationOutcome = this.script.registration ?? {
-      status: 'registered',
-      generation: 1 as ConnectionGeneration,
-      fencedGeneration: null
-    };
-    socket.send(JSON.stringify(registration));
-
     socket.on('message', (raw: Buffer) => {
       const envelope = JSON.parse(raw.toString()) as RuntimeEnvelope;
       this.received.push(envelope);
 
-      if (
-        (envelope.type === 'runtime.register' || envelope.type === 'runtime.resume') &&
-        this.script.withholdResumeAck !== true
-      ) {
-        socket.send(
-          JSON.stringify(
-            this.envelope('runtime.resumeAck', {
-              revision: 1,
-              workRevision: this.script.workRevision ?? 0,
-              acceptedMessageIds: this.script.acceptedMessageIds ?? []
-            })
-          )
-        );
+      if (envelope.type === 'runtime.register' || envelope.type === 'runtime.resume') {
+        const registration: RegistrationOutcome = this.script.registration ?? {
+          status: 'registered',
+          generation: 1 as ConnectionGeneration,
+          fencedGeneration: null
+        };
+        socket.send(JSON.stringify(registration));
+        if (envelope.type === 'runtime.resume' && this.script.withholdResumeAck !== true) {
+          socket.send(
+            JSON.stringify(
+              this.envelope('runtime.resumeAck', {
+                revision: 1,
+                workRevision: this.script.workRevision ?? 0,
+                acceptedMessageIds: this.script.acceptedMessageIds ?? []
+              })
+            )
+          );
+        }
         return;
       }
 
