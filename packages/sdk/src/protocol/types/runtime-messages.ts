@@ -136,7 +136,10 @@ export const launchRequestPayloadSchema = z
     environmentName: z.string().min(1),
     mode: executionModeSchema,
     exitWhenDone: z.boolean(),
-    selectedAgent: z.string().min(1).optional()
+    selectedAgent: z.string().min(1).optional(),
+    model: z.string().min(1).optional(),
+    effort: z.string().min(1).optional(),
+    variableGroupIds: z.array(z.string().min(1)).optional()
   })
   .strict();
 
@@ -164,6 +167,9 @@ export const interactiveHandoffPayloadSchema = z
 
 /** Payload of `execution.switchToInteractiveCommand`. */
 export const switchToInteractiveCommandPayloadSchema = z.object({}).strict();
+
+/** Extension-authored request to begin a durable interactive handoff. */
+export const switchToInteractiveRequestPayloadSchema = z.object({}).strict();
 
 /** Outcome a shutdown requester reports for the work it is finishing. */
 export const shutdownOutcomeSchema = z.enum(['success', 'blocked', 'error']);
@@ -411,6 +417,7 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.cancelRequest': cancelPayloadSchema,
   'execution.cancelCommand': cancelPayloadSchema,
   'execution.interactiveHandoff': interactiveHandoffPayloadSchema,
+  'execution.switchToInteractiveRequest': switchToInteractiveRequestPayloadSchema,
   'execution.switchToInteractiveCommand': switchToInteractiveCommandPayloadSchema,
   'execution.shutdownRequest': shutdownRequestPayloadSchema,
   'execution.agentShutdownCommand': agentShutdownCommandPayloadSchema,

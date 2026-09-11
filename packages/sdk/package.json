@@ -18,7 +18,6 @@
     "./config/factories/*": "./src/config/factories/*.ts",
     "./config/cli": "./src/config/cli/index.ts",
     "./config/runtime": "./src/config/runtime.ts",
-    "./config/socket-client": "./src/config/socket-client.ts",
     "./config/logger": "./src/config/logger.ts",
     "./config/schema": "./src/config/schema.ts",
     "./config/env": "./src/config/env.ts",

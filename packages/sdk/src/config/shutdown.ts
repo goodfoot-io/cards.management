@@ -37,7 +37,7 @@ function pendingShutdownPath(sessionId: string): string {
  * Atomically persist the request that a later Stop hook must acknowledge.
  *
  * @param sessionId - Codex session that will receive a later Stop event.
- * @param request - Versioned correlated request and its action socket.
+ * @param request - Versioned correlated request with stable identities only.
  */
 export function writePendingShutdownRequest(sessionId: string, request: PendingShutdownRequest): void {
   const destination = pendingShutdownPath(sessionId);

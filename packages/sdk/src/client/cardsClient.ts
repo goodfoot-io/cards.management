@@ -959,6 +959,8 @@ export class CardsClient {
    *   preserve default-agent resolution.
    * @param variableGroupIds - Optional ordered one-shot variable-group selection.
    *   Omitted to preserve the persisted selection; an empty array selects none.
+   * @param model - Optional one-shot model override.
+   * @param effort - Optional one-shot reasoning-effort override.
    * @returns Promise resolving to the action execution result.
    * @throws ApiError when the server rejects the request.
    * @throws NetworkError when the request fails to reach the server.
@@ -971,7 +973,9 @@ export class CardsClient {
     mode?: ExecutionMode,
     exitWhenDone?: boolean,
     selectedAgent?: CodingAgentId,
-    variableGroupIds?: string[]
+    variableGroupIds?: string[],
+    model?: string,
+    effort?: string
   ): Promise<ActionResult> {
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/actions/${encodeURIComponent(actionName)}`);
     const body: ExecuteActionRequest = { requestId, messageId };
@@ -979,6 +983,8 @@ export class CardsClient {
     if (exitWhenDone) body.exitWhenDone = true;
     if (selectedAgent) body.selectedAgent = selectedAgent;
     if (variableGroupIds !== undefined) body.variableGroupIds = variableGroupIds;
+    if (model !== undefined) body.model = model;
+    if (effort !== undefined) body.effort = effort;
     return this.request(() => this.getHttpClient().post<ActionResult>(url, body), false);
   }
 

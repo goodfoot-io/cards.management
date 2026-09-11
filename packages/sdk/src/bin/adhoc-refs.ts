@@ -9,10 +9,6 @@
  * cleanup) and is safe to run synchronously at session start: it no-ops for
  * healthy cards and never touches a card whose monitored PID is still live.
  *
- * Action-presence detection ({@link liveActionPresent}) is a read-only,
- * fail-closed signal used by ad-hoc teardown to avoid racing the action wrapper
- * (see the residual note in the module that consumes it).
- *
  * @summary Ad-hoc attribution refs, action-presence, and reconciliation sweep
  * @module
  */
@@ -180,57 +176,6 @@ export async function liveRefsRemain(cardId: string, sessionId: string, logger: 
 }
 
 /**
- * Regex matching the action wrapper's unix-socket filenames in `~/.cards/`.
- *
- * Format: `a-<extensionPid>-<8hex>.sock` (see ActionDispatcher.createActionSocket).
- * The socket exists for the lifetime of a running action and is unlinked when
- * the action completes; it is the only read-only on-disk trace of a live action.
- */
-const ACTION_SOCKET_RE = /^a-(\d+)-[0-9a-f]{8}\.sock$/;
-
-/**
- * Detects whether any live action wrapper is running, by scanning `~/.cards/`
- * for action socket files whose owning extension process is still alive.
- *
- * Read-only and fail-closed: on any error reading the directory it returns
- * `true` (assume an action may be live) so ad-hoc teardown never races the
- * wrapper. The socket filename encodes the *extension* PID, not the cardId, so
- * this signal is instance-wide, not per-card (see the residual note where it is
- * consumed).
- *
- * @param logger - Logger for warn output on scan failure.
- * @returns True when at least one live action socket is present (or on error).
- */
-export async function liveActionPresent(logger: AdhocRefsLogger): Promise<boolean> {
-  const cardsDir = resolveGlobalCardsConfigDir();
-
-  let files: string[];
-  try {
-    files = await readdir(cardsDir);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return false;
-    }
-    logger.warn('liveActionPresent: failed to read cards dir — assuming action present', {
-      cardsDir,
-      error: String(error)
-    });
-    return true;
-  }
-
-  for (const file of files) {
-    const match = file.match(ACTION_SOCKET_RE);
-    if (!match) continue;
-    const pid = Number.parseInt(match[1]!, 10);
-    if (Number.isFinite(pid) && isProcessAliveWithStartTime(pid)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-/**
  * Resolves the per-card repository root (`reposPath`) from the API discovery
  * file (`$CARDS_DISCOVERY_PATH`, else `<resolveGlobalCardsConfigDir()>/cards-api.json`,
  * which honors `$CARDS_HOME`).
@@ -290,15 +235,6 @@ export async function runReconciliationSweep(logger: AdhocRefsLogger): Promise<v
  * Bounded and synchronous-friendly: it touches only the local filesystem and a
  * `git commit` per stranded card. It never touches a card with a live monitor
  * and never spawns a long-lived process.
- *
- * Action-aware: before settling a card whose refs are all dead it consults
- * {@link liveActionPresent} (the same fail-closed guard the teardown path
- * uses). A STALE dead ad-hoc ref (from a prior crashed monitor) can sit in the
- * dir of a card a live action later operates on, and the sweep runs in every
- * session — including an action's own session-start. Skipping the settle while
- * an action is live prevents a mid-action flip racing the wrapper, and lets a
- * teardown-deferred ref (retained on purpose) settle on a later sweep once the
- * action clears.
  *
  * @param cardRepoRoot - Directory containing per-card repositories
  *   (`reposPath`); each stranded card's repo is `join(cardRepoRoot, cardId)`.
@@ -360,19 +296,6 @@ export async function reconcileStrandedActiveCards(
 
     // A live monitor still owns this card — leave it and its refs untouched.
     if (anyLive) continue;
-
-    // All monitors are dead, but a STALE dead ref can sit in this card's dir
-    // for a card a live action later operates on (and the sweep runs in every
-    // session, including an action's own session-start). Consult the same
-    // fail-closed action-presence guard the teardown path uses: if a live
-    // action is present, SKIP this card — leave its dead ref in place for a
-    // later sweep to settle once the action clears. This prevents flipping the
-    // card to `needs_review` mid-action (a double write racing the wrapper),
-    // and is what lets a teardown-deferred-and-retained ref eventually settle.
-    if (await liveActionPresent(logger)) {
-      logger.warn('reconcile: live action present — deferring settle, retaining refs', { cardId });
-      continue;
-    }
 
     // All monitors are dead: settle the card (guarded), then drop stale refs.
     try {

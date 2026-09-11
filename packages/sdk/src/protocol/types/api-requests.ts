@@ -590,6 +590,12 @@ export interface ExecuteActionRequest {
   /** One-shot coding-agent override. Omitted to preserve default selection. */
   selectedAgent?: CodingAgentId;
 
+  /** One-shot model override forwarded to the selected coding agent. */
+  model?: string;
+
+  /** One-shot reasoning-effort override forwarded to the selected coding agent. */
+  effort?: string;
+
   /**
    * Execution mode for the action.
    *

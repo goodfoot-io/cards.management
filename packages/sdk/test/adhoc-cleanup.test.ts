@@ -146,27 +146,6 @@ describe('performTeardown', () => {
     return (JSON.parse(await readFile(join(repoDir, 'CARD.meta.json'), 'utf-8')) as { status?: string }).status;
   }
 
-  it("retains this session's ref when the flip is deferred to a live action", async () => {
-    const ownRef = join(adhocActiveDir(cardId), `${sessionId}.ref`);
-    await writeFile(ownRef, String(process.pid));
-
-    const action = spawnSleep();
-    const client = new RecordingClient();
-    try {
-      await writeFile(join(cardsHome, `a-${action.pid}-deadbeef.sock`), '');
-
-      await performTeardown(client, teardownArgs(), noopLogger);
-
-      // Deferred: no needs_review write, ref retained so the sweep can settle.
-      expect(client.updates).toHaveLength(0);
-      await expect(access(ownRef)).resolves.toBeUndefined();
-      // Lock always released.
-      await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    } finally {
-      action.kill('SIGKILL');
-    }
-  });
-
   it("clears this session's unbound-candidate directory when the session ends", async () => {
     const ownRef = join(adhocActiveDir(cardId), `${sessionId}.ref`);
     await writeFile(ownRef, String(process.pid));

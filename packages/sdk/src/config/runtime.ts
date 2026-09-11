@@ -14,8 +14,8 @@
  *
  * 1. Extract input payload from environment variables based on command type
  * 2. Set logger context with command type and input
- * 3. Optionally connect to SOCKET_PATH for command dispatch (fail-open)
- * 4. Build ActionContext with logger, cwd, and socket-backed callbacks
+ * 3. Connect to the authenticated durable runtime (fail-closed)
+ * 4. Build ActionContext with logger, cwd, and durable command callbacks
  * 5. Invoke the command with input and context
  * 6. On success: clean up socket and exit with code 0
  * 7. On error: log error, write to stderr, clean up and exit with code 1
@@ -35,8 +35,17 @@
  * ```
  */
 
+import { resolveGlobalCardsConfigDir } from '../cards-config.js';
+import { discoverApiInfo } from '../client/api-discovery.js';
+import {
+  createRuntimeClientFromCredentialFile,
+  loadRuntimeCredential,
+  type RuntimeClient
+} from '../client/runtime/index.js';
+import { createFileClientOutbox, resolveOutboxRoot } from '../client/runtime/outbox/index.js';
+import type { RuntimeEnvelope, RuntimePayload } from '../protocol/index.js';
 import type { ActionCommand, CardsAssistantCommand } from './command-types.js';
-import { CARDS_ENV_VARS, extractActionInput, extractCardsAssistantInput } from './env.js';
+import { extractActionInput, extractCardsAssistantInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
 import type {
   ActionContext,
@@ -46,8 +55,6 @@ import type {
   CardsAssistantInput
 } from './inputs.js';
 import { Logger } from './logger.js';
-import type { SocketCommand } from './socket-client.js';
-import { SocketClient } from './socket-client.js';
 
 /**
  * Logger for the handler runtime process.
@@ -242,18 +249,6 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       // Set logger context with command type
       logger.setContext(command.factoryType, { ...input });
 
-      // Socket connection and ActionContext for action commands
-      let socketClient: SocketClient | undefined;
-      const socketPath = process.env[CARDS_ENV_VARS.SOCKET_PATH];
-      if (socketPath) {
-        try {
-          socketClient = await SocketClient.connect(socketPath);
-        } catch (error) {
-          logger.warn(`Failed to connect to socket at ${socketPath}: ${getErrorMessage(error)}`);
-          // Fail-open: continue without socket
-        }
-      }
-
       // Callback registration state
       let cancelCallback: (() => void | Promise<void>) | undefined;
       let switchToInteractiveCallback: (() => unknown | Promise<unknown>) | undefined;
@@ -262,37 +257,26 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
         | undefined;
       let commandProcessed = false;
       let agentShutdownProcessed = false;
-      let sentCapabilities: { switchToInteractive: boolean; supportsAgentShutdown: boolean } | undefined;
-
-      // Advertise registered lifecycle hooks to the dispatcher. Snapshots are
-      // superseding: every registration that changes the advertised state sends
-      // the full current snapshot, so registration order never freezes a stale
-      // flag at false (the dispatcher merges partial messages additively).
-      const advertiseCapabilities = (): void => {
-        if (!socketClient) return;
-        const snapshot = {
-          switchToInteractive: switchToInteractiveCallback !== undefined,
-          supportsAgentShutdown: agentShutdownCallback !== undefined
-        };
-        if (
-          sentCapabilities &&
-          sentCapabilities.switchToInteractive === snapshot.switchToInteractive &&
-          sentCapabilities.supportsAgentShutdown === snapshot.supportsAgentShutdown
-        ) {
-          return;
-        }
-        sentCapabilities = snapshot;
-        socketClient.sendResponseThen(
-          {
-            type: 'capabilities',
-            switchToInteractive: snapshot.switchToInteractive,
-            supportsAgentShutdown: snapshot.supportsAgentShutdown
-          },
-          () => {}
-        );
+      let runtimeClient: RuntimeClient;
+      const loaded = loadRuntimeCredential('agent-handler');
+      const sendDurable = async <T extends 'execution.commandCustody' | 'execution.agentTermination'>(
+        type: T,
+        payload: RuntimePayload<T>,
+        causationId: string
+      ): Promise<boolean> => {
+        const result = await runtimeClient.send({
+          type,
+          payload,
+          messageId: `${causationId}:agent-handler:${type}`,
+          requestId: loaded.credential.requestId,
+          causationId,
+          execution: loaded.execution,
+          deadlineMs: 5_000
+        });
+        return result.status === 'accepted';
       };
 
-      // Build ActionContext with logger, cwd, and socket-backed callbacks
+      // Build ActionContext with logger, cwd, and durable-runtime callbacks.
       const context: ActionContext = {
         logger,
         cwd: process.cwd(),
@@ -301,48 +285,67 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
         },
         onSwitchToInteractive: (callback) => {
           switchToInteractiveCallback = callback;
-          advertiseCapabilities();
         },
         onAgentShutdown: (callback) => {
           agentShutdownCallback = callback;
-          advertiseCapabilities();
         }
       };
 
-      // Wire socket command dispatch
-      if (socketClient) {
-        socketClient.onCommand((cmd: SocketCommand) => {
+      runtimeClient = createRuntimeClientFromCredentialFile({
+        role: 'agent-handler',
+        outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
+        discover: async () => {
+          const info = await discoverApiInfo();
+          return info ? { host: info.host, port: info.port, accessToken: info.accessToken } : null;
+        },
+        onMessage: async (cmd: RuntimeEnvelope) => {
           // First-wins semantics for user-initiated commands; agentShutdown is
           // deduplicated independently so a later cancel still lands after it.
           if (commandProcessed) return;
 
-          if (cmd.type === 'agentShutdown') {
+          if (
+            cmd.type !== 'execution.cancelCommand' &&
+            cmd.type !== 'execution.switchToInteractiveCommand' &&
+            cmd.type !== 'execution.agentShutdownCommand'
+          )
+            return;
+          if (!(await sendDurable('execution.commandCustody', { commandMessageId: cmd.messageId }, cmd.messageId)))
+            return;
+
+          if (cmd.type === 'execution.agentShutdownCommand') {
             if (agentShutdownProcessed) return;
             agentShutdownProcessed = true;
-            handleAgentShutdownCommand(agentShutdownCallback, cmd.requestId, socketClient);
+            await handleAgentShutdownCommand(
+              agentShutdownCallback,
+              cmd as RuntimeEnvelope<'execution.agentShutdownCommand'>,
+              sendDurable
+            );
             return;
           }
 
           commandProcessed = true;
 
-          if (cmd.type === 'cancel') {
-            handleCancelCommand(cancelCallback, socketClient);
-          } else if (cmd.type === 'switchToInteractive') {
-            handleSwitchToInteractiveCommand(switchToInteractiveCallback, socketClient!);
+          if (cmd.type === 'execution.cancelCommand') {
+            handleCancelCommand(cancelCallback);
+          } else if (cmd.type === 'execution.switchToInteractiveCommand') {
+            handleSwitchToInteractiveCommand(switchToInteractiveCallback);
           }
-        });
+        }
+      });
+      const connected = await runtimeClient.start();
+      if (connected.status !== 'connected') {
+        throw new Error(`Authenticated runtime connection ${connected.status}`);
       }
 
       // Execute the action command handler
       try {
         await command(input, context);
       } catch (error) {
-        socketClient?.close();
+        await runtimeClient.stop();
         return handleHandlerError(error);
       }
 
-      // Clean up socket and exit successfully
-      socketClient?.close();
+      await runtimeClient.stop();
       cleanupAndExit(EXIT_CODES.SUCCESS);
     }
   } catch (error) {
@@ -374,7 +377,7 @@ function toPromise<T>(result: T | Promise<T>): Promise<T> {
 }
 
 /**
- * Handles a `cancel` command from the socket.
+ * Handles an authenticated durable cancel command.
  *
  * If a cancel callback was registered, it is invoked. Otherwise, SIGTERM
  * is sent to the current process as a fallback. After the callback completes
@@ -389,88 +392,64 @@ function toPromise<T>(result: T | Promise<T>): Promise<T> {
  * is to wind down promptly, not to escalate cleanup failures.
  *
  * @param callback - The registered cancel callback, if any
- * @param socketClient - The socket client to close before exiting
- *
  * @internal
  */
-function handleCancelCommand(
-  callback: (() => void | Promise<void>) | undefined,
-  socketClient: SocketClient | undefined
-): void {
+function handleCancelCommand(callback: (() => void | Promise<void>) | undefined): void {
   if (!callback) {
     process.kill(process.pid, 'SIGTERM');
     return;
   }
 
   try {
-    // Same sync-throw containment as handleAgentShutdownCommand: a throwing
-    // callback must not escape into the socket parse loop as a bogus
-    // "malformed line" diagnostic.
+    // Contain synchronous callback failures inside the lifecycle handler.
     toPromise(callback()).then(
       () => {
-        socketClient?.close();
         cleanupAndExit(EXIT_CODES.SUCCESS);
       },
       (error) => {
         logger.error(`onCancel callback error: ${getErrorMessage(error)}`);
-        socketClient?.close();
         cleanupAndExit(EXIT_CODES.SUCCESS);
       }
     );
   } catch (error) {
     logger.error(`onCancel callback error: ${getErrorMessage(error)}`);
-    socketClient?.close();
     cleanupAndExit(EXIT_CODES.SUCCESS);
   }
 }
 
 /**
- * Handles a `switchToInteractive` command from the socket.
+ * Handles an authenticated durable switch-to-interactive command.
  *
  * If no callback was registered, the command is ignored (no-op). Otherwise,
- * the callback is invoked and its return value is sent as
- * `switchToInteractiveResponse` on the socket. `process.exit(42)` is called
- * inside the `write()` callback to guarantee the response is flushed before
- * the event loop tears down.
+ * the callback is invoked before the process exits with the handoff code.
  *
  * @param callback - The registered switchToInteractive callback, if any
- * @param socketClient - The socket client used to send the response
- *
  * @internal
  */
-function handleSwitchToInteractiveCommand(
-  callback: (() => unknown | Promise<unknown>) | undefined,
-  socketClient: SocketClient
-): void {
+function handleSwitchToInteractiveCommand(callback: (() => unknown | Promise<unknown>) | undefined): void {
   if (!callback) {
     return;
   }
 
   try {
-    // Same sync-throw containment as the other lifecycle handlers: without
-    // it the escape lands in SocketClient's parse loop as a bogus
-    // "malformed line" while the relaunch silently never proceeds.
+    // Contain synchronous callback failures inside the lifecycle handler.
     toPromise(callback()).then(
-      (data) => {
-        socketClient.sendResponseThen({ type: 'switchToInteractiveResponse', data }, () => {
-          cleanupAndExit(EXIT_CODES.SWITCH_TO_INTERACTIVE);
-        });
+      () => {
+        cleanupAndExit(EXIT_CODES.SWITCH_TO_INTERACTIVE);
       },
       (error) => {
         logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
-        socketClient.close();
         cleanupAndExit(EXIT_CODES.ERROR);
       }
     );
   } catch (error) {
     logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
-    socketClient.close();
     cleanupAndExit(EXIT_CODES.ERROR);
   }
 }
 
 /**
- * Handles an `agentShutdown` command from the socket.
+ * Handles an authenticated durable agent-shutdown command.
  *
  * Invokes the registered `onAgentShutdown` callback — typically terminating
  * the agent CLI gracefully so the normal post-exit cascade proceeds — and
@@ -480,28 +459,39 @@ function handleSwitchToInteractiveCommand(
  * is a no-op. Callback rejections are reported via the logger only.
  *
  * @param callback - The registered agentShutdown callback, if any
- * @param requestId - Opaque shutdown request correlation identifier.
- * @param socketClient - Connected action socket used for the termination result.
+ * @param command - Correlated shutdown command from the runtime.
+ * @param sendDurable - Authenticated durable-result sender.
+ * @returns Completion after the callback and any terminal result are settled.
  *
  * @internal
  */
 function handleAgentShutdownCommand(
   callback: (() => AgentTerminationResult | undefined | Promise<AgentTerminationResult | undefined>) | undefined,
-  requestId: string,
-  socketClient: SocketClient
-): void {
+  command: RuntimeEnvelope<'execution.agentShutdownCommand'>,
+  sendDurable: <T extends 'execution.commandCustody' | 'execution.agentTermination'>(
+    type: T,
+    payload: RuntimePayload<T>,
+    causationId: string
+  ) => Promise<boolean>
+): Promise<void> {
   if (!callback) {
-    return;
+    return Promise.resolve();
   }
 
   try {
-    // A synchronously-throwing callback would otherwise propagate into
-    // SocketClient's NDJSON parse loop and be misreported as protocol
-    // corruption while the shutdown event is silently consumed.
-    toPromise(callback()).then(
-      (result) => {
+    // Contain synchronous callback failures inside the lifecycle handler.
+    return toPromise(callback()).then(
+      async (result) => {
         if (result !== undefined) {
-          socketClient.sendResponse({ type: 'agentTermination', requestId, result });
+          await sendDurable(
+            'execution.agentTermination',
+            {
+              shutdownRequestId: command.payload.shutdownRequestId,
+              commandMessageId: command.messageId,
+              result
+            },
+            command.messageId
+          );
         }
       },
       (error) => {
@@ -510,5 +500,6 @@ function handleAgentShutdownCommand(
     );
   } catch (error) {
     logger.error(`onAgentShutdown callback error: ${getErrorMessage(error)}`);
+    return Promise.resolve();
   }
 }

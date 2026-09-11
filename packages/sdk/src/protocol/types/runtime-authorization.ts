@@ -224,6 +224,17 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
+  'execution.switchToInteractiveRequest': {
+    type: 'execution.switchToInteractiveRequest',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-intent',
+    allowedRoles: ['extension-dispatcher'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: false,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   'execution.switchToInteractiveCommand': {
     type: 'execution.switchToInteractiveCommand',
     direction: 'server-to-client',

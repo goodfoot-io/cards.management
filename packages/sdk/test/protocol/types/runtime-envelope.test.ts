@@ -117,4 +117,37 @@ describe('parseEnvelope', () => {
     (frame['payload'] as Record<string, unknown>)['commandMessageId'] = 'command-1';
     expect(rejectionReason(frame)).toBe('accepted');
   });
+
+  it('keeps every caller-selected launch parameter in the immutable payload', () => {
+    const frame = validFrame({
+      type: 'execution.launchRequest',
+      producer: { producerId: 'dispatcher-1', role: 'extension-dispatcher' },
+      payload: {
+        actionId: 'launch',
+        environmentName: 'default',
+        mode: 'background',
+        exitWhenDone: true,
+        selectedAgent: 'antigravity-cli',
+        model: 'gemini-3-pro',
+        effort: 'high',
+        variableGroupIds: ['secrets', 'deployment']
+      }
+    });
+    expect(parseEnvelope(frame).payload).toEqual(frame['payload']);
+  });
+
+  it('defines interactive switching as a request distinct from the continuation result', () => {
+    expect(
+      parseEnvelope(
+        validFrame({
+          type: 'execution.switchToInteractiveRequest',
+          producer: { producerId: 'dispatcher-1', role: 'extension-dispatcher' },
+          payload: {}
+        })
+      ).type
+    ).toBe('execution.switchToInteractiveRequest');
+    expect(
+      rejectionReason(validFrame({ type: 'execution.switchToInteractiveRequest', payload: { continuation: {} } }))
+    ).toBe('invalid-payload');
+  });
 });

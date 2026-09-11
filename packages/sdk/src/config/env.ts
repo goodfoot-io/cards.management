@@ -109,7 +109,6 @@ export const CARDS_ENV_VARS = {
    * Path to the Unix domain socket for runtime-to-dispatcher communication.
    * Available in actions only.
    */
-  SOCKET_PATH: 'SOCKET_PATH',
 
   /**
    * Path to a JSON file containing switchToInteractive data from a previous handler.
@@ -457,20 +456,6 @@ export function getVscodeNodePath(): string {
  */
 export function vscodeNodeCommandRef(): string {
   return process.platform === 'win32' ? '"%VSCODE_NODE%"' : '"$VSCODE_NODE"';
-}
-
-/**
- * Reads the Unix domain socket path for runtime-to-dispatcher communication.
- *
- * @returns Unix socket path used to send runtime control messages.
- * @throws Error if SOCKET_PATH is missing or empty
- */
-export function getSocketPath(): string {
-  const value = process.env[CARDS_ENV_VARS.SOCKET_PATH];
-  if (value === undefined || value === '') {
-    throw new Error(`Missing required environment variable: ${CARDS_ENV_VARS.SOCKET_PATH}`);
-  }
-  return value;
 }
 
 /**

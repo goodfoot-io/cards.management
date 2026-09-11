@@ -668,7 +668,7 @@ describe('builder CLI: compiled handler execution', () => {
     }
   }
 
-  it('should compile handlers that execute successfully', async () => {
+  it('compiles handlers that refuse execution without admitted runtime credentials', async () => {
     writeHandler(testDir, 'action.ts', createActionHandler('Executable', testDir));
 
     const configPath = writeConfig(
@@ -708,10 +708,10 @@ export default {
       MARKETPLACE_PATH: testDir
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
   });
 
-  it('should compile handlers with CommonJS dependencies', async () => {
+  it('compiles CommonJS dependencies while preserving fail-closed runtime admission', async () => {
     // Create a handler that would need CommonJS support
     const handlerContent = `
 import { defineAction } from '${FACTORIES_PATH.replace(/\\/g, '/')}';
@@ -767,7 +767,7 @@ export default {
       MARKETPLACE_PATH: testDir
     });
 
-    expect(result.exitCode).toBe(0);
+    expect(result.exitCode).toBe(1);
   });
 });
 

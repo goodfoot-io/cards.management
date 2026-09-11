@@ -736,6 +736,34 @@ describe('CardsClient', () => {
         { requestId: 'request-2', messageId: 'message-2', variableGroupIds: [] }
       ]);
     });
+
+    it('executeAction preserves model and effort launch controls', async () => {
+      const httpClient = new TestHttpClient();
+      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
+      const client = new CardsClient(options, httpClient);
+
+      await client.executeAction(
+        'card-123',
+        'launch',
+        'request-1',
+        'message-1',
+        undefined,
+        false,
+        'antigravity-cli',
+        ['vg-a'],
+        'gemini-3-pro',
+        'high'
+      );
+
+      expect(httpClient.requests[0]?.body).toEqual({
+        requestId: 'request-1',
+        messageId: 'message-1',
+        selectedAgent: 'antigravity-cli',
+        variableGroupIds: ['vg-a'],
+        model: 'gemini-3-pro',
+        effort: 'high'
+      });
+    });
   });
 
   describe('Compare Operations', () => {

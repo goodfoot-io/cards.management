@@ -1,1137 +1,123 @@
 /**
- * Unit tests for runtime execution orchestration.
- *
- * @summary Unit tests for runtime execution orchestration
+ * Authenticated action runtime composition checks.
+ * @summary Durable action runtime tests
  */
-
-import * as fs from 'node:fs';
-import * as net from 'node:net';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCommand, CardsAssistantCommand } from '../../src/config/command-types.js';
 import { CARDS_ENV_VARS } from '../../src/config/env.js';
 import { EXIT_CODES } from '../../src/config/exit-codes.js';
-import { createIpcEndpoint, createNonexistentIpcEndpoint } from '../../src/config/ipc-endpoint.js';
+
+const runtime = vi.hoisted(() => ({
+  onMessage: undefined as ((message: unknown) => Promise<void>) | undefined,
+  send: vi.fn(async (_message: { type: string; [key: string]: unknown }) => ({
+    status: 'accepted',
+    messageId: 'accepted'
+  })),
+  start: vi.fn(async (): Promise<{ status: string }> => ({ status: 'connected' })),
+  stop: vi.fn(async () => undefined)
+}));
+
+vi.mock('../../src/client/api-discovery.js', () => ({
+  discoverApiInfo: vi.fn(async () => ({ host: '127.0.0.1', port: 1234, accessToken: 'token' }))
+}));
+vi.mock('../../src/client/runtime/outbox/index.js', () => ({
+  createFileClientOutbox: vi.fn(() => ({})),
+  resolveOutboxRoot: vi.fn(() => '/runtime/outbox')
+}));
+vi.mock('../../src/client/runtime/index.js', () => ({
+  loadRuntimeCredential: vi.fn(() => ({
+    execution: { executionId: 'execution-1' },
+    credential: { requestId: 'request-1' }
+  })),
+  createRuntimeClientFromCredentialFile: vi.fn((options: { onMessage: (message: unknown) => Promise<void> }) => {
+    runtime.onMessage = options.onMessage;
+    return runtime;
+  })
+}));
+
 import { executeCommand, logger } from '../../src/config/runtime.js';
 
-describe('runtime', () => {
-  // Store original env vars
+describe('executeCommand', () => {
   const originalEnv = { ...process.env };
-  const originalCwd = process.cwd();
-
-  // Mock process.exit and process.stderr.write
   let exitSpy: ReturnType<typeof vi.spyOn>;
-  let stderrSpy: ReturnType<typeof vi.spyOn>;
-  let loggerClearContextSpy: ReturnType<typeof vi.spyOn>;
-  let loggerCloseSpy: ReturnType<typeof vi.spyOn>;
-  let loggerSetContextSpy: ReturnType<typeof vi.spyOn>;
-  let loggerErrorSpy: ReturnType<typeof vi.spyOn>;
 
   beforeEach(() => {
-    // Mock process methods
-    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => {}) as never);
-    stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-
-    // Mock logger methods
-    loggerClearContextSpy = vi.spyOn(logger, 'clearContext');
-    loggerCloseSpy = vi.spyOn(logger, 'close');
-    loggerSetContextSpy = vi.spyOn(logger, 'setContext');
-    loggerErrorSpy = vi.spyOn(logger, 'error');
-
-    // Setup action environment variables
-    process.env[CARDS_ENV_VARS.CARD_ID] = 'card-123';
-    process.env[CARDS_ENV_VARS.ACTION_NAME] = 'Test Action';
-    process.env[CARDS_ENV_VARS.ENVIRONMENT] = 'default';
-    process.env[CARDS_ENV_VARS.EXECUTION_MODE] = 'interactive';
-    process.env[CARDS_ENV_VARS.EXIT_WHEN_DONE] = 'false';
-    process.env[CARDS_ENV_VARS.WORKSPACE_PATH] = '/workspace';
-    process.env[CARDS_ENV_VARS.REPO_ROOT] = '/workspace';
-    process.env[CARDS_ENV_VARS.CARD_REPO_PATH] = '/workspace/cards';
-    process.env[CARDS_ENV_VARS.CONFIG_PATH] = '/workspace/.cards/config';
-    process.env[CARDS_ENV_VARS.EXTENSION_PATH] = '/extension/path';
-    process.env[CARDS_ENV_VARS.MARKETPLACE_PATH] = '/test/marketplace';
+    runtime.onMessage = undefined;
+    runtime.send.mockClear();
+    runtime.start.mockClear();
+    runtime.stop.mockClear();
+    exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    vi.spyOn(logger, 'close').mockImplementation(() => undefined);
+    Object.assign(process.env, {
+      [CARDS_ENV_VARS.CARD_ID]: 'card-123',
+      [CARDS_ENV_VARS.ACTION_NAME]: 'Test Action',
+      [CARDS_ENV_VARS.ENVIRONMENT]: 'default',
+      [CARDS_ENV_VARS.EXECUTION_MODE]: 'interactive',
+      [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false',
+      [CARDS_ENV_VARS.WORKSPACE_PATH]: '/workspace',
+      [CARDS_ENV_VARS.REPO_ROOT]: '/workspace',
+      [CARDS_ENV_VARS.CARD_REPO_PATH]: '/workspace/cards',
+      [CARDS_ENV_VARS.CONFIG_PATH]: '/workspace/.cards/config',
+      [CARDS_ENV_VARS.EXTENSION_PATH]: '/extension/path',
+      [CARDS_ENV_VARS.MARKETPLACE_PATH]: '/marketplace'
+    });
   });
 
   afterEach(() => {
-    // Restore original state
     vi.restoreAllMocks();
     process.env = { ...originalEnv };
-    process.chdir(originalCwd);
   });
 
-  describe('executeCommand', () => {
-    describe('action commands', () => {
-      it('should execute action command with extracted input', async () => {
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
+  it('executes cards-assistant commands without opening an action runtime', async () => {
+    const handler = vi.fn(async () => undefined);
+    const command: CardsAssistantCommand = Object.assign(handler, { factoryType: 'cards-assistant' as const });
+    await executeCommand(command);
+    expect(handler).toHaveBeenCalledOnce();
+    expect(runtime.start).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
+  });
 
-        await executeCommand(command);
+  it('fails closed when authenticated runtime registration is unavailable', async () => {
+    runtime.start.mockResolvedValueOnce({ status: 'unavailable' });
+    const handler = vi.fn(async () => undefined);
+    const command: ActionCommand = Object.assign(handler, {
+      factoryType: 'action' as const,
+      actionName: 'Test Action'
+    });
+    await executeCommand(command);
+    expect(handler).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
+  });
 
-        // Should extract action input
-        expect(handler).toHaveBeenCalledWith(
-          expect.objectContaining({
-            cardId: 'card-123',
-            environment: 'default',
-            executionMode: 'interactive'
-          }),
-          expect.objectContaining({
-            logger: expect.any(Object),
-            cwd: expect.any(String),
-            onCancel: expect.any(Function),
-            onSwitchToInteractive: expect.any(Function)
-          })
-        );
-
-        // Should set logger context
-        expect(loggerSetContextSpy).toHaveBeenCalledWith('action', expect.objectContaining({ cardId: 'card-123' }));
-
-        // Should exit successfully
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-        expect(loggerClearContextSpy).toHaveBeenCalled();
-        expect(loggerCloseSpy).toHaveBeenCalled();
-      });
-
-      it('should handle handler errors in action', async () => {
-        const error = new Error('Handler failed');
-        const handler = vi.fn().mockRejectedValue(error);
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        // Should write error to stderr
-        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Handler failed'));
-
-        // Should log error
-        expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Handler error'));
-
-        // Should exit with error
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-        expect(loggerClearContextSpy).toHaveBeenCalled();
-        expect(loggerCloseSpy).toHaveBeenCalled();
-      });
-
-      it('should include coding agent when present', async () => {
-        process.env[CARDS_ENV_VARS.CODING_AGENT] = 'claude';
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        expect(handler).toHaveBeenCalledWith(
-          expect.objectContaining({
-            codingAgent: 'claude'
-          }),
-          expect.any(Object)
-        );
+  it('takes durable custody before reporting a correlated agent termination', async () => {
+    let release!: () => void;
+    const handler = vi.fn(async (_input, context) => {
+      context.onAgentShutdown(async () => 'graceful');
+      await new Promise<void>((resolve) => {
+        release = resolve;
       });
     });
-
-    describe('cards-assistant commands', () => {
-      function makeCardsAssistantCommand(handler: ReturnType<typeof vi.fn>): CardsAssistantCommand {
-        return Object.assign(handler, {
-          factoryType: 'cards-assistant' as const
-        }) as unknown as CardsAssistantCommand;
-      }
-
-      it('should execute cards-assistant command without action env vars', async () => {
-        // Remove action-specific env vars that would cause extractActionInput to throw
-        delete process.env[CARDS_ENV_VARS.CARD_ID];
-        delete process.env[CARDS_ENV_VARS.ACTION_NAME];
-        delete process.env[CARDS_ENV_VARS.ENVIRONMENT];
-        delete process.env[CARDS_ENV_VARS.EXECUTION_MODE];
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command = makeCardsAssistantCommand(handler);
-
-        await executeCommand(command);
-
-        // Should call handler with cards-assistant input (no cardId, no actionName)
-        expect(handler).toHaveBeenCalledWith(
-          expect.objectContaining({
-            marketplacePath: '/test/marketplace',
-            extensionPath: '/extension/path',
-            repoRoot: '/workspace'
-          }),
-          expect.objectContaining({
-            logger: expect.any(Object),
-            cwd: expect.any(String)
-          })
-        );
-
-        // Context should NOT have onCancel or onSwitchToInteractive
-        const context = handler.mock.calls[0]![1] as Record<string, unknown>;
-        expect(context['onCancel']).toBeUndefined();
-        expect(context['onSwitchToInteractive']).toBeUndefined();
-
-        // Should set logger context with cards-assistant type
-        expect(loggerSetContextSpy).toHaveBeenCalledWith('cards-assistant', {});
-
-        // Should exit successfully
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should handle handler errors in cards-assistant', async () => {
-        delete process.env[CARDS_ENV_VARS.CARD_ID];
-        delete process.env[CARDS_ENV_VARS.ACTION_NAME];
-        delete process.env[CARDS_ENV_VARS.ENVIRONMENT];
-        delete process.env[CARDS_ENV_VARS.EXECUTION_MODE];
-
-        const error = new Error('Assistant handler failed');
-        const handler = vi.fn().mockRejectedValue(error);
-        const command = makeCardsAssistantCommand(handler);
-
-        await executeCommand(command);
-
-        // Should write error to stderr
-        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Assistant handler failed'));
-
-        // Should exit with error
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-
-      it('should handle missing env vars for cards-assistant', async () => {
-        // Remove all env vars including those needed by cards-assistant
-        delete process.env[CARDS_ENV_VARS.CARD_ID];
-        delete process.env[CARDS_ENV_VARS.ACTION_NAME];
-        delete process.env[CARDS_ENV_VARS.ENVIRONMENT];
-        delete process.env[CARDS_ENV_VARS.EXECUTION_MODE];
-        delete process.env[CARDS_ENV_VARS.MARKETPLACE_PATH];
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command = makeCardsAssistantCommand(handler);
-
-        await executeCommand(command);
-
-        // Should not call handler
-        expect(handler).not.toHaveBeenCalled();
-
-        // Should log extraction error
-        expect(loggerErrorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Failed to extract input from environment')
-        );
-
-        // Should exit with error
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
+    const command: ActionCommand = Object.assign(handler, {
+      factoryType: 'action' as const,
+      actionName: 'Test Action'
     });
-
-    describe('environment extraction errors', () => {
-      it('should handle missing required environment variables', async () => {
-        // Remove required env var
-        delete process.env[CARDS_ENV_VARS.CARD_ID];
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        // Should not call handler
-        expect(handler).not.toHaveBeenCalled();
-
-        // Should log extraction error
-        expect(loggerErrorSpy).toHaveBeenCalledWith(
-          expect.stringContaining('Failed to extract input from environment')
-        );
-
-        // Should write error to stderr
-        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('Handler failed'));
-
-        // Should exit with error
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
+    const executing = executeCommand(command);
+    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+    await runtime.onMessage?.({
+      type: 'execution.agentShutdownCommand',
+      messageId: 'command-1',
+      payload: { shutdownRequestId: 'shutdown-1', workRevision: 1 }
     });
-
-    describe('context management', () => {
-      it('should set and clear logger context', async () => {
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        // Should set context before handler
-        expect(loggerSetContextSpy).toHaveBeenCalled();
-
-        // Should clear context after handler
-        expect(loggerClearContextSpy).toHaveBeenCalled();
-      });
-
-      it('should clear context even when handler throws', async () => {
-        const handler = vi.fn().mockRejectedValue(new Error('Handler error'));
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        // Should still clear context
-        expect(loggerClearContextSpy).toHaveBeenCalled();
-        expect(loggerCloseSpy).toHaveBeenCalled();
-      });
-
-      it('should provide cwd in action context', async () => {
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        expect(handler).toHaveBeenCalledWith(
-          expect.any(Object),
-          expect.objectContaining({
-            cwd: process.cwd()
-          })
-        );
-      });
+    expect(runtime.send.mock.calls.map(([message]) => message.type)).toEqual([
+      'execution.commandCustody',
+      'execution.agentTermination'
+    ]);
+    expect(runtime.send.mock.calls[1]?.[0]).toMatchObject({
+      causationId: 'command-1',
+      payload: { shutdownRequestId: 'shutdown-1', commandMessageId: 'command-1', result: 'graceful' }
     });
-
-    // Note: Log file configuration is handled by the compiled wrapper preamble
-    // which sets process.env.CARDS_HOOKS_LOG_FILE before any Logger is constructed.
-    // See compiler.test.ts for tests covering log file embedding.
-
-    describe('non-Error throw values', () => {
-      it('should handle string throws', async () => {
-        const handler = vi.fn().mockRejectedValue('String error');
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        // Should write string to stderr
-        expect(stderrSpy).toHaveBeenCalledWith(expect.stringContaining('String error'));
-
-        // Should exit with error
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-
-      it('should handle object throws', async () => {
-        const handler = vi.fn().mockRejectedValue({ code: 'ERR_CUSTOM' });
-        const command: ActionCommand = Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        });
-
-        await executeCommand(command);
-
-        // Should convert object to string
-        expect(stderrSpy).toHaveBeenCalledWith(expect.any(String));
-
-        // Should exit with error
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-    });
-
-    describe('socket integration', () => {
-      let server: net.Server;
-      let socketPath: string;
-      let serverConnection: net.Socket | undefined;
-      let loggerWarnSpy: ReturnType<typeof vi.spyOn>;
-      let killSpy: ReturnType<typeof vi.spyOn>;
-
-      beforeEach(() => {
-        socketPath = createIpcEndpoint(`test-runtime-socket-${process.pid}-${Date.now()}`);
-        serverConnection = undefined;
-        loggerWarnSpy = vi.spyOn(logger, 'warn');
-        killSpy = vi.spyOn(process, 'kill').mockImplementation((() => {}) as never);
-      });
-
-      afterEach(async () => {
-        serverConnection?.destroy();
-        if (server?.listening) {
-          await new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          });
-        }
-        // Unix domain sockets are filesystem entries that need cleanup;
-        // Windows named pipes are not and are reclaimed by the OS.
-        if (process.platform !== 'win32') {
-          try {
-            fs.unlinkSync(socketPath);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-              throw error;
-            }
-          }
-        }
-      });
-
-      function startServer(): Promise<void> {
-        return new Promise((resolve) => {
-          server = net.createServer((socket) => {
-            serverConnection = socket;
-          });
-          server.listen(socketPath, () => resolve());
-        });
-      }
-
-      function waitForServerConnection(): Promise<net.Socket> {
-        return new Promise((resolve) => {
-          if (serverConnection) {
-            resolve(serverConnection);
-            return;
-          }
-          server.once('connection', (socket) => {
-            serverConnection = socket;
-            resolve(socket);
-          });
-        });
-      }
-
-      function makeCommand(handler: ReturnType<typeof vi.fn>): ActionCommand {
-        return Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        }) as unknown as ActionCommand;
-      }
-
-      it('should skip socket connection when SOCKET_PATH not set', async () => {
-        // Ensure SOCKET_PATH is not set
-        delete process.env[CARDS_ENV_VARS.SOCKET_PATH];
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command = makeCommand(handler);
-
-        await executeCommand(command);
-
-        expect(handler).toHaveBeenCalled();
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should continue when socket connection fails (fail-open)', async () => {
-        // Point to non-existent endpoint (platform-correct address that
-        // nothing is listening on)
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = createNonexistentIpcEndpoint(
-          `nonexistent-runtime-socket-${process.pid}-${Date.now()}`
-        );
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command = makeCommand(handler);
-
-        await executeCommand(command);
-
-        // Should warn about connection failure
-        expect(loggerWarnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to connect to socket'));
-
-        // Should still execute handler and exit successfully
-        expect(handler).toHaveBeenCalled();
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should invoke onCancel callback on cancel command', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const cancelFn = vi.fn();
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(async (_input: unknown, context: { onCancel: (cb: () => void) => void }) => {
-            context.onCancel(cancelFn);
-            await handlerDone;
-          });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-
-        // Send cancel command
-        conn.write('{"type":"cancel"}\n');
-
-        // Wait for cancel to be dispatched, then let handler complete
-        await vi.waitFor(() => {
-          expect(cancelFn).toHaveBeenCalledOnce();
-        });
-        resolveHandler();
-
-        await executePromise;
-
-        // Cancellation is a user-initiated graceful stop, not a handler failure:
-        // handleCancelCommand must not exit with ERROR.
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-        expect(exitSpy).not.toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-
-      it('should invoke onSwitchToInteractive callback and send response', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const switchCallback = vi.fn().mockReturnValue({ sessionId: 'abc123' });
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(
-            async (_input: unknown, context: { onSwitchToInteractive: (cb: () => unknown) => void }) => {
-              context.onSwitchToInteractive(switchCallback);
-              await handlerDone;
-            }
-          );
-        const command = makeCommand(handler);
-
-        // Collect data received by server
-        const serverReceived: string[] = [];
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-        conn.on('data', (chunk) => serverReceived.push(chunk.toString()));
-
-        // Send switchToInteractive command
-        conn.write('{"type":"switchToInteractive"}\n');
-
-        // Wait for callback to be invoked, then let handler complete
-        await vi.waitFor(() => {
-          expect(switchCallback).toHaveBeenCalledOnce();
-        });
-        resolveHandler();
-
-        await executePromise;
-
-        // Verify response was sent on socket
-        const combined = serverReceived.join('');
-        const lines = combined
-          .trim()
-          .split('\n')
-          .filter((l) => l.trim().length > 0);
-        const parsed = lines.map((l) => JSON.parse(l)).find((m) => m.type === 'switchToInteractiveResponse');
-        expect(parsed).toEqual({
-          type: 'switchToInteractiveResponse',
-          data: { sessionId: 'abc123' }
-        });
-
-        // Should exit with SWITCH_TO_INTERACTIVE code
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SWITCH_TO_INTERACTIVE);
-      });
-
-      it('should ignore second command (first-wins semantics)', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const cancelFn = vi.fn();
-        const switchFn = vi.fn().mockReturnValue({ data: 'test' });
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(
-            async (
-              _input: unknown,
-              context: { onCancel: (cb: () => void) => void; onSwitchToInteractive: (cb: () => unknown) => void }
-            ) => {
-              context.onCancel(cancelFn);
-              context.onSwitchToInteractive(switchFn);
-              await handlerDone;
-            }
-          );
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-
-        // Send cancel first, then switchToInteractive
-        conn.write('{"type":"cancel"}\n{"type":"switchToInteractive"}\n');
-
-        // Wait for cancel to be dispatched, then let handler complete
-        await vi.waitFor(() => {
-          expect(cancelFn).toHaveBeenCalledOnce();
-        });
-        resolveHandler();
-
-        await executePromise;
-
-        // Only the first command (cancel) should be processed
-        expect(switchFn).not.toHaveBeenCalled();
-      });
-
-      it('should ignore switchToInteractive when no callback registered', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi.fn().mockImplementation(async () => {
-          // Do NOT register onSwitchToInteractive callback
-          await handlerDone;
-        });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-
-        // Send switchToInteractive - should be no-op
-        conn.write('{"type":"switchToInteractive"}\n');
-
-        // Allow event loop to process the command, then complete the handler
-        await vi.waitFor(() => {
-          expect(handler).toHaveBeenCalled();
-        });
-        resolveHandler();
-
-        // Wait for the handler to complete naturally
-        await executePromise;
-
-        // Should exit successfully (command was ignored, handler completed)
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should complete normally when no socket commands received', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const handler = vi.fn().mockResolvedValue(undefined);
-        const command = makeCommand(handler);
-
-        await executeCommand(command);
-
-        expect(handler).toHaveBeenCalled();
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should handle cancel with no callback by sending SIGTERM', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi.fn().mockImplementation(async () => {
-          // Do NOT register onCancel callback
-          await handlerDone;
-        });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-
-        // Send cancel command without registering a callback
-        conn.write('{"type":"cancel"}\n');
-
-        // Wait for SIGTERM to be sent, then complete the handler
-        await vi.waitFor(() => {
-          expect(killSpy).toHaveBeenCalledWith(process.pid, 'SIGTERM');
-        });
-        resolveHandler();
-
-        await executePromise;
-      });
-
-      it('should handle async onSwitchToInteractive callback', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const switchCallback = vi.fn().mockResolvedValue({ asyncData: true });
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(
-            async (_input: unknown, context: { onSwitchToInteractive: (cb: () => Promise<unknown>) => void }) => {
-              context.onSwitchToInteractive(switchCallback);
-              await handlerDone;
-            }
-          );
-        const command = makeCommand(handler);
-
-        const serverReceived: string[] = [];
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-        conn.on('data', (chunk) => serverReceived.push(chunk.toString()));
-
-        conn.write('{"type":"switchToInteractive"}\n');
-
-        // Wait for callback to be invoked, then let handler complete
-        await vi.waitFor(() => {
-          expect(switchCallback).toHaveBeenCalledOnce();
-        });
-        resolveHandler();
-
-        await executePromise;
-
-        const combined = serverReceived.join('');
-        const lines = combined
-          .trim()
-          .split('\n')
-          .filter((l) => l.trim().length > 0);
-        const parsed = lines.map((l) => JSON.parse(l)).find((m) => m.type === 'switchToInteractiveResponse');
-        expect(parsed).toEqual({
-          type: 'switchToInteractiveResponse',
-          data: { asyncData: true }
-        });
-
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SWITCH_TO_INTERACTIVE);
-      });
-
-      it('should handle async onCancel callback', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const cancelFn = vi.fn().mockResolvedValue(undefined);
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(async (_input: unknown, context: { onCancel: (cb: () => Promise<void>) => void }) => {
-            context.onCancel(cancelFn);
-            await handlerDone;
-          });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"cancel"}\n');
-
-        // Wait for cancel to be dispatched, then let handler complete
-        await vi.waitFor(() => {
-          expect(cancelFn).toHaveBeenCalledOnce();
-        });
-        resolveHandler();
-
-        await executePromise;
-
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-        expect(exitSpy).not.toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-
-      it('should contain a sync-throwing onCancel callback as a logged error and still exit successfully', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const loggerErrorSpy = vi.spyOn(logger, 'error');
-        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-        const cancelFn = vi.fn(() => {
-          throw new Error('sync cancel boom');
-        });
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(async (_input: unknown, context: { onCancel: (cb: () => void) => void }) => {
-            context.onCancel(cancelFn);
-            await handlerDone;
-          });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"cancel"}\n');
-
-        await vi.waitFor(() => {
-          expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining('onCancel callback error'));
-        });
-        expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining('malformed line'));
-
-        resolveHandler();
-        await executePromise;
-
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should contain a sync-throwing onSwitchToInteractive callback as a logged error and exit with the error code', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const loggerErrorSpy = vi.spyOn(logger, 'error');
-        const switchFn = vi.fn(() => {
-          throw new Error('sync switch boom');
-        });
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(async (_input: unknown, context: { onSwitchToInteractive: (cb: () => void) => void }) => {
-            context.onSwitchToInteractive(switchFn);
-            await handlerDone;
-          });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"switchToInteractive"}\n');
-
-        await vi.waitFor(() => {
-          expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining('switchToInteractive callback error'));
-        });
-
-        resolveHandler();
-        await executePromise;
-
-        // Mirrors the rejection arm: the relaunch cannot proceed without a
-        // response payload, so the runtime surfaces the failure via its exit.
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-    });
-
-    describe('agentShutdown command', () => {
-      let server: net.Server;
-      let socketPath: string;
-      let serverConnection: net.Socket | undefined;
-      let killSpy: ReturnType<typeof vi.spyOn>;
-
-      beforeEach(() => {
-        socketPath = createIpcEndpoint(`test-runtime-shutdown-${process.pid}-${Date.now()}`);
-        serverConnection = undefined;
-        killSpy = vi.spyOn(process, 'kill').mockImplementation((() => {}) as never);
-      });
-
-      afterEach(async () => {
-        serverConnection?.destroy();
-        if (server?.listening) {
-          await new Promise<void>((resolve) => {
-            server.close(() => resolve());
-          });
-        }
-        if (process.platform !== 'win32') {
-          try {
-            fs.unlinkSync(socketPath);
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-              throw error;
-            }
-          }
-        }
-      });
-
-      function startServer(): Promise<void> {
-        return new Promise((resolve) => {
-          server = net.createServer((socket) => {
-            serverConnection = socket;
-          });
-          server.listen(socketPath, () => resolve());
-        });
-      }
-
-      function waitForServerConnection(): Promise<net.Socket> {
-        return new Promise((resolve) => {
-          if (serverConnection) {
-            resolve(serverConnection);
-            return;
-          }
-          server.once('connection', (socket) => {
-            serverConnection = socket;
-            resolve(socket);
-          });
-        });
-      }
-
-      function makeCommand(handler: ReturnType<typeof vi.fn>): ActionCommand {
-        return Object.assign(handler, {
-          factoryType: 'action' as const,
-          actionName: 'Test Action'
-        }) as unknown as ActionCommand;
-      }
-
-      it('should advertise supportsAgentShutdown and supersede snapshots in registration order', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi.fn().mockImplementation(
-          async (
-            _input: unknown,
-            context: {
-              onSwitchToInteractive: (cb: () => unknown) => void;
-              onAgentShutdown: (cb: () => void) => void;
-            }
-          ) => {
-            // Register agent shutdown FIRST, switchToInteractive second — the
-            // second registration must send a superseding snapshot that still
-            // carries supportsAgentShutdown.
-            context.onAgentShutdown(() => {});
-            context.onSwitchToInteractive(() => ({ sessionId: 'abc123' }));
-            await handlerDone;
-          }
-        );
-        const command = makeCommand(handler);
-
-        const serverReceived: string[] = [];
-        const executePromise = executeCommand(command);
-
-        const conn = await waitForServerConnection();
-        conn.on('data', (chunk) => serverReceived.push(chunk.toString()));
-        await vi.waitFor(() => {
-          expect(serverReceived.join('')).toContain('capabilities');
-        });
-        resolveHandler();
-        await executePromise;
-
-        const lines = serverReceived
-          .join('')
-          .trim()
-          .split('\n')
-          .filter((l) => l.trim().length > 0);
-        const caps = lines.map((l) => JSON.parse(l)).filter((m) => m.type === 'capabilities');
-        const last = caps[caps.length - 1];
-        expect(last).toEqual({ type: 'capabilities', switchToInteractive: true, supportsAgentShutdown: true });
-      });
-
-      it('should invoke onAgentShutdown callback without exiting the process', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const shutdownFn = vi.fn();
-        const cancelFn = vi.fn();
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(
-            async (
-              _input: unknown,
-              context: { onCancel: (cb: () => void) => void; onAgentShutdown: (cb: () => void) => void }
-            ) => {
-              context.onCancel(cancelFn);
-              context.onAgentShutdown(shutdownFn);
-              await handlerDone;
-            }
-          );
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"agentShutdown"}\n');
-
-        await vi.waitFor(() => {
-          expect(shutdownFn).toHaveBeenCalledOnce();
-        });
-        // The runtime must NOT exit in response to agentShutdown: responding is
-        // entirely the callbacks' job. Let the handler finish naturally instead.
-        expect(exitSpy).not.toHaveBeenCalled();
-
-        // agentShutdown must not consume the first-wins slot: a user cancel
-        // arriving during graceful wind-down still reaches its callback.
-        conn.write('{"type":"cancel"}\n');
-        await vi.waitFor(() => {
-          expect(cancelFn).toHaveBeenCalledOnce();
-        });
-
-        resolveHandler();
-        await executePromise;
-
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-        expect(exitSpy).not.toHaveBeenCalledWith(EXIT_CODES.ERROR);
-      });
-
-      it('sends a correlated agentTermination after an awaited callback reports its result', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(
-            async (_input: unknown, context: { onAgentShutdown: (cb: () => Promise<'graceful'>) => void }) => {
-              context.onAgentShutdown(async () => 'graceful');
-              await handlerDone;
-            }
-          );
-        const executePromise = executeCommand(makeCommand(handler));
-        const conn = await waitForServerConnection();
-        const received: string[] = [];
-        conn.on('data', (chunk) => received.push(chunk.toString()));
-
-        conn.write('{"type":"agentShutdown","requestId":"request-termination-1"}\n');
-        await vi.waitFor(() => {
-          expect(received.join('')).toContain('agentTermination');
-        });
-        const messages = received
-          .join('')
-          .trim()
-          .split('\n')
-          .map((line) => JSON.parse(line));
-        expect(messages).toContainEqual({
-          type: 'agentTermination',
-          requestId: 'request-termination-1',
-          result: 'graceful'
-        });
-
-        resolveHandler();
-        await executePromise;
-      });
-
-      it('should ignore a duplicate agentShutdown command', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const shutdownFn = vi.fn();
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(async (_input: unknown, context: { onAgentShutdown: (cb: () => void) => void }) => {
-            context.onAgentShutdown(shutdownFn);
-            await handlerDone;
-          });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"agentShutdown"}\n');
-        await vi.waitFor(() => {
-          expect(shutdownFn).toHaveBeenCalledTimes(1);
-        });
-        conn.write('{"type":"agentShutdown"}\n');
-        await new Promise<void>((resolve) => setTimeout(resolve, 50));
-        expect(shutdownFn).toHaveBeenCalledTimes(1);
-
-        resolveHandler();
-        await executePromise;
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should treat agentShutdown as a no-op when no callback registered', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const handler = vi.fn().mockImplementation(async () => {
-          // Hold the process open long enough to receive the command.
-          await new Promise<void>((resolve) => setTimeout(resolve, 100));
-        });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"agentShutdown"}\n');
-        await executePromise;
-
-        // No SIGTERM fallback (unlike cancel), no error exit.
-        expect(killSpy).not.toHaveBeenCalled();
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should log callback rejection without exiting with an error', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const loggerErrorSpy = vi.spyOn(logger, 'error');
-        const shutdownFn = vi.fn().mockRejectedValue(new Error('callback blew up'));
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(
-            async (_input: unknown, context: { onAgentShutdown: (cb: () => Promise<void>) => void }) => {
-              context.onAgentShutdown(shutdownFn);
-              await handlerDone;
-            }
-          );
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"agentShutdown"}\n');
-
-        await vi.waitFor(() => {
-          expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining('onAgentShutdown callback error'));
-        });
-        expect(exitSpy).not.toHaveBeenCalledWith(EXIT_CODES.ERROR);
-
-        resolveHandler();
-        await executePromise;
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-
-      it('should contain a synchronously-throwing callback as a logged error, not protocol corruption', async () => {
-        await startServer();
-        process.env[CARDS_ENV_VARS.SOCKET_PATH] = socketPath;
-
-        const loggerErrorSpy = vi.spyOn(logger, 'error');
-        const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-        // Sync throw inside the callback body: without containment it escapes
-        // into SocketClient's NDJSON parse loop and is misreported as a
-        // malformed line while the shutdown event is silently consumed.
-        const shutdownFn = vi.fn(() => {
-          throw new Error('sync boom');
-        });
-        let resolveHandler!: () => void;
-        const handlerDone = new Promise<void>((resolve) => {
-          resolveHandler = resolve;
-        });
-        const handler = vi
-          .fn()
-          .mockImplementation(async (_input: unknown, context: { onAgentShutdown: (cb: () => void) => void }) => {
-            context.onAgentShutdown(shutdownFn);
-            await handlerDone;
-          });
-        const command = makeCommand(handler);
-
-        const executePromise = executeCommand(command);
-        const conn = await waitForServerConnection();
-
-        conn.write('{"type":"agentShutdown"}\n');
-
-        await vi.waitFor(() => {
-          expect(loggerErrorSpy).toHaveBeenCalledWith(expect.stringContaining('onAgentShutdown callback error'));
-        });
-        expect(stderrSpy).not.toHaveBeenCalledWith(expect.stringContaining('malformed line'));
-        expect(exitSpy).not.toHaveBeenCalled();
-
-        resolveHandler();
-        await executePromise;
-        expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
-      });
-    });
+    release();
+    await executing;
+    expect(runtime.stop).toHaveBeenCalledOnce();
   });
 });

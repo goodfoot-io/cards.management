@@ -67,12 +67,33 @@ describe('authorization table integrity', () => {
 
   it('never lets a card-scoped message carry an execution requirement it cannot meet', () => {
     for (const contract of Object.values(RUNTIME_MESSAGE_CONTRACTS)) {
-      expect(['admitted', 'pre-admission', 'none']).toContain(contract.executionRequirement);
+      expect(['admitted', 'pre-admission', 'authenticated-subject', 'none']).toContain(contract.executionRequirement);
     }
   });
 });
 
 describe('authorizeMessage', () => {
+  it('permits only the extension dispatcher to request an interactive switch', () => {
+    const envelope = envelopeOf({
+      type: 'execution.switchToInteractiveRequest',
+      requestId: 'switch-1',
+      payload: {},
+      producer: { producerId: 'dispatcher-1', role: 'extension-dispatcher' }
+    });
+    expect(
+      refusal(
+        envelope,
+        contextOf({ authenticatedRole: 'extension-dispatcher', authenticatedProducerId: 'dispatcher-1' })
+      )
+    ).toBe('authorized');
+    expect(
+      refusal(
+        envelopeOf({ type: 'execution.switchToInteractiveRequest', requestId: 'switch-1', payload: {} }),
+        contextOf()
+      )
+    ).toBe('role-not-permitted');
+  });
+
   it('authorizes a message that satisfies every rule and returns its contract', () => {
     const outcome = authorizeMessage(envelopeOf(), contextOf());
     expect(outcome.authorized).toBe(true);
@@ -100,7 +121,10 @@ describe('authorizeMessage', () => {
   });
 
   it('refuses an authenticated role the message type does not permit', () => {
-    const envelope = envelopeOf({ producer: { producerId: 'watcher-1', role: 'watcher' } });
+    const envelope = envelopeOf({
+      type: 'execution.agentTermination',
+      producer: { producerId: 'watcher-1', role: 'watcher' }
+    });
     const context = contextOf({ authenticatedRole: 'watcher', authenticatedProducerId: 'watcher-1' });
     expect(refusal(envelope, context)).toBe('role-not-permitted');
   });
@@ -111,11 +135,16 @@ describe('authorizeMessage', () => {
   });
 
   it('refuses a message for an execution that has not passed admission', () => {
-    expect(refusal(envelopeOf(), contextOf({ executionAdmitted: false }))).toBe('execution-not-admitted');
+    expect(refusal(envelopeOf({ type: 'execution.agentTermination' }), contextOf({ executionAdmitted: false }))).toBe(
+      'execution-not-admitted'
+    );
   });
 
   it('refuses a message requiring an admitted execution that names none', () => {
-    const envelope = envelopeOf({ execution: { executionId: null, launchRequestId: 'launch-1' } });
+    const envelope = envelopeOf({
+      type: 'execution.agentTermination',
+      execution: { executionId: null, launchRequestId: 'launch-1' }
+    });
     expect(refusal(envelope, contextOf())).toBe('execution-not-admitted');
   });
 

@@ -278,13 +278,10 @@ Html:
 
 Shutdown:
   Tells Cards the agent reached a terminal state (after a merge, after
-  recording a blocker, after all tasks are complete). Only works from inside
-  a running action: the signal rides the per-action socket named by
-  $SOCKET_PATH. The <card-id> argument is informational — delivery is
-  addressed by $SOCKET_PATH alone, which identifies the running action.
-  Exit 0 means the request was sent, not that it has been processed; the
-  extension records the outcome and relays it to the running handler, which
-  owns any termination policy.
+  recording a blocker, after all tasks are complete). Only works from an
+  admitted action with protected runtime credentials. Exit 0 means the
+  shared runtime durably accepted the request; termination remains a
+  separately correlated lifecycle result.
 
   Options:
     --outcome <value>        One of success | blocked | error (default success;
@@ -1296,11 +1293,9 @@ type ShutdownOutcome = (typeof SHUTDOWN_OUTCOMES)[number];
 /**
  * Signals "the agent is done" from inside a running action.
  *
- * Fast path only: connects directly to the per-action socket named by
- * `$SOCKET_PATH` and writes one `shutdownRequest` NDJSON line. Exit 0 means
- * the line was handed to the dispatcher's socket — not that the relay has
- * been processed. Without `$SOCKET_PATH` (or on any delivery failure) the
- * verb fails closed with guidance; no fallback surface exists.
+ * Connects to the authenticated shared runtime using protected role
+ * credentials and waits for durable acceptance. Endpoint addresses are
+ * rediscovered and never persisted in the pending request marker.
  *
  * @param args - Flags after the verb: `--outcome <success|blocked|error>`
  *   (default `success`) and `--message <text>`.

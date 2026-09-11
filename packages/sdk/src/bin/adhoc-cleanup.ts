@@ -27,7 +27,7 @@ import { mkdir, unlink } from 'node:fs/promises';
 import { createCardsClient } from '../client/api-discovery.js';
 import type { CardUpdateData } from '../client/types/client.js';
 import { clearUnboundCandidates } from '../unboundWorktreeCandidates.js';
-import { adhocActiveDir, liveActionPresent, liveRefsRemain, removeRef, writeRef } from './adhoc-refs.js';
+import { adhocActiveDir, liveRefsRemain, removeRef, writeRef } from './adhoc-refs.js';
 import { isProcessAliveWithStartTime, readProcessStartTime, transitionCardStatus } from './process-utils.js';
 
 export { adhocActiveDir, liveRefsRemain } from './adhoc-refs.js';
@@ -193,17 +193,8 @@ export async function performTeardown(
       // Another live ad-hoc session already owns `active`. This session's ref
       // is no longer needed; remove it and leave status to the surviving ref.
       await removeRef(cardId, sessionId);
-    } else if (await liveActionPresent(logger)) {
-      // A live action wrapper owns this card's status lifecycle; a second
-      // writer would race it (the wrapper writes no ad-hoc ref, so
-      // liveRefsRemain cannot see it). Fail closed — defer the flip to the
-      // wrapper and RETAIN this session's ref so the reconciliation sweep
-      // settles the card once the action clears.
-      logger.warn('live action detected at teardown — deferring status flip to the wrapper', { cardId });
     } else {
-      // No other live ad-hoc session and no live action: this session resolves
-      // the card. Flip to needs_review (API first, filesystem fallback), then
-      // remove this session's ref.
+      // No other live ad-hoc session remains, so this session resolves the card.
       try {
         await client.updateCard(cardId, { status: 'needs_review', author: 'system <system@cards.local>' });
       } catch (error) {
