@@ -53,6 +53,24 @@ const FILE: RuntimeCredentialFile = {
       producerId: 'hook-1',
       secret: 'hook-secret',
       issuedAt: 1
+    },
+    {
+      credentialId: 'watcher-credential',
+      requestId: 'request-1',
+      executionId: 'execution-1',
+      role: 'watcher',
+      producerId: 'watcher-1',
+      secret: 'watcher-secret',
+      issuedAt: 1
+    },
+    {
+      credentialId: 'cli-credential',
+      requestId: 'request-1',
+      executionId: 'execution-1',
+      role: 'cli',
+      producerId: 'cli-1',
+      secret: 'cli-secret',
+      issuedAt: 1
     }
   ]
 };
@@ -184,6 +202,29 @@ describe('runtime credential file', () => {
             blocked: [{ detail: expect.stringContaining('server-startup recovery') }]
           }
         }
+      });
+    } finally {
+      await client.close();
+      await server.stop();
+    }
+  });
+
+  it('authenticates a watcher in the admitted card slot instead of an execution slot', async () => {
+    writeRuntimeCredentialFile(credentialPath, FILE);
+    const server = await FakeRuntimeServer.start();
+    const client = createRuntimeClientFromCredentialFile({
+      role: 'watcher',
+      credentialFilePath: credentialPath,
+      outbox: new MemoryOutbox(),
+      discover: async () => ({ host: '127.0.0.1', port: server.port, accessToken: 'access-token' }),
+      onMessage: () => undefined
+    });
+    try {
+      await client.connect();
+      expect(server.handshakes[0]).toMatchObject({ 'x-cards-runtime-credential-id': 'watcher-credential' });
+      expect(server.received[0]).toMatchObject({
+        scope: FILE.scope,
+        producer: { role: 'watcher', producerId: 'watcher-1' }
       });
     } finally {
       await client.close();

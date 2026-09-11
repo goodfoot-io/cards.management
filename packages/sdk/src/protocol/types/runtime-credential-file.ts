@@ -9,7 +9,13 @@ import type { IssuedRoleCredential, OriginalCallerRequestId } from './runtime-ad
 import { executionIdentitySchema, ownershipStampSchema, runtimeScopeSchema } from './runtime-identity.js';
 
 /** The complete and only set of credentials exposed to an admitted child process. */
-export const CHILD_RUNTIME_CREDENTIAL_ROLES = ['runtime-wrapper', 'agent-handler', 'agent-hook'] as const;
+export const CHILD_RUNTIME_CREDENTIAL_ROLES = [
+  'runtime-wrapper',
+  'agent-handler',
+  'agent-hook',
+  'watcher',
+  'cli'
+] as const;
 export type ChildRuntimeCredentialRole = (typeof CHILD_RUNTIME_CREDENTIAL_ROLES)[number];
 
 const issuedRoleCredentialSchema = z

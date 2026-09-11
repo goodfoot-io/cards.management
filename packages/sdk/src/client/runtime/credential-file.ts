@@ -185,7 +185,10 @@ export function createRuntimeClientFromCredentialFile(options: RuntimeClientBoot
     ...services,
     authorities,
     identity: {
-      subject: { kind: 'execution', executionId: loaded.execution.executionId },
+      subject:
+        role === 'watcher'
+          ? { kind: 'card', cardId: loaded.scope.cardId }
+          : { kind: 'execution', executionId: loaded.execution.executionId },
       scope: loaded.scope,
       producer: { role, producerId: loaded.credential.producerId },
       ownership: loaded.ownership
