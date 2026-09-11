@@ -131,6 +131,14 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     // It belongs with `runtime.resumeAck` instead: neither is persisted or replayed by the
     // client, both are mandatory for the server to send, and losing one costs nothing
     // because the resume barrier re-derives the whole accepted set on reconnect.
+    //
+    // Retire the named record on receipt. Do NOT route this through
+    // `evaluateReconciledSnapshot`, which the class otherwise invites: that function keeps
+    // the newest revision within a generation, but this payload has no `revision` and each
+    // instance names a different message, so "newest" is meaningless here and every receipt
+    // after the first would be discarded as stale. `runtime.resumeAck` is the reconciled
+    // snapshot of the acknowledgment set — it carries the revisions and the full
+    // `acceptedMessageIds`, so it does reconcile by the class's own rules.
     deliveryClass: 'reconciled-snapshot',
     allowedRoles: ['server'],
     executionRequirement: 'admitted',
