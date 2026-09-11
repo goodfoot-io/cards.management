@@ -346,7 +346,7 @@ describe('CardsClient', () => {
   });
 
   describe('Branch Operations', () => {
-    it.skip('ownership-safe create sends intent and returns the registration revision', async () => {
+    it('ownership-safe create sends intent and returns the registration revision', async () => {
       const httpClient = new TestHttpClient();
       const url = 'http://localhost:3000/cards/card-123/branches';
       httpClient.responses.set(url, { outcome: 'created', revision: 'opaque-revision' });
@@ -362,7 +362,7 @@ describe('CardsClient', () => {
       });
     });
 
-    it.skip('ownership-safe conditional remove sends the revision and returns preserved', async () => {
+    it('ownership-safe conditional remove sends the revision and returns preserved', async () => {
       const httpClient = new TestHttpClient();
       const url = 'http://localhost:3000/cards/card-123/branches/feature%2Ftest?expectedRevision=opaque-revision';
       httpClient.responses.set(url, { outcome: 'preserved' });

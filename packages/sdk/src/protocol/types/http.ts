@@ -62,5 +62,5 @@ export interface HttpClient {
    * @param url - Path or absolute URL understood by the implementation.
    * @param options - Request options merged with implementation defaults.
    */
-  delete(url: string, options?: RequestInit): Promise<void>;
+  delete<T = void>(url: string, options?: RequestInit): Promise<T>;
 }

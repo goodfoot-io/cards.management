@@ -16,7 +16,7 @@ function makeHttpClient(get: HttpClient['get']): HttpClient {
     post: <T>() => Promise.resolve(undefined as T),
     put: <T>() => Promise.resolve(undefined as T),
     patch: <T>() => Promise.resolve(undefined as T),
-    delete: () => Promise.resolve()
+    delete: <T>() => Promise.resolve(undefined as T)
   };
 }
 

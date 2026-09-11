@@ -29,7 +29,7 @@ function makeCountingPostClient(): { client: HttpClient; getAttempts: () => numb
     },
     put: <T>() => Promise.resolve(undefined as T),
     patch: <T>() => Promise.resolve(undefined as T),
-    delete: () => Promise.resolve()
+    delete: <T>() => Promise.resolve(undefined as T)
   };
   return { client, getAttempts: () => attempts };
 }

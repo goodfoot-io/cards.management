@@ -353,7 +353,7 @@ export class CardsClient {
       if (!response.ok) throw response;
       return response.json() as Promise<T>;
     },
-    delete: async (url: string, options?: RequestInit): Promise<void> => {
+    delete: async <T = void>(url: string, options?: RequestInit): Promise<T> => {
       const response = await this.fetchWithUrlContext(url, {
         ...options,
         method: 'DELETE',
@@ -361,6 +361,8 @@ export class CardsClient {
         signal: this.getTimeoutSignal(options?.signal)
       });
       if (!response.ok) throw response;
+      const text = await response.text();
+      return (text === '' ? undefined : JSON.parse(text)) as T;
     }
   };
 
@@ -814,10 +816,7 @@ export class CardsClient {
     if (options?.sessionId) {
       headers['X-Cards-Session-Id'] = options.sessionId;
     }
-    void url;
-    void headers;
-    void data;
-    throw new Error('Not Implemented');
+    return this.request(() => this.getHttpClient().post<AddBranchResponse>(url, data, { headers }), false);
   }
 
   /**
@@ -842,9 +841,7 @@ export class CardsClient {
     if (options?.sessionId) {
       headers['X-Cards-Session-Id'] = options.sessionId;
     }
-    void url;
-    void headers;
-    throw new Error('Not Implemented');
+    return this.request(() => this.getHttpClient().delete<RemoveBranchResponse>(url, { headers }));
   }
 
   // --- Tag Operations ---

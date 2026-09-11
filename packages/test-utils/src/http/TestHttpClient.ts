@@ -136,9 +136,11 @@ export class TestHttpClient implements HttpClient {
    *
    * @param url - The URL to request
    * @param _options - Unused; accepted for interface compatibility.
+   * @returns The configured response, if any.
    */
-  async delete(url: string, _options?: RequestInit): Promise<void> {
+  async delete<T = void>(url: string, _options?: RequestInit): Promise<T> {
     this.requests.push({ method: 'DELETE', url });
+    return this.responses.get(url) as T;
   }
 
   /**
