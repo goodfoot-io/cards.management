@@ -84,7 +84,6 @@ const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
 const AGENT = 'antigravity-cli';
 const ANTIGRAVITY_HOME = '/test/antigravity-cli';
 const CONVERSATION_ID = '8724cd98-6b07-4080-82d3-1c617be236bf';
-const _NOW_MS = 1_700_000_000_000;
 
 const originalFetch = globalThis.fetch;
 
@@ -159,7 +158,7 @@ beforeEach(async () => {
   });
   vi.mocked(execFileSync).mockImplementation(() => '');
 
-  vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+  vi.mocked(syncFs.readFileSync).mockImplementation((filePath: Parameters<typeof syncFs.readFileSync>[0]) => {
     throw Object.assign(new Error(`mock: unhandled readFileSync: ${String(filePath)}`), { code: 'ENOENT' });
   });
 
@@ -180,19 +179,15 @@ beforeEach(async () => {
   vi.mocked(checkWorktreeExists).mockResolvedValue(false);
 
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, {
-      cwd: opts.cwd,
-      cardId: opts.cardId,
-      compiledScriptPaths: opts.compiledScriptPaths
-    })
-  );
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => createWorktree(ref, { cwd: opts.cwd }));
   vi.mocked(createWorktree).mockResolvedValue({
     path: WORKTREE_PATH,
     settle: Promise.resolve({
       branch: 'cards/card-123/1',
       worktree: WORKTREE_PATH,
-      baseSha: 'abc123'
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
     })
   });
 
@@ -274,7 +269,14 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
     configPath: '/test/config',
     extensionPath: '/test/extension',
     codingAgent: AGENT,
-    ...overrides
+    ...overrides,
+    // Spreading a `Partial` widens these back to `| undefined`; both are
+    // required by `ActionInput`, and both defaults mirror what the suite
+    // exports in `beforeEach` / what the dispatcher supplies
+    // (`opts?.exitWhenDone ?? false`). Supplying them after the spread keeps
+    // the literal assignable without narrowing what a caller may override.
+    exitWhenDone: overrides?.exitWhenDone ?? false,
+    marketplacePath: overrides?.marketplacePath ?? '/test/extension/dist/marketplace'
   };
 }
 
@@ -292,7 +294,13 @@ describe('launch action — antigravity branch', () => {
     const { createWorktree } = await import('@cards.management/sdk/worktree');
 
     let rejectSettle!: (reason: Error) => void;
-    const settle = new Promise<{ branch: string; worktree: string; baseSha: string }>((_resolve, reject) => {
+    const settle = new Promise<{
+      branch: string;
+      worktree: string;
+      baseSha: string;
+      copiedFromInclude: number;
+      reroutedSymlinks: number;
+    }>((_resolve, reject) => {
       rejectSettle = reject;
     });
     vi.mocked(createWorktree).mockResolvedValue({ path: WORKTREE_PATH, settle });
@@ -334,13 +342,13 @@ describe('launch action — antigravity branch', () => {
     expect(opts.cwd).toBe(WORKTREE_PATH);
     expect(opts.stdio).toBe('inherit');
     expect(opts.detached).toBe(process.platform !== 'win32');
-    expect(opts.env.WORKSPACE_PATH).toBe(WORKTREE_PATH);
-    expect(opts.env.BASE_BRANCH).toBe('main');
-    expect(opts.env.PARENT_BRANCH).toBe('main');
-    expect(opts.env.WORKSPACE_BRANCH).toBe('cards/card-123/1');
+    expect(opts.env['WORKSPACE_PATH']).toBe(WORKTREE_PATH);
+    expect(opts.env['BASE_BRANCH']).toBe('main');
+    expect(opts.env['PARENT_BRANCH']).toBe('main');
+    expect(opts.env['WORKSPACE_BRANCH']).toBe('cards/card-123/1');
     // Pre-spawn session identity carrier: every in-session `cards` CLI
     // inherits the minted id through ANTIGRAVITY_SESSION_ID.
-    expect(opts.env.ANTIGRAVITY_SESSION_ID).toMatch(/^[0-9a-f-]{36}$/);
+    expect(opts.env['ANTIGRAVITY_SESSION_ID']).toMatch(/^[0-9a-f-]{36}$/);
 
     child.emit('close', 0);
     await promise;
@@ -531,8 +539,10 @@ describe('launch action — antigravity branch', () => {
     // makes the hook a Cards action session instead of an inert foreign one.
     process.env['CARD_ID'] = 'main-679';
     vi.mocked(fs.readdir).mockImplementation(((directory: string) => realFsp.readdir(directory)) as never);
-    vi.mocked(fs.readFile).mockImplementation(((path: string, encoding: string) =>
-      realFsp.readFile(path, encoding)) as never);
+    vi.mocked(fs.readFile).mockImplementation(((
+      path: Parameters<typeof realFsp.readFile>[0],
+      encoding: Parameters<typeof realFsp.readFile>[1]
+    ) => realFsp.readFile(path, encoding)) as never);
 
     try {
       const action = (await import('../src/actions/launch.js')).default;
@@ -540,7 +550,7 @@ describe('launch action — antigravity branch', () => {
       await flushMicrotasks();
 
       const spawnEnv = (vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string | undefined> }).env;
-      const sessionId = spawnEnv.ANTIGRAVITY_SESSION_ID as string;
+      const sessionId = spawnEnv['ANTIGRAVITY_SESSION_ID'] as string;
       process.env['ANTIGRAVITY_SESSION_ID'] = sessionId;
 
       // One real handler failure through the real transport: the launcher did
@@ -745,7 +755,7 @@ describe('launch action — antigravity branch', () => {
     const promise = action(baseInput({ executionMode: 'background' }), context);
     await flushMicrotasks();
 
-    const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+    const onCancel = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
     await onCancel();
     // The notice is the same one the committed captures carry; here it was
     // Cards' own cancellation that ended the turn, so the partial output is the
@@ -790,7 +800,7 @@ describe('launch action — antigravity branch', () => {
     const promise = action(baseInput(), context);
     await flushMicrotasks();
 
-    const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+    const onCancel = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
     await onCancel();
     expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
 
@@ -820,7 +830,7 @@ describe('chat action — antigravity branch', () => {
 
     const opts = calls[0]![2] as { cwd: string; env: Record<string, string | undefined> };
     expect(opts.cwd).toBe(WORKTREE_PATH);
-    expect(opts.env.EXIT_WHEN_DONE).toBe('false');
+    expect(opts.env['EXIT_WHEN_DONE']).toBe('false');
 
     child.emit('close', 0);
     await promise;
@@ -849,7 +859,7 @@ describe('interview action — antigravity branch', () => {
     expect(args[1]).toMatch(/Load the `runtime:interview` skill and follow the `<routing-instructions>`\.$/);
 
     const opts = calls[0]![2] as { env: Record<string, string | undefined> };
-    expect(opts.env.EXIT_WHEN_DONE).toBe('false');
+    expect(opts.env['EXIT_WHEN_DONE']).toBe('false');
 
     child.emit('close', 0);
     await promise;
