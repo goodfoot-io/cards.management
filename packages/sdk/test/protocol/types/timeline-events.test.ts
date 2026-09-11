@@ -252,6 +252,10 @@ describe('timeline event types', () => {
             return 'action-execute-request';
           case 'action:executeResult':
             return 'action-execute-result';
+          case 'variableGroup:listRequest':
+            return 'variable-group-list-request';
+          case 'variableGroup:listResult':
+            return 'variable-group-list-result';
           case 'card:replay':
             return 'card-replay';
           case 'card:snapshot':

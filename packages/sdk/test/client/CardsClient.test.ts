@@ -635,6 +635,19 @@ describe('CardsClient', () => {
   });
 
   describe('Action Operations', () => {
+    it.skip('lists safe variable-group summaries for the configured workspace', async () => {
+      const httpClient = new TestHttpClient();
+      const groups = [{ id: 'vg-1', name: 'Deploy', variableCount: 2, secretCount: 1 }];
+      httpClient.responses.set('http://localhost:3000/variable-groups?workspacePath=%2Fworkspace%2Frepo', groups);
+      const client = new CardsClient({ ...options, workspacePath: '/workspace/repo' }, httpClient);
+
+      await expect(client.listVariableGroups()).resolves.toEqual(groups);
+      expect(httpClient.requests[0]).toMatchObject({
+        method: 'GET',
+        url: 'http://localhost:3000/variable-groups?workspacePath=%2Fworkspace%2Frepo'
+      });
+    });
+
     it('executeAction sends POST to /cards/:id/actions/:name and returns ActionResult', async () => {
       const httpClient = new TestHttpClient();
       const expectedResult = { success: true, exitCode: 0 };
@@ -673,6 +686,20 @@ describe('CardsClient', () => {
       await client.executeAction('card-123', 'launch', undefined, false, 'codex-cli');
 
       expect(httpClient.requests[0]?.body).toEqual({ selectedAgent: 'codex-cli' });
+    });
+
+    it.skip('executeAction serializes ordered variable-group IDs including an explicit empty selection', async () => {
+      const httpClient = new TestHttpClient();
+      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
+      const client = new CardsClient(options, httpClient);
+
+      await client.executeAction('card-123', 'launch', undefined, false, undefined, ['vg-b', 'vg-a']);
+      await client.executeAction('card-123', 'launch', undefined, false, undefined, []);
+
+      expect(httpClient.requests.map(({ body }) => body)).toEqual([
+        { variableGroupIds: ['vg-b', 'vg-a'] },
+        { variableGroupIds: [] }
+      ]);
     });
   });
 

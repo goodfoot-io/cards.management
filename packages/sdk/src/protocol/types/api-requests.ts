@@ -575,6 +575,27 @@ export interface EnvironmentInfo {
 export type EnvironmentsResponse = EnvironmentInfo[];
 
 /**
+ * Safe metadata returned for a variable group.
+ *
+ * Variable names, values, and secret material are intentionally excluded.
+ */
+export interface VariableGroupSummary {
+  /** Stable variable-group identifier. */
+  id: string;
+  /** Human-readable variable-group name. */
+  name: string;
+  /** Optional human-readable description. */
+  description?: string;
+  /** Number of non-secret variables in the group. */
+  variableCount: number;
+  /** Number of secret variables in the group. */
+  secretCount: number;
+}
+
+/** Response from `GET /variable-groups`. */
+export type VariableGroupsResponse = VariableGroupSummary[];
+
+/**
  * Request body for `POST /cards/:id/actions/:name`.
  *
  * Controls how the relayed action is executed by the extension client.
@@ -598,6 +619,14 @@ export interface ExecuteActionRequest {
    * false.
    */
   exitWhenDone?: boolean;
+
+  /**
+   * Ordered one-shot variable-group selection for this launch.
+   *
+   * Omission preserves the persisted selection; an explicit empty array
+   * selects no variable groups.
+   */
+  variableGroupIds?: string[];
 }
 
 // ============================================================================

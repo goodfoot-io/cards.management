@@ -929,6 +929,15 @@ export class CardsClient {
   // --- Action Operations ---
 
   /**
+   * Lists safe variable-group summaries for this client's workspace.
+   *
+   * @returns Promise resolving to summaries without variable or secret material.
+   */
+  async listVariableGroups(): Promise<VariableGroupsResponse> {
+    throw new Error('Not Implemented');
+  }
+
+  /**
    * Executes an action on a card via the server relay.
    *
    * @param cardId - Identifier of the card to execute the action on.
@@ -940,6 +949,8 @@ export class CardsClient {
    *   the server default.
    * @param selectedAgent - Optional one-shot coding-agent override. Omitted to
    *   preserve default-agent resolution.
+   * @param variableGroupIds - Optional ordered one-shot variable-group selection.
+   *   Omitted to preserve the persisted selection; an empty array selects none.
    * @returns Promise resolving to the action execution result.
    * @throws ApiError when the server rejects the request.
    * @throws NetworkError when the request fails to reach the server.
@@ -949,8 +960,10 @@ export class CardsClient {
     actionName: string,
     mode?: ExecutionMode,
     exitWhenDone?: boolean,
-    selectedAgent?: CodingAgentId
+    selectedAgent?: CodingAgentId,
+    variableGroupIds?: string[]
   ): Promise<ActionResult> {
+    if (variableGroupIds !== undefined) throw new Error('Not Implemented');
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/actions/${encodeURIComponent(actionName)}`);
     const body: ExecuteActionRequest = {};
     if (mode) body.mode = mode;

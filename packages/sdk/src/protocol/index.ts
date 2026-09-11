@@ -171,6 +171,8 @@ export type {
   UpdateCardRequest,
   ValidationErrorCode,
   ValidationErrorMessage,
+  VariableGroupListRequestEvent,
+  VariableGroupListResultEvent,
   VariableGroupSummary,
   VariableGroupsResponse,
   WebviewAction,

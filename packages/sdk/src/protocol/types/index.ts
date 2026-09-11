@@ -106,6 +106,8 @@ export type {
   TimelineCommentUpdatedEvent,
   TimelineCommitAddedEvent,
   TimelineCommitRemovedEvent,
+  VariableGroupListRequestEvent,
+  VariableGroupListResultEvent,
   WorkspaceCommitEvent
 } from './events.js';
 // --- Filesystem Types ---

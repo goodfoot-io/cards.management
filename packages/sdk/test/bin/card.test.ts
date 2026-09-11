@@ -114,6 +114,8 @@ describe('card binary', () => {
   let cards: Map<string, Record<string, unknown>>;
   /** Environment action summaries returned by GET /environments. */
   let environments: Array<Record<string, unknown>>;
+  /** Safe summaries returned by GET /variable-groups. */
+  let variableGroups: Array<Record<string, unknown>>;
   /** Branches registered via POST /cards/:id/branches. */
   let branches: Map<string, Array<{ name: string }>>;
   /** Commits registered via POST /cards/:id/commits. */
@@ -146,6 +148,7 @@ describe('card binary', () => {
   beforeEach(async () => {
     cards = new Map();
     environments = [];
+    variableGroups = [];
     branches = new Map();
     commits = new Map();
     files = new Map();
@@ -198,6 +201,13 @@ describe('card binary', () => {
       if (method === 'GET' && url.pathname === '/environments') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(environments));
+        return;
+      }
+
+      // GET /variable-groups
+      if (method === 'GET' && url.pathname === '/variable-groups') {
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(variableGroups));
         return;
       }
 
@@ -597,6 +607,20 @@ describe('card binary', () => {
   });
 
   describe('executeAction', () => {
+    it.skip('forwards ordered variable-group IDs including an explicit empty selection', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await executeAction('card-1', 'launch', { variableGroupIds: ['vg-b', 'vg-a'] });
+        await executeAction('card-1', 'launch', { variableGroupIds: [] });
+        expect(actionRequests.map(({ body }) => body)).toEqual([
+          { variableGroupIds: ['vg-b', 'vg-a'] },
+          { variableGroupIds: [] }
+        ]);
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
     it('calls server and prints result to stdout', async () => {
       cards.set('card-1', { id: 'card-1', title: 'Test', status: 'todo' });
 
@@ -704,6 +728,19 @@ describe('card binary', () => {
         expect(process.exitCode).toBe(originalExitCode);
       } finally {
         process.exitCode = originalExitCode;
+        logSpy.mockRestore();
+      }
+    });
+  });
+
+  describe('listVariableGroups', () => {
+    it.skip('lists groups for an explicit workspace and supports JSONPath output', async () => {
+      variableGroups = [{ id: 'vg-1', name: 'Deploy', description: 'Deployment', variableCount: 2, secretCount: 1 }];
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await listVariableGroups(['--workspace-path', '/tmp/workspace', '--jsonpath', '$[0].name']);
+        expect(logSpy).toHaveBeenCalledWith('Deploy');
+      } finally {
         logSpy.mockRestore();
       }
     });
@@ -1177,6 +1214,18 @@ describe('card binary', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('--agent <id>');
       expect(result.stdout).toContain('claude-code-cli, codex-cli, opencode-cli, or antigravity-cli');
+    });
+
+    it.skip('help documents variable-group listing and repeatable action selection', () => {
+      const result = runCard(['help']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('variable-group list');
+      expect(result.stdout).toContain('--variable-group <id>');
+    });
+
+    it.skip('rejects a missing variable-group value before API discovery', () => {
+      const result = runCard(['card-1', 'action', 'launch', '--variable-group']);
+      expect(result).toEqual({ stdout: '', stderr: 'card: flag --variable-group requires a value\n', exitCode: 1 });
     });
 
     it('rejects a missing coding-agent value before API discovery', () => {

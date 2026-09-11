@@ -1217,12 +1217,21 @@ async function htmlCommand(args: string[]): Promise<void> {
  * @param opts.exitWhenDone - When true (`--exit-when-done`), the spawned agent
  *   is signalled to exit once the action completes. Defaults to false.
  * @param opts.selectedAgent - Optional one-shot coding-agent override.
+ * @param opts.variableGroupIds - Ordered one-shot variable-group selection.
+ *   Omitted to preserve persisted selection; an empty array selects none.
  */
 export async function executeAction(
   cardId: string,
   actionName: string,
-  opts?: { jsonPath?: string; background?: boolean; exitWhenDone?: boolean; selectedAgent?: CodingAgentId }
+  opts?: {
+    jsonPath?: string;
+    background?: boolean;
+    exitWhenDone?: boolean;
+    selectedAgent?: CodingAgentId;
+    variableGroupIds?: string[];
+  }
 ): Promise<void> {
+  if (opts?.variableGroupIds !== undefined) throw new Error('Not Implemented');
   const mode: ExecutionMode | undefined = opts?.background ? 'background' : undefined;
   const client = await connectClient();
   const result: ActionResult = await client.executeAction(
@@ -1234,6 +1243,16 @@ export async function executeAction(
   );
   console.log(formatOutput(result, opts?.jsonPath));
   if (opts?.selectedAgent && !result.success) process.exitCode = 1;
+}
+
+/**
+ * Lists safe variable-group summaries for a workspace.
+ *
+ * @param args - CLI arguments after the `variable-group list` subcommand.
+ */
+export async function listVariableGroups(args: string[]): Promise<void> {
+  void args;
+  throw new Error('Not Implemented');
 }
 
 /**

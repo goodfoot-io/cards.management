@@ -9,6 +9,7 @@
  * @module types/events
  */
 
+import type { VariableGroupSummary } from './api-requests.js';
 import type { BranchInfo } from './branch.js';
 import type { CardGates, CardRelation } from './card.js';
 import type { CodingAgentId } from './coding-agent.js';
@@ -403,6 +404,8 @@ export interface ActionExecuteRequestEvent {
   mode: ExecutionMode;
   /** When true, the spawned agent is signalled to exit cleanly once the action completes. */
   exitWhenDone: boolean;
+  /** Ordered one-shot variable-group selection; omission preserves persisted selection. */
+  variableGroupIds?: string[];
 }
 
 /**
@@ -427,8 +430,31 @@ export interface ActionExecutorRegisterMessage {
   repositoryId: string;
 }
 
+/** Event requesting safe variable-group summaries for an exact workspace. */
+export interface VariableGroupListRequestEvent {
+  /** Event type discriminator. */
+  type: 'variableGroup:listRequest';
+  /** Correlation ID linking the request to its result. */
+  correlationId: string;
+  /** Absolute workspace path of the single executor that should handle the request. */
+  workspacePath: string;
+}
+
+/** Event returning safe variable-group summaries or a relay-safe error. */
+export interface VariableGroupListResultEvent {
+  /** Event type discriminator. */
+  type: 'variableGroup:listResult';
+  /** Correlation ID linking this result back to its originating request. */
+  correlationId: string;
+  /** Listing outcome. */
+  result: { success: true; groups: VariableGroupSummary[] } | { success: false; error: string };
+}
+
 /** Client-to-server action relay messages. */
-export type ActionClientMessage = ActionExecutorRegisterMessage | ActionExecuteResultEvent;
+export type ActionClientMessage =
+  | ActionExecutorRegisterMessage
+  | ActionExecuteResultEvent
+  | VariableGroupListResultEvent;
 
 // --- Domain Event Union ---
 
@@ -478,6 +504,8 @@ export type DomainEvent =
   | CardsMetadataEvent
   | ActionExecuteRequestEvent
   | ActionExecuteResultEvent
+  | VariableGroupListRequestEvent
+  | VariableGroupListResultEvent
   // Journal / subscribe-replay protocol (server -> client only; the client ->
   // server CardSubscribeMessage/CardUnsubscribeMessage half of the protocol
   // lives in ./journal.js and is not part of this receive-side union).
