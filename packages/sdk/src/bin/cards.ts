@@ -826,6 +826,18 @@ export async function listCards(args: string[]): Promise<void> {
  * @param args - CLI arguments after the `variable-group list` subcommand.
  */
 export async function listVariableGroups(args: string[]): Promise<void> {
+  const flags = parseFlags(args);
+  const client = await connectClient(flags['workspace-path']?.[0]);
+  const variableGroups = await client.listVariableGroups();
+  console.log(formatOutput(variableGroups, flags['jsonpath']?.[0]));
+}
+
+/**
+ * Dispatches commands beneath the `variable-group` CLI resource.
+ *
+ * @param args - CLI arguments beginning with the variable-group verb.
+ */
+export async function variableGroupCommand(args: string[]): Promise<void> {
   void args;
   throw new Error('Not Implemented');
 }

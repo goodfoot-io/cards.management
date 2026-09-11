@@ -53,7 +53,7 @@ describe('CardsClient', () => {
   });
 
   describe('Variable Group Operations', () => {
-    it.skip('GETs safe variable-group summaries for the encoded configured workspace', async () => {
+    it('GETs safe variable-group summaries for the encoded configured workspace', async () => {
       const httpClient = new TestHttpClient();
       const expected: VariableGroupsResponse = [
         {
@@ -65,17 +65,16 @@ describe('CardsClient', () => {
         }
       ];
       const workspacePath = '/workspace/project with spaces';
-      httpClient.responses.set(
-        `http://localhost:3000/variable-groups?workspacePath=${encodeURIComponent(workspacePath)}`,
-        expected
-      );
+      const expectedUrl = new URL('/variable-groups', options.baseUrl);
+      expectedUrl.searchParams.set('workspacePath', workspacePath);
+      httpClient.responses.set(expectedUrl.toString(), expected);
       const client = new CardsClient({ ...options, workspacePath }, httpClient);
 
       await expect(client.listVariableGroups()).resolves.toEqual(expected);
       expect(httpClient.requests).toEqual([
         {
           method: 'GET',
-          url: `http://localhost:3000/variable-groups?workspacePath=${encodeURIComponent(workspacePath)}`
+          url: expectedUrl.toString()
         }
       ]);
     });

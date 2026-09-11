@@ -867,7 +867,10 @@ export class CardsClient {
    * @returns Promise resolving to variable-group summaries.
    */
   async listVariableGroups(): Promise<VariableGroupsResponse> {
-    throw new Error('Not Implemented');
+    const url = this.buildUrl('/variable-groups', {
+      workspacePath: this.options.workspacePath
+    });
+    return this.request(() => this.getHttpClient().get<VariableGroupsResponse>(url));
   }
 
   // --- Stream Operations ---

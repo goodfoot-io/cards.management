@@ -73,7 +73,8 @@ import {
   listCards,
   listVariableGroups,
   parseCardCreateInput,
-  searchCards
+  searchCards,
+  variableGroupCommand
 } from '../../src/bin/cards.js';
 
 /**
@@ -778,7 +779,17 @@ describe('card binary', () => {
   });
 
   describe('listVariableGroups', () => {
-    it.skip('prints JSON and passes an explicit workspace override to discovery', async () => {
+    it.skip('routes the exact variable-group list spelling', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await variableGroupCommand(['list', '--workspace-path', '/tmp/workspace']);
+        expect(variableGroupWorkspacePaths).toEqual(['/tmp/workspace']);
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it('prints JSON and passes an explicit workspace override to discovery', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await listVariableGroups(['--workspace-path', '/tmp/workspace with spaces']);
@@ -791,17 +802,18 @@ describe('card binary', () => {
       }
     });
 
-    it.skip('detects the current git workspace when no override is supplied', async () => {
+    it('detects the current git workspace when no override is supplied', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await listVariableGroups([]);
-        expect(variableGroupWorkspacePaths).toEqual([realpathSync(resolve(process.cwd()))]);
+        const gitRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim();
+        expect(variableGroupWorkspacePaths).toEqual([realpathSync(gitRoot)]);
       } finally {
         logSpy.mockRestore();
       }
     });
 
-    it.skip('surfaces discovery failures', async () => {
+    it('surfaces discovery failures', async () => {
       variableGroupRequestFails = true;
       await expect(listVariableGroups(['--workspace-path', '/tmp/workspace'])).rejects.toThrow(
         'Variable group discovery unavailable'
