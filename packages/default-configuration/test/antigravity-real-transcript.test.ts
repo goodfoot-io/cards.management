@@ -52,18 +52,24 @@ vi.mock('node:fs', () => ({
   statSync: vi.fn()
 }));
 
-vi.mock('node:fs/promises', () => ({
-  access: vi.fn(),
-  cp: vi.fn(),
-  mkdir: vi.fn(),
-  mkdtemp: vi.fn(),
-  readFile: vi.fn(),
-  readdir: vi.fn(),
-  rename: vi.fn(),
-  rm: vi.fn(),
-  stat: vi.fn(),
-  writeFile: vi.fn()
-}));
+vi.mock('node:fs/promises', async () => {
+  // `constants` passes through un-mocked: the launcher probes the marker
+  // store's writability with the real W_OK rather than a stubbed flag.
+  const { constants } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    access: vi.fn(),
+    constants,
+    cp: vi.fn(),
+    mkdir: vi.fn(),
+    mkdtemp: vi.fn(),
+    readFile: vi.fn(),
+    readdir: vi.fn(),
+    rename: vi.fn(),
+    rm: vi.fn(),
+    stat: vi.fn(),
+    writeFile: vi.fn()
+  };
+});
 
 vi.mock('@cards.management/sdk/worktree', () => ({
   createWorktree: vi.fn(),

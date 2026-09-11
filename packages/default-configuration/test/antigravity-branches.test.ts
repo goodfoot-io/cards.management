@@ -39,19 +39,25 @@ vi.mock('node:fs', () => ({
   statSync: vi.fn()
 }));
 
-vi.mock('node:fs/promises', () => ({
-  access: vi.fn(),
-  cp: vi.fn(),
-  mkdir: vi.fn(),
-  mkdtemp: vi.fn(),
-  readFile: vi.fn(),
-  readdir: vi.fn(),
-  realpath: vi.fn(),
-  rename: vi.fn(),
-  rm: vi.fn(),
-  stat: vi.fn(),
-  writeFile: vi.fn()
-}));
+vi.mock('node:fs/promises', async () => {
+  // `constants` passes through un-mocked: the launcher probes the marker
+  // store's writability with the real W_OK rather than a stubbed flag.
+  const { constants } = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  return {
+    access: vi.fn(),
+    constants,
+    cp: vi.fn(),
+    mkdir: vi.fn(),
+    mkdtemp: vi.fn(),
+    readFile: vi.fn(),
+    readdir: vi.fn(),
+    realpath: vi.fn(),
+    rename: vi.fn(),
+    rm: vi.fn(),
+    stat: vi.fn(),
+    writeFile: vi.fn()
+  };
+});
 
 vi.mock('@cards.management/sdk/worktree', () => ({
   createWorktree: vi.fn(),
@@ -588,6 +594,190 @@ describe('launch action — antigravity branch', () => {
 
       // Every channel a launcher could watch except the marker is blind on this
       // run: the child exits 0 and nothing reached its stderr.
+      child.emit('close', 0);
+      await expect(promise).rejects.toThrow(
+        /runtime hook failure \(action-env: \[action-env\] the Cards action environment is missing or malformed\)/
+      );
+      const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+      expect(transitionCardStatus).not.toHaveBeenCalled();
+    } finally {
+      delete process.env['CARDS_HOME'];
+      delete process.env['CARD_ID'];
+      delete process.env['ANTIGRAVITY_SESSION_ID'];
+      await realFsp.rm(cardsHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    'interactive',
+    'background'
+  ] as const)('refuses a %s launch by name when the marker store cannot be created', async (executionMode) => {
+    const { spawn } = await import('node:child_process');
+    const fs = await import('node:fs/promises');
+    const realFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const { AntigravitySessionFailureError } = await import('../src/lib/antigravity-session.js');
+
+    // The store root is routed through a regular file, so creating it fails
+    // ENOTDIR for any uid — the uid-independent construction the ruling
+    // mandated instead of permission bits, which a root user ignores.
+    const cardsHome = await realFsp.mkdtemp(join(tmpdir(), 'agy-store-enotdir-'));
+    await realFsp.mkdir(join(cardsHome, 'antigravity'), { recursive: true });
+    await realFsp.writeFile(join(cardsHome, 'antigravity', 'runtime'), 'not a directory');
+    process.env['CARDS_HOME'] = cardsHome;
+    vi.mocked(fs.mkdir).mockImplementation(((path: string, options: object) => realFsp.mkdir(path, options)) as never);
+    vi.mocked(fs.access).mockImplementation(((path: string, mode: number) => realFsp.access(path, mode)) as never);
+
+    try {
+      const action = (await import('../src/actions/launch.js')).default;
+      const failure = await action(baseInput({ executionMode }), createMockContext()).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AntigravitySessionFailureError);
+      expect(failure).toMatchObject({ reason: 'marker-store-unavailable' });
+      expect((failure as Error).message).toContain(join('antigravity', 'runtime', 'markers'));
+      expect((failure as Error).message).toMatch(/ENOTDIR/);
+
+      // Nothing was spawned and nothing settled: the refusal happens before
+      // the client, the worktree, and the child, on both modes.
+      expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+      const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+      expect(transitionCardStatus).not.toHaveBeenCalled();
+    } finally {
+      delete process.env['CARDS_HOME'];
+      await realFsp.rm(cardsHome, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    'interactive',
+    'background'
+  ] as const)('refuses a %s launch when the existing marker store root is not writable', async (executionMode) => {
+    const { spawn } = await import('node:child_process');
+    const fs = await import('node:fs/promises');
+    const realFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const { AntigravitySessionFailureError } = await import('../src/lib/antigravity-session.js');
+
+    // The steady state: the root exists, so the recursive mkdir is a no-op
+    // and only the write probe can report the store.
+    const cardsHome = await realFsp.mkdtemp(join(tmpdir(), 'agy-store-readonly-'));
+    const markerRoot = join(cardsHome, 'antigravity', 'runtime', 'markers');
+    await realFsp.mkdir(markerRoot, { recursive: true });
+    await realFsp.chmod(markerRoot, 0o500);
+    process.env['CARDS_HOME'] = cardsHome;
+    vi.mocked(fs.mkdir).mockImplementation(((path: string, options: object) => realFsp.mkdir(path, options)) as never);
+    vi.mocked(fs.access).mockImplementation(((path: string, mode: number) => realFsp.access(path, mode)) as never);
+
+    try {
+      // Vacuity guard: a root-run suite bypasses both the probe and the
+      // launcher's check, so assert the fixture is genuinely unwritable before
+      // trusting the refusal — a control that passes vacuously is worse than
+      // no control.
+      const probe = await realFsp
+        .writeFile(join(markerRoot, 'probe'), 'x')
+        .then(() => 'wrote')
+        .catch((error: NodeJS.ErrnoException) => error.code);
+      expect(probe, `fixture at ${markerRoot} is writable — run this suite unprivileged`).not.toBe('wrote');
+
+      const action = (await import('../src/actions/launch.js')).default;
+      const failure = await action(baseInput({ executionMode }), createMockContext()).catch((error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AntigravitySessionFailureError);
+      expect(failure).toMatchObject({ reason: 'marker-store-unavailable' });
+      expect((failure as Error).message).toMatch(/EACCES|permission denied/);
+      expect(vi.mocked(spawn)).not.toHaveBeenCalled();
+    } finally {
+      delete process.env['CARDS_HOME'];
+      await realFsp.chmod(markerRoot, 0o700).catch(() => undefined);
+      await realFsp.rm(cardsHome, { recursive: true, force: true });
+    }
+  });
+
+  it('fails the action on the placeholder marker the transport re-recorded when the scoped write failed', async () => {
+    const { spawn } = await import('node:child_process');
+    const fs = await import('node:fs/promises');
+    const realFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const realFs = await vi.importActual<typeof import('node:fs')>('node:fs');
+    const { dispatchAntigravityHook } = await import('../../agent-hooks/src/antigravity/internal/transport.js');
+    const { HandlerFailure, handlePreInvocation } = await import(
+      '../../agent-hooks/src/antigravity/internal/handlers.js'
+    );
+    const { defaultAntigravityHandlerDeps } = await import('../../agent-hooks/src/antigravity/internal/deps.js');
+    const { UNKNOWN_CONVERSATION } = await import('../../agent-hooks/src/antigravity/internal/markers.js');
+
+    // Real store, real transport, real launcher read: only the
+    // conversation-scoped write refuses, so the retry is the one thing that
+    // makes the failure durable — and the launcher's own reader is what
+    // classifies it as a hook failure.
+    const cardsHome = await realFsp.mkdtemp(join(tmpdir(), 'agy-hook-placeholder-'));
+    const child = createMockChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    process.env['CARDS_HOME'] = cardsHome;
+    process.env['CARD_ID'] = 'main-679';
+    // The establishment stays mocked here (it has its own controls above);
+    // only the store the hook writes and the launcher reads is real.
+    vi.mocked(fs.readdir).mockImplementation(((directory: string) => realFsp.readdir(directory)) as never);
+    vi.mocked(fs.readFile).mockImplementation(((
+      path: Parameters<typeof realFsp.readFile>[0],
+      encoding: Parameters<typeof realFsp.readFile>[1]
+    ) => realFsp.readFile(path, encoding)) as never);
+
+    try {
+      const action = (await import('../src/actions/launch.js')).default;
+      const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
+      await vi.waitFor(() => expect(vi.mocked(spawn)).toHaveBeenCalled());
+
+      const spawnEnv = (vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string | undefined> }).env;
+      const sessionId = spawnEnv['ANTIGRAVITY_SESSION_ID'] as string;
+      process.env['ANTIGRAVITY_SESSION_ID'] = sessionId;
+
+      const deps = {
+        ...defaultAntigravityHandlerDeps(),
+        cardsConfigDir: () => cardsHome,
+        io: {
+          ensureDirSync: (dir: string) => realFs.mkdirSync(dir, { recursive: true }),
+          writeTextFileSync: (path: string, data: string) => {
+            if (path.endsWith(`${CONVERSATION_ID}.failure`)) {
+              throw Object.assign(new Error('EISDIR: illegal operation on a directory'), { code: 'EISDIR' });
+            }
+            realFs.writeFileSync(path, data, 'utf8');
+          },
+          existsSync: (path: string) => realFs.existsSync(path),
+          readTextFileSync: (path: string) => realFs.readFileSync(path, 'utf8'),
+          removeSync: (path: string) => realFs.rmSync(path, { force: true })
+        },
+        loadActionInput: () => null,
+        runReconciliationSweep: async () => {}
+      };
+      await expect(
+        dispatchAntigravityHook(
+          {
+            conversationId: CONVERSATION_ID,
+            workspacePaths: ['/test/workspace'],
+            transcriptPath: '/test/transcript',
+            artifactDirectoryPath: '/test/artifacts',
+            modelName: 'gemini-3-pro',
+            invocationNum: 1,
+            initialNumSteps: 0
+          },
+          handlePreInvocation,
+          deps
+        )
+      ).rejects.toBeInstanceOf(HandlerFailure);
+
+      const retryPath = join(
+        cardsHome,
+        'antigravity',
+        'runtime',
+        'markers',
+        sessionId,
+        `${UNKNOWN_CONVERSATION}.failure`
+      );
+      expect(JSON.parse(await realFsp.readFile(retryPath, 'utf8'))).toEqual({
+        stage: 'action-env',
+        reason: '[action-env] the Cards action environment is missing or malformed'
+      });
+
+      // Exit status and stderr stay clean, exactly as the host behaves: the
+      // retry is the only channel that reaches the launcher's read.
       child.emit('close', 0);
       await expect(promise).rejects.toThrow(
         /runtime hook failure \(action-env: \[action-env\] the Cards action environment is missing or malformed\)/

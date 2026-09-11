@@ -12,7 +12,9 @@
  * stream-json`, whose stdout is discarded and whose turn is judged by the
  * shared outcome policy — exit status, plus `agy`'s own truncation notice
  * latched off a bounded stderr tail — and by the durable hook-failure marker.
- * Cards never passes `--dangerously-skip-permissions`.
+ * Because that marker is the one channel `agy` does not sever, the launcher
+ * establishes the marker store before spawning and refuses the launch by name
+ * when it cannot. Cards never passes `--dangerously-skip-permissions`.
  *
  * @summary Shared session utilities for Antigravity action workflows
  * @module
@@ -20,7 +22,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { readdir, readFile } from 'node:fs/promises';
+import { access, constants, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '@cards.management/sdk';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
@@ -117,6 +119,7 @@ const AGY_PRINT_TIMEOUT_SUFFIX = 'with turn in progress; returning partial outpu
  */
 export type AntigravitySessionFailureReason =
   | 'spawn-failure'
+  | 'marker-store-unavailable'
   | 'nonzero-exit'
   | 'signal-termination'
   | 'hook-failure'
@@ -148,6 +151,48 @@ export class AntigravitySessionFailureError extends Error {
 }
 
 /**
+ * Resolves the Antigravity runtime marker store root.
+ *
+ * The directory the hook transport writes through its own `markerPath` and
+ * {@link readAntigravityHookFailure} reads — derived here from the shared
+ * layout rather than duplicated from the hook's module.
+ *
+ * @returns Absolute path `<cardsConfigDir>/antigravity/runtime/markers`.
+ */
+function antigravityMarkerRoot(): string {
+  return join(resolveGlobalCardsConfigDir(), 'antigravity', 'runtime', 'markers');
+}
+
+/**
+ * Establishes the Antigravity marker store before a session is launched.
+ *
+ * The durable `.failure` marker is the only channel a hook failure reaches
+ * this launcher through — `agy` exits 0 with an empty stderr when its hooks
+ * fail — so a store that cannot accept a write turns every hook failure of
+ * the session into a silent success. The root is created on demand exactly as
+ * the hook's own `writeMarker` would (`recursive` keeps it idempotent on an
+ * existing root), then probed for write access, because a recursive mkdir
+ * performs no write when the root already exists and would otherwise pass an
+ * unwritable store. It establishes a precondition only: it reads no evidence
+ * and never asks whether any hook ran.
+ *
+ * @throws {AntigravitySessionFailureError} `marker-store-unavailable` when the
+ *   store cannot be created or is not writable, naming the store path.
+ */
+async function establishAntigravityMarkerStore(): Promise<void> {
+  const markerRoot = antigravityMarkerRoot();
+  try {
+    await mkdir(markerRoot, { recursive: true });
+    await access(markerRoot, constants.W_OK);
+  } catch (error) {
+    throw new AntigravitySessionFailureError(
+      'marker-store-unavailable',
+      `Antigravity marker store is not writable at ${markerRoot}: ${errorMessage(error)}`
+    );
+  }
+}
+
+/**
  * Reads the first durable hook failure written for a Cards-owned session.
  *
  * @param sessionId - Pre-spawn session identity exported to the host.
@@ -155,7 +200,7 @@ export class AntigravitySessionFailureError extends Error {
  * @throws For marker-store IO failures other than an absent session directory.
  */
 export async function readAntigravityHookFailure(sessionId: string): Promise<string | undefined> {
-  const directory = join(resolveGlobalCardsConfigDir(), 'antigravity', 'runtime', 'markers', sessionId);
+  const directory = join(antigravityMarkerRoot(), sessionId);
   let names: string[];
   try {
     names = (await readdir(directory)).filter((name) => name.endsWith('.failure')).sort();
@@ -214,19 +259,20 @@ export function buildAntigravityArgs(
  * Spawns an `agy` CLI session with worktree lifecycle and prompt-based skill
  * guidance.
  *
- * Stage order mirrors {@link ./codex-session.js}: API client → base branch →
- * worktree → CLI spawn with card env vars → cancel/shutdown drain wiring →
- * exit → status settle → mode-dependent branch cleanup. Background launches
- * are judged by the shared outcome policy — nonzero exit, signal termination,
- * a failed process-tree drain, the latched truncation notice, and the durable
- * hook-failure marker all fail the action; a clean exit that carries none of
- * them settles as success, whatever the discarded result record said.
+ * Stage order mirrors {@link ./codex-session.js}: marker-store establishment →
+ * API client → base branch → worktree → CLI spawn with card env vars →
+ * cancel/shutdown drain wiring → exit → status settle → mode-dependent branch
+ * cleanup. Background launches are judged by the shared outcome policy —
+ * nonzero exit, signal termination, a failed process-tree drain, the latched
+ * truncation notice, and the durable hook-failure marker all fail the action;
+ * a clean exit that carries none of them settles as success, whatever the
+ * discarded result record said.
  *
  * @param input - Parsed action input from the environment.
  * @param context - Action context providing logger and lifecycle hooks.
  * @param options - Session-specific parameters.
  * @returns Resolves after the child exits and post-exit settle/cleanup ran.
- * @throws {AntigravitySessionFailureError} When a background launch fails (spawn failure, nonzero exit, signal termination, output truncated by the CLI's print timeout, a runtime hook failure, or a failed process-tree drain), when the launch cannot carry the authorized project's workspace trust into the checkout, or when an interactive launch fails to spawn.
+ * @throws {AntigravitySessionFailureError} When the marker store cannot be established before the spawn, when a background launch fails (spawn failure, nonzero exit, signal termination, output truncated by the CLI's print timeout, a runtime hook failure, or a failed process-tree drain), when the launch cannot carry the authorized project's workspace trust into the checkout, or when an interactive launch fails to spawn.
  * @throws {AntigravityTrustError} When the native Antigravity profile exists but its workspace trust cannot be read or safely updated.
  * @throws {Error} When Cards API discovery fails or the worktree settle phase rejected.
  */
@@ -248,6 +294,13 @@ export async function spawnAntigravitySession(
   // environment (ANTIGRAVITY_SESSION_ID) so every in-session `cards` CLI
   // inherits it — the witnessed session-identity carrier (plan Phase 5).
   const sessionId = randomUUID();
+
+  // The marker store is a launch precondition, not a post-hoc read. Both
+  // execution modes are refused here, above every mode-conditioned branch, so
+  // a session that could not record a hook failure is never launched: the
+  // retired evidence checklist reported the same state on both modes, and its
+  // absence from this path is a regression, not an accepted trade.
+  await establishAntigravityMarkerStore();
 
   const client = await createCardsClient(context.logger);
   if (!client) {
