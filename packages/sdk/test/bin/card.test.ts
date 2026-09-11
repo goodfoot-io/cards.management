@@ -779,7 +779,7 @@ describe('card binary', () => {
   });
 
   describe('listVariableGroups', () => {
-    it.skip('routes the exact variable-group list spelling', async () => {
+    it('routes the exact variable-group list spelling', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await variableGroupCommand(['list', '--workspace-path', '/tmp/workspace']);

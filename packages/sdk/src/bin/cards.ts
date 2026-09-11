@@ -106,6 +106,7 @@ Commands:
   create                         Create a card from JSON on stdin
   list [options]                 List cards with optional filters
   search [query] [options]       Search cards using #tag @relation text syntax
+  variable-group list [options]  List safe variable-group summaries
   <card-id> action <action-id> [options]  Execute an action on a card
   <card-id> watch [glob...]     Wait for next unattributed commit
   <card-id> attach [options]    Attach an existing card to the current worktree
@@ -166,6 +167,18 @@ Search:
     cards search "#auth @main-5 login" --status active
     cards search "#planning" --limit 20
     cards search "@main-42"
+
+Variable groups:
+  Lists safe summary metadata for variable groups configured for the current
+  workspace. Variable values, names, secret keys, and secret values are never
+  included.
+
+  Options:
+    --workspace-path <path>  Workspace root (default: git rev-parse --show-toplevel)
+
+  Example:
+    cards variable-group list
+    cards variable-group list --workspace-path /path/to/workspace
 
 Action:
   Executes an action on a card via the server relay. The action ID is
@@ -838,8 +851,11 @@ export async function listVariableGroups(args: string[]): Promise<void> {
  * @param args - CLI arguments beginning with the variable-group verb.
  */
 export async function variableGroupCommand(args: string[]): Promise<void> {
-  void args;
-  throw new Error('Not Implemented');
+  const [verb, ...verbArgs] = args;
+  if (verb !== 'list') {
+    throw new Error(verb ? `unknown variable-group verb "${verb}"` : 'missing variable-group verb; expected "list"');
+  }
+  await listVariableGroups(verbArgs);
 }
 
 /**
@@ -1575,6 +1591,9 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
       break;
     case 'search':
       run = searchCards(process.argv.slice(3));
+      break;
+    case 'variable-group':
+      run = variableGroupCommand(process.argv.slice(3));
       break;
     default: {
       // Resource-first: <card-id> [verb]
