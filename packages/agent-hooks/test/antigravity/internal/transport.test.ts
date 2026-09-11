@@ -6,11 +6,13 @@
  * @summary Tests for the Antigravity transport driver
  */
 
+import { existsSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { Logger } from '@goodfoot/agent-hooks';
 import { describe, expect, it } from 'vitest';
 import { HandlerFailure, handlePreInvocation } from '../../../src/antigravity/internal/handlers.js';
-import { markerPath } from '../../../src/antigravity/internal/markers.js';
+import { defaultAntigravityIo } from '../../../src/antigravity/internal/io.js';
+import { markerPath, UNKNOWN_CONVERSATION } from '../../../src/antigravity/internal/markers.js';
 import { dispatchAntigravityHook } from '../../../src/antigravity/internal/transport.js';
 import { CONVERSATION_ID, makeDeps, makeTempDir, removeTempDir, SESSION_ID, withoutEnv } from '../helpers.js';
 
@@ -61,6 +63,79 @@ describe('dispatchAntigravityHook', () => {
       const payload = JSON.parse(deps.io.readTextFileSync(failurePath)) as { stage: string; reason: string };
       expect(payload.stage).toBe('watcher-setup');
       expect(payload.reason).toContain('spawn returned false');
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it('records the failure under the placeholder name when the conversation-scoped write alone fails', async () => {
+    const root = makeTempDir('dispatch-placeholder');
+    try {
+      const { deps } = makeDeps(root);
+      // A directory squatting on the conversation-scoped name makes the real
+      // writeTextFileSync fail (EISDIR) while the session directory itself
+      // stays writable: the store works and one write does not, which is the
+      // arm the retry exists for.
+      const primaryPath = markerPath(joinCardsHome(root), SESSION_ID, CONVERSATION_ID, 'failure');
+      deps.io.ensureDirSync(primaryPath);
+
+      await expect(
+        dispatchAntigravityHook(
+          { conversationId: CONVERSATION_ID },
+          async () => {
+            throw new HandlerFailure('watcher-setup', 'spawn returned false', CONVERSATION_ID);
+          },
+          deps
+        )
+      ).rejects.toBeInstanceOf(HandlerFailure);
+
+      const retryPath = markerPath(joinCardsHome(root), SESSION_ID, null, 'failure');
+      expect(deps.io.existsSync(retryPath)).toBe(true);
+      expect(JSON.parse(deps.io.readTextFileSync(retryPath))).toEqual({
+        stage: 'watcher-setup',
+        reason: '[watcher-setup] spawn returned false'
+      });
+      // Both readers take the sorted-first `.failure` of the session
+      // directory, so the retry is read exactly when the conversation-scoped
+      // marker is absent and can never shadow one that exists.
+      expect(retryPath.endsWith(`${UNKNOWN_CONVERSATION}.failure`)).toBe(true);
+      expect(`${CONVERSATION_ID}.failure`.localeCompare(`${UNKNOWN_CONVERSATION}.failure`)).toBeLessThan(0);
+    } finally {
+      removeTempDir(root);
+    }
+  });
+
+  it('names an unreportable failure when the marker cannot be written under either name', async () => {
+    const root = makeTempDir('dispatch-unwritable');
+    try {
+      const { deps } = makeDeps(root, {
+        io: {
+          ...defaultAntigravityIo,
+          writeTextFileSync: () => {
+            throw Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' });
+          }
+        }
+      });
+
+      const failure = await dispatchAntigravityHook(
+        { conversationId: CONVERSATION_ID },
+        async () => {
+          throw new HandlerFailure('watcher-setup', 'spawn returned false', CONVERSATION_ID);
+        },
+        deps
+      ).catch((error: unknown) => error);
+
+      // The boolean the transport used to discard now surfaces: the failure
+      // reached no reader, and the report says so instead of the write failing
+      // silently.
+      expect(failure).toBeInstanceOf(HandlerFailure);
+      const reported = (failure as HandlerFailure).reason;
+      expect(reported).toContain('spawn returned false');
+      expect(reported).toContain('not visible to the launcher');
+
+      const sessionDir = join(joinCardsHome(root), 'antigravity', 'runtime', 'markers', SESSION_ID);
+      const names = existsSync(sessionDir) ? readdirSync(sessionDir) : [];
+      expect(names.filter((name) => name.endsWith('.failure'))).toEqual([]);
     } finally {
       removeTempDir(root);
     }
