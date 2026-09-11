@@ -23,6 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveWorktreesRoot } from '../src/cards-config.js';
 import { Logger } from '../src/config/logger.js';
 import {
+  cleanupFailedWorktree,
   createWorktree,
   provisionStaticCardsSubtree,
   removeWorktree,
@@ -802,6 +803,38 @@ describe('createWorktree worktree path policy integration', () => {
         if (priorPath === undefined) delete process.env['PATH'];
         else process.env['PATH'] = priorPath;
         execFileSync(realGit, ['branch', '-D', 'feature/cleanup-residue'], { cwd: repoDir });
+      }
+    }
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'attempts worktree and created-branch cleanup and reports both residuals',
+    async () => {
+      const created = await createWorktree('feature/both-cleanup-residues', { cwd: repoDir });
+      await created.settle;
+      const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+      const fakeBin = path.join(tmpBase, 'both-fault-bin');
+      await fs.mkdir(fakeBin);
+      const wrapper = path.join(fakeBin, 'git');
+      await fs.writeFile(
+        wrapper,
+        `#!/bin/sh\nif [ "$1" = "worktree" ] && [ "$2" = "remove" ]; then\n  echo "injected worktree removal failure" >&2\n  exit 72\nfi\nif [ "$1" = "branch" ] && [ "$2" = "-D" ]; then\n  echo "injected branch removal failure" >&2\n  exit 73\nfi\nexec "${realGit}" "$@"\n`,
+        { mode: 0o755 }
+      );
+      const priorPath = process.env['PATH'];
+      process.env['PATH'] = `${fakeBin}${path.delimiter}${priorPath ?? ''}`;
+      try {
+        const failures = await cleanupFailedWorktree(repoDir, created.path, 'feature/both-cleanup-residues');
+        expect(failures).toHaveLength(2);
+        expect(failures[0]).toContain(`worktree=${created.path} may remain`);
+        expect(failures[0]).toContain('injected worktree removal failure');
+        expect(failures[1]).toContain('branch=feature/both-cleanup-residues remains');
+        expect(failures[1]).toContain('injected branch removal failure');
+      } finally {
+        if (priorPath === undefined) delete process.env['PATH'];
+        else process.env['PATH'] = priorPath;
+        await removeWorktree(created.path);
+        execFileSync(realGit, ['branch', '-D', 'feature/both-cleanup-residues'], { cwd: repoDir });
       }
     }
   );

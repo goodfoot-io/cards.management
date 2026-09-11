@@ -24,6 +24,7 @@ import { findAgentPid } from './process-tree.js';
 import {
   appendWorktreeGitExcludes,
   captureOriginalHooksPath,
+  cleanupFailedWorktree,
   clearCardBoundFile,
   createWorktree,
   type EarlyWorktreeResult,
@@ -446,6 +447,19 @@ export async function createWorktreeForCard(
   const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId, registrationIntent } = options;
 
   const result = await createWorktree(ref, { cwd });
+  const cleanupCreatedResources = async (): Promise<string[]> => {
+    if (!result.repoRoot) {
+      // Legacy/test implementations without ownership metadata can still
+      // remove the worktree, but must never guess that a branch is ours.
+      try {
+        await removeWorktree(result.path);
+        return [];
+      } catch (error: unknown) {
+        return [`worktree=${result.path} may remain: ${error instanceof Error ? error.message : String(error)}`];
+      }
+    }
+    return cleanupFailedWorktree(result.repoRoot, result.path, result.createdBranch);
+  };
 
   // Attach a no-op rejection handler to settle immediately, before any
   // outfit work or await points. The settle promise runs concurrently with
@@ -480,11 +494,7 @@ export async function createWorktreeForCard(
       } catch (error: unknown) {
         cleanupFailures.push(`registration=${error instanceof Error ? error.message : String(error)}`);
       }
-      try {
-        await removeWorktree(result.path);
-      } catch (error: unknown) {
-        cleanupFailures.push(`worktree=${error instanceof Error ? error.message : String(error)}`);
-      }
+      cleanupFailures.push(...(await cleanupCreatedResources()));
       if (cleanupFailures.length > 0) {
         throw new Error(
           `createWorktreeForCard: settlement failed and rollback was incomplete at ${result.path}: ` +
@@ -508,11 +518,7 @@ export async function createWorktreeForCard(
     } catch (settleError) {
       rollbackFailures.push(`settle=${settleError instanceof Error ? settleError.message : String(settleError)}`);
     }
-    try {
-      await removeWorktree(result.path);
-    } catch (cleanupError) {
-      rollbackFailures.push(`rollback=${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`);
-    }
+    rollbackFailures.push(...(await cleanupCreatedResources()));
     if (rollbackFailures.length > 0) {
       throw new Error(
         `createWorktreeForCard: outfit failed and rollback was incomplete at ${result.path}: ` +

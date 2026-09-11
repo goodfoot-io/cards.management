@@ -618,6 +618,10 @@ describe('create-worktree CLI', () => {
         encoding: 'utf8'
       });
       expect(worktrees).not.toContain('card-branch');
+      const branches = execFileSync('git', ['-C', repoDir, 'branch', '--list', 'card-branch'], {
+        encoding: 'utf8'
+      });
+      expect(branches.trim()).toBe('');
     },
     CLI_TEST_TIMEOUT_MS
   );

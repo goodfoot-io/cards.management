@@ -26,6 +26,7 @@ import {
 vi.mock('../src/worktree.js', () => ({
   createWorktree: vi.fn(),
   removeWorktree: vi.fn(),
+  cleanupFailedWorktree: vi.fn(async () => []),
   writeCardBoundFile: vi.fn(),
   clearCardBoundFile: vi.fn(),
   appendWorktreeGitExcludes: vi.fn(),
@@ -71,6 +72,7 @@ import { join } from 'node:path';
 import {
   appendWorktreeGitExcludes,
   captureOriginalHooksPath,
+  cleanupFailedWorktree,
   clearCardBoundFile,
   createWorktree,
   removeWorktree,
@@ -279,6 +281,24 @@ describe('createWorktreeForCard', () => {
     expect(removeWorktree).toHaveBeenCalledWith(EARLY_PATH);
   });
 
+  it('retries owned branch cleanup after inner settlement cleanup removed only the worktree', async () => {
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      repoRoot: '/repo',
+      createdBranch: 'cards/main-95/1',
+      settle: Promise.reject(
+        new Error('settlement failed; branch=cards/main-95/1 remains')
+      ) as EarlyWorktreeResult['settle']
+    });
+    vi.mocked(cleanupFailedWorktree).mockResolvedValue([]);
+    const client = makeClient();
+
+    const result = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
+    await expect(result.settle).rejects.toThrow('branch=cards/main-95/1 remains');
+
+    expect(cleanupFailedWorktree).toHaveBeenCalledWith('/repo', EARLY_PATH, 'cards/main-95/1');
+  });
+
   it('never calls addBranch when createWorktree rejects', async () => {
     vi.mocked(createWorktree).mockRejectedValue(new Error('git failure'));
     const addBranchArgs: Parameters<CardsClient['addBranch']>[] = [];
@@ -413,7 +433,7 @@ describe('createWorktreeForCard', () => {
     });
 
     await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow(
-      /outfit=API failure; rollback=rollback boom/
+      /outfit=API failure; worktree=.* may remain: rollback boom/
     );
   });
 
@@ -434,7 +454,9 @@ describe('createWorktreeForCard', () => {
       (error: unknown) => error
     );
     expect(failure).toBeInstanceOf(Error);
-    expect((failure as Error).message).toMatch(/outfit=API failure; settle=settlement boom; rollback=rollback boom/);
+    expect((failure as Error).message).toMatch(
+      /outfit=API failure; settle=settlement boom; worktree=.* may remain: rollback boom/
+    );
     expect((failure as Error).cause).toBe(outfitError);
   });
 });

@@ -346,6 +346,10 @@ export interface CreateWorktreeResult {
 export interface EarlyWorktreeResult {
   path: string;
   settle: Promise<CreateWorktreeResult>;
+  /** Primary repository owning the worktree, used for creation rollback. */
+  repoRoot?: string;
+  /** Branch created by this invocation; absent for pre-existing refs and detached worktrees. */
+  createdBranch?: string;
 }
 
 /**
@@ -457,6 +461,10 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
   // mark is the time-to-usable boundary the contributor's launch waits on.
   perf.mark('usable-directory');
 
+  // Ownership is determined before asynchronous settlement so card-bound
+  // orchestration can retry cleanup without guessing from residual Git state.
+  const createdBranch = refType === 'branch' && !branchExists;
+
   const settle = perf.measure('settle:total', async (): Promise<CreateWorktreeResult> => {
     // resolveHead(base) reads only the worktree HEAD (valid the moment the
     // checkout completed) and is independent of every symlink/copy step, so start
@@ -516,11 +524,6 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
       })
     );
     reroutePromise.catch(() => undefined);
-
-    // True when this call created the branch (`git worktree add -b`). The
-    // settle-failure cleanup deletes only the branch it created — a
-    // pre-existing branch must survive a failed settle.
-    const createdBranch = refType === 'branch' && !branchExists;
 
     try {
       try {
@@ -632,13 +635,12 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
       // evaluated. Cleanup failures are composed with the initiating failure so
       // callers see the exact residual resource instead of retrying into a
       // misleading no-op after the worktree directory disappeared.
-      try {
-        await cleanupFailedWorktree(repoRoot, worktreeDir, createdBranch ? ref : undefined);
-      } catch (cleanupError: unknown) {
+      const cleanupFailures = await cleanupFailedWorktree(repoRoot, worktreeDir, createdBranch ? ref : undefined);
+      if (cleanupFailures.length > 0) {
         throw new Error(
           `create-worktree: settlement failed and cleanup left residual resources: ` +
             `settle=${error instanceof Error ? error.message : String(error)}; ` +
-            `${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+            cleanupFailures.join('; '),
           { cause: error }
         );
       }
@@ -646,7 +648,12 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
     }
   });
 
-  return { path: worktreeDir, settle };
+  return {
+    path: worktreeDir,
+    settle,
+    repoRoot,
+    ...(createdBranch ? { createdBranch: ref } : {})
+  };
 }
 
 /**
@@ -751,25 +758,34 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
  * @param repoRoot - Primary repository root where git commands run.
  * @param worktreeDir - Absolute worktree path to remove.
  * @param branchToDelete - Branch name to delete when this call created it.
+ * @returns Diagnostics for every resource cleanup that failed.
  */
-async function cleanupFailedWorktree(repoRoot: string, worktreeDir: string, branchToDelete?: string): Promise<void> {
+export async function cleanupFailedWorktree(
+  repoRoot: string,
+  worktreeDir: string,
+  branchToDelete?: string
+): Promise<string[]> {
+  const failures: string[] = [];
   try {
     await removeWorktree(worktreeDir);
   } catch (error: unknown) {
-    throw new Error(`worktree=${worktreeDir} may remain: ${error instanceof Error ? error.message : String(error)}`, {
-      cause: error
-    });
+    failures.push(`worktree=${worktreeDir} may remain: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (branchToDelete !== undefined) {
     try {
-      await execFileAsync('git', ['branch', '-D', branchToDelete], { cwd: repoRoot, timeout: 30_000 });
+      // An outer orchestrator may retry after inner settlement cleanup already
+      // removed the branch. Treat absence as success while retaining the
+      // invocation-owned name as the only branch eligible for deletion.
+      if (await checkBranchExists(repoRoot, branchToDelete)) {
+        await execFileAsync('git', ['branch', '-D', branchToDelete], { cwd: repoRoot, timeout: 30_000 });
+      }
     } catch (error: unknown) {
-      throw new Error(
-        `branch=${branchToDelete} remains in ${repoRoot}: ${error instanceof Error ? error.message : String(error)}`,
-        { cause: error }
+      failures.push(
+        `branch=${branchToDelete} remains in ${repoRoot}: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
+  return failures;
 }
 
 /**
