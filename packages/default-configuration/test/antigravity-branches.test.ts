@@ -1,12 +1,11 @@
 /**
  * Exercises Antigravity branches of the consolidated action handlers (launch,
- * chat, interview, captain) through end-to-end scenarios. Locks in the
- * launch-grant gate (named refusal before any spawn or session state), spawn
- * argv (terminal-owned `-i`, child-owned `-p --output-format stream-json`,
- * never `--dangerously-skip-permissions`), worktree cwd + card env vars,
- * background final-record classification (exit zero without the expected
- * final record is failure), cancellation drain, and branch-cleanup wiring for
- * the Antigravity path.
+ * chat, interview, captain) through end-to-end scenarios. Locks in spawn argv
+ * (terminal-owned `-i`, child-owned `-p --output-format stream-json`, never
+ * `--dangerously-skip-permissions`), worktree cwd + card env vars, background
+ * final-record classification (exit zero without the expected final record is
+ * failure), cancellation drain, and branch-cleanup wiring for the Antigravity
+ * path.
  *
  * @summary Tests Antigravity branches of consolidated action handlers
  */
@@ -121,40 +120,11 @@ function readMockFile(path: string): string {
   throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
 }
 
-/**
- * Encodes a grant payload the way the extension's single writer helper does:
- * base64url-encoded JSON.
- *
- * @param grant - Grant payload to encode.
- * @returns The base64url-encoded envelope.
- */
-function encodeGrant(grant: Record<string, unknown>): string {
-  return Buffer.from(JSON.stringify(grant), 'utf-8').toString('base64url');
-}
-
-/**
- * Builds a valid launch grant bound to `antigravity-cli` with a future expiry.
- *
- * @param overrides - Field overrides merged over the valid payload.
- * @returns The base64url-encoded grant envelope.
- */
-function validGrant(overrides: Record<string, unknown> = {}): string {
-  return encodeGrant({
-    v: 1,
-    agent: AGENT,
-    issuedAtMs: Date.now() - 1_000,
-    expiresAtMs: Date.now() + 60_000,
-    probeFingerprint: 'probe-fingerprint-1',
-    ...overrides
-  });
-}
-
 beforeEach(async () => {
   vi.clearAllMocks();
   process.env['EXTENSION_PATH'] = '/test/extension';
   process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
   process.env['API_TEST_MODE'] = '1';
-  process.env['CARDS_AGENT_LAUNCH_GRANT'] = validGrant();
   process.env['ANTIGRAVITY_HOME'] = ANTIGRAVITY_HOME;
   delete process.env['CARDS_HOME'];
   delete process.env['EXIT_WHEN_DONE'];
@@ -252,7 +222,6 @@ beforeEach(async () => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   delete process.env['API_TEST_MODE'];
-  delete process.env['CARDS_AGENT_LAUNCH_GRANT'];
   delete process.env['CARDS_AGENT_MODEL'];
   delete process.env['CARDS_AGENT_EFFORT'];
   delete process.env['ANTIGRAVITY_HOME'];
@@ -315,32 +284,25 @@ describe('resolveCodingAgent — antigravity', () => {
 });
 
 describe('launch action — antigravity branch', () => {
-  it('revalidates the launch grant after worktree settlement and refuses expiry before spawn', async () => {
+  it('awaits worktree settlement and does not spawn when it rejects', async () => {
     const { spawn } = await import('node:child_process');
     const { createWorktree } = await import('@cards.management/sdk/worktree');
-    const issuedAt = Date.now();
-    process.env['CARDS_AGENT_LAUNCH_GRANT'] = validGrant({
-      issuedAtMs: issuedAt - 1,
-      expiresAtMs: issuedAt + 50
-    });
 
-    let resolveSettle!: (value: { branch: string; worktree: string; baseSha: string }) => void;
-    const settle = new Promise<{ branch: string; worktree: string; baseSha: string }>((resolve) => {
-      resolveSettle = resolve;
+    let rejectSettle!: (reason: Error) => void;
+    const settle = new Promise<{ branch: string; worktree: string; baseSha: string }>((_resolve, reject) => {
+      rejectSettle = reject;
     });
     vi.mocked(createWorktree).mockResolvedValue({ path: WORKTREE_PATH, settle });
 
     const action = (await import('../src/actions/launch.js')).default;
     const promise = action(baseInput(), createMockContext());
-    const refusal = expect(promise).rejects.toThrow(/\[expired\]/);
+    const failure = expect(promise).rejects.toThrow(/worktree outfit failed/);
     await flushMicrotasks();
     expect(spawn).not.toHaveBeenCalled();
 
-    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(issuedAt + 51);
-    resolveSettle({ branch: 'cards/card-123/1', worktree: WORKTREE_PATH, baseSha: 'abc123' });
-    await refusal;
+    rejectSettle(new Error('worktree outfit failed'));
+    await failure;
     expect(spawn).not.toHaveBeenCalled();
-    nowSpy.mockRestore();
   });
 
   it('spawns terminal-owned agy -i in the card worktree with card env and the minted session id', async () => {
@@ -837,51 +799,5 @@ describe('captain action — antigravity branch', () => {
     child.stdout?.emit('data', Buffer.from(`${JSON.stringify({ conversation_id: 'conv-1', status: 'SUCCESS' })}\n`));
     child.emit('close', 0);
     await promise;
-  });
-});
-
-describe('launch-grant gating — antigravity action rows', () => {
-  it('refuses launch for every action row when the grant is absent, without spawning or creating session state', async () => {
-    const { spawn } = await import('node:child_process');
-    const { createWorktree } = await import('@cards.management/sdk/worktree');
-    const { LaunchGrantRefusalError } = await import('../src/lib/launch-grant.js');
-    delete process.env['CARDS_AGENT_LAUNCH_GRANT'];
-
-    const rows = [
-      { importPath: '../src/actions/launch.js', actionName: 'Launch' },
-      { importPath: '../src/actions/chat.js', actionName: 'Chat' },
-      { importPath: '../src/actions/interview.js', actionName: 'Interview' },
-      { importPath: '../src/actions/captain.js', actionName: 'Captain' }
-    ] as const;
-
-    for (const row of rows) {
-      const action = (await import(row.importPath)).default;
-      await expect(action(baseInput({ actionName: row.actionName }), createMockContext())).rejects.toThrow(
-        LaunchGrantRefusalError
-      );
-      await expect(action(baseInput({ actionName: row.actionName }), createMockContext())).rejects.toThrow(
-        /\[absent\]/
-      );
-    }
-
-    expect(spawn).not.toHaveBeenCalled();
-    expect(vi.mocked(createWorktree)).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ['malformed', validGrant({ probeFingerprint: '' })],
-    ['wrong-version', validGrant({ v: 2 })],
-    ['agent-mismatch', validGrant({ agent: 'codex-cli' })],
-    ['expired', validGrant({ expiresAtMs: Date.now() - 1 })]
-  ])('refuses launch on a %s grant without spawning', async (expectedReason, encoded) => {
-    const { spawn } = await import('node:child_process');
-    const { createWorktree } = await import('@cards.management/sdk/worktree');
-    process.env['CARDS_AGENT_LAUNCH_GRANT'] = encoded;
-
-    const action = (await import('../src/actions/launch.js')).default;
-    await expect(action(baseInput(), createMockContext())).rejects.toThrow(new RegExp(`\\[${expectedReason}\\]`));
-
-    expect(spawn).not.toHaveBeenCalled();
-    expect(vi.mocked(createWorktree)).not.toHaveBeenCalled();
   });
 });

@@ -86,24 +86,6 @@ const FIXTURE_DIR = join(new URL('.', import.meta.url).pathname, 'fixtures/antig
 const originalFetch = globalThis.fetch;
 
 /**
- * Builds a valid launch grant bound to `antigravity-cli`.
- *
- * @returns The base64url-encoded grant envelope.
- */
-function validGrant(): string {
-  return Buffer.from(
-    JSON.stringify({
-      v: 1,
-      agent: AGENT,
-      issuedAtMs: Date.now() - 1_000,
-      expiresAtMs: Date.now() + 60_000,
-      probeFingerprint: 'probe-fingerprint-1'
-    }),
-    'utf-8'
-  ).toString('base64url');
-}
-
-/**
  * Reads one committed capture with the real filesystem's promises API.
  *
  * `node:fs/promises` is mocked for the handler under test, so the fixture read
@@ -123,7 +105,6 @@ beforeEach(async () => {
   process.env['EXTENSION_PATH'] = '/test/extension';
   process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
   process.env['API_TEST_MODE'] = '1';
-  process.env['CARDS_AGENT_LAUNCH_GRANT'] = validGrant();
   delete process.env['CARDS_HOME'];
   delete process.env['EXIT_WHEN_DONE'];
 
@@ -209,7 +190,6 @@ beforeEach(async () => {
 afterEach(() => {
   globalThis.fetch = originalFetch;
   delete process.env['API_TEST_MODE'];
-  delete process.env['CARDS_AGENT_LAUNCH_GRANT'];
   delete process.env['CARDS_AGENT_MODEL'];
   delete process.env['CARDS_AGENT_EFFORT'];
 });

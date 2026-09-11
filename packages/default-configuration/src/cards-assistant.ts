@@ -14,11 +14,10 @@
  *   spawns the `opencode` TUI with the interview instructions seeded as the
  *   opening turn via `--prompt` and the repo root as the project positional,
  *   passing the document via `OPENCODE_CONFIG`.
- * - Antigravity: validates the agent-bound launch grant, then spawns `agy`
- *   interactively (`-i`) with the assistant instructions as the opening
- *   prompt. No plugin is globally enabled for this launch and no card/session
- *   state exists: no card ID, no worktree, no branch watcher, no
- *   `EXIT_WHEN_DONE` override, and no card settlement calls.
+ * - Antigravity: spawns `agy` interactively (`-i`) with the assistant
+ *   instructions as the opening prompt. No plugin is globally enabled for this
+ *   launch and no card/session state exists: no card ID, no worktree, no branch
+ *   watcher, no `EXIT_WHEN_DONE` override, and no card settlement calls.
  *
  * When `input.initialPrompt` is set, it is appended to the Claude branch's
  * `cliArgs` after a `--` end-of-options terminator, so `claude` treats it as
@@ -44,7 +43,6 @@ import {
   writeCodexProfileConfig
 } from './lib/codex-session.js';
 import { resolveCodingAgent } from './lib/coding-agent.js';
-import { CARDS_AGENT_LAUNCH_GRANT_ENV_VAR, validateAgentLaunchGrant } from './lib/launch-grant.js';
 import {
   assertOpencodeBinaryAvailable,
   OPENCODE_ASSISTANT_PLUGIN_NAMES,
@@ -74,12 +72,8 @@ export default defineCardsAssistant({}, async (input, { logger }) => {
   const agent = resolveCodingAgent(input);
 
   if (agent === 'antigravity-cli') {
-    // Consume the extension's pre-spawn health/auth probe FIRST: a named
-    // grant refusal happens before any spawn. This branch is
-    // workspace/window-owned — no card ID, no worktree, no branch watcher,
-    // no EXIT_WHEN_DONE override, and no card settlement calls.
-    validateAgentLaunchGrant(process.env[CARDS_AGENT_LAUNCH_GRANT_ENV_VAR], 'antigravity-cli', Date.now());
-
+    // This branch is workspace/window-owned — no card ID, no worktree, no
+    // branch watcher, no EXIT_WHEN_DONE override, and no card settlement calls.
     const args = ['-i', INTERVIEW_INSTRUCTIONS];
 
     logger.info('Starting cards assistant (antigravity)', {

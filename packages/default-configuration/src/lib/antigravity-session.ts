@@ -3,8 +3,8 @@
  *
  * Mirrors the launch mechanics of {@link ./codex-session.js} and
  * {@link ./opencode-session.js} for the `agy` CLI: worktree resolution,
- * pre-spawn launch-grant validation, process-group ownership, cancel/shutdown
- * drain wiring, status settle, and mode-dependent post-exit branch cleanup.
+ * process-group ownership, cancel/shutdown drain wiring, status settle, and
+ * mode-dependent post-exit branch cleanup.
  *
  * Invocation contract (notes/antigravity-host-contract.md, verified launch
  * surface): interactive launches run terminal-owned `agy -i <prompt>`;
@@ -37,7 +37,6 @@ import {
   resolveOrCreateWorktree,
   settleCardStatusForCleanup
 } from './claude-session.js';
-import { CARDS_AGENT_LAUNCH_GRANT_ENV_VAR, validateAgentLaunchGrant } from './launch-grant.js';
 import { spawnAgentCli } from './spawn-cli.js';
 
 /**
@@ -351,21 +350,20 @@ export function parseAntigravityFinalRecord(stdout: string): AntigravityFinalRec
 }
 
 /**
- * Spawns an `agy` CLI session with worktree lifecycle, launch-grant gating,
- * and prompt-based skill guidance.
+ * Spawns an `agy` CLI session with worktree lifecycle and prompt-based skill
+ * guidance.
  *
- * Stage order mirrors {@link ./codex-session.js}: launch-grant validation →
- * API client → base branch → worktree → CLI spawn with card env vars →
- * cancel/shutdown drain wiring → exit → status settle → mode-dependent
- * branch cleanup. Background launches additionally parse the child-owned
- * stream-json stdout and fail the action on nonzero exit, signal
- * termination, stream parse errors, or a missing/unsuccessful final record.
+ * Stage order mirrors {@link ./codex-session.js}: API client → base branch →
+ * worktree → CLI spawn with card env vars → cancel/shutdown drain wiring →
+ * exit → status settle → mode-dependent branch cleanup. Background launches
+ * additionally parse the child-owned stream-json stdout and fail the action on
+ * nonzero exit, signal termination, stream parse errors, or a
+ * missing/unsuccessful final record.
  *
  * @param input - Parsed action input from the environment.
  * @param context - Action context providing logger and lifecycle hooks.
  * @param options - Session-specific parameters.
  * @returns Resolves after the child exits and post-exit settle/cleanup ran.
- * @throws {LaunchGrantRefusalError} When `CARDS_AGENT_LAUNCH_GRANT` is absent, malformed, wrong-versioned, agent-mismatched, or expired — before any client, worktree, or session state is created.
  * @throws {AntigravitySessionFailureError} When a background launch ends without a successful structured outcome (spawn failure, nonzero exit, signal termination, missing final record, unsuccessful final record), when an interactive launch fails to spawn, or when a background launch cannot carry the authorized project's workspace trust into the checkout.
  * @throws {AntigravityTrustError} When the native Antigravity profile exists but its workspace trust cannot be read or safely updated.
  * @throws {AntigravityStreamError} When the background stdout stream carries a non-JSON, non-blank line.
@@ -378,12 +376,6 @@ export async function spawnAntigravitySession(
 ): Promise<void> {
   const { prompt, suppressExitWhenDone } = options;
   const isInteractive = input.executionMode === 'interactive';
-
-  const encodedLaunchGrant = process.env[CARDS_AGENT_LAUNCH_GRANT_ENV_VAR];
-
-  // Consume the extension's health/auth probe FIRST: a named grant refusal
-  // refusal must happen before any client, worktree, or session state exists.
-  validateAgentLaunchGrant(encodedLaunchGrant, 'antigravity-cli', Date.now());
 
   context.logger.info(`${input.actionName} action started`, {
     cardId: input.cardId,
@@ -412,9 +404,8 @@ export async function spawnAntigravitySession(
   context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
   // Worktree outfit/registration is part of launch preparation. Await it
-  // before revalidating the short-lived grant and before exposing the path to
-  // an agent process; a rejected settle removes the worktree and must prevent
-  // spawn entirely.
+  // before exposing the path to an agent process; a rejected settle removes
+  // the worktree and must prevent spawn entirely.
   if (settle) await settle;
 
   // Carry the already authorized project's native folder trust into the exact
@@ -458,12 +449,6 @@ export async function spawnAntigravitySession(
     model: options.model ?? process.env[CARDS_AGENT_MODEL_ENV_VAR],
     effort: options.effort ?? process.env[CARDS_AGENT_EFFORT_ENV_VAR]
   });
-
-  // Worktree creation and settlement preparation can outlive the short grant
-  // TTL. Revalidate the same signed grant after all awaited preparation and in
-  // the synchronous step directly before spawn; expiry can never be silently
-  // converted into a launched session.
-  validateAgentLaunchGrant(encodedLaunchGrant, 'antigravity-cli', Date.now());
 
   const child: ChildProcess = spawnAgentCli('agy', args, {
     cwd,

@@ -453,42 +453,7 @@ describe('cards-assistant handler', () => {
   });
 
   describe('antigravity branch', () => {
-    /**
-     * Encodes a grant payload the way the extension's single writer helper
-     * does: base64url-encoded JSON.
-     *
-     * @param grant - Grant payload to encode.
-     * @returns The base64url-encoded envelope.
-     */
-    function encodeGrant(grant: Record<string, unknown>): string {
-      return Buffer.from(JSON.stringify(grant), 'utf-8').toString('base64url');
-    }
-
-    /**
-     * Sets a valid launch grant bound to `antigravity-cli` with a future expiry.
-     *
-     * @param overrides - Field overrides merged over the valid payload.
-     * @returns The base64url-encoded grant envelope that was installed.
-     */
-    function installValidGrant(overrides: Record<string, unknown> = {}): string {
-      const encoded = encodeGrant({
-        v: 1,
-        agent: 'antigravity-cli',
-        issuedAtMs: Date.now() - 1_000,
-        expiresAtMs: Date.now() + 60_000,
-        probeFingerprint: 'probe-fingerprint-1',
-        ...overrides
-      });
-      process.env['CARDS_AGENT_LAUNCH_GRANT'] = encoded;
-      return encoded;
-    }
-
-    afterEach(() => {
-      delete process.env['CARDS_AGENT_LAUNCH_GRANT'];
-    });
-
     it('spawns interactive agy -i with the assistant instructions in the workspace cwd', async () => {
-      installValidGrant();
       const { spawn } = await import('node:child_process');
       const child = createMockChild();
       vi.mocked(spawn).mockReturnValue(child);
@@ -526,7 +491,6 @@ describe('cards-assistant handler', () => {
     });
 
     it('makes no card settlement calls — no card session, watcher, or status settle', async () => {
-      installValidGrant();
       const { spawn } = await import('node:child_process');
       const { spawnAntigravitySession } = await import('../src/lib/antigravity-session.js');
       const child = createMockChild();
@@ -545,42 +509,7 @@ describe('cards-assistant handler', () => {
       await promise;
     });
 
-    it.each([
-      ['absent', undefined],
-      ['malformed', '!!!not-base64url!!!'],
-      [
-        'wrong-version',
-        encodeGrant({ v: 2, agent: 'antigravity-cli', issuedAtMs: 1, expiresAtMs: 2, probeFingerprint: 'p' })
-      ],
-      [
-        'agent-mismatch',
-        encodeGrant({
-          v: 1,
-          agent: 'codex-cli',
-          issuedAtMs: 1,
-          expiresAtMs: Date.now() + 60_000,
-          probeFingerprint: 'p'
-        })
-      ],
-      ['expired', encodeGrant({ v: 1, agent: 'antigravity-cli', issuedAtMs: 1, expiresAtMs: 1, probeFingerprint: 'p' })]
-    ])('refuses launch on a %s grant without spawning', async (expectedReason, encoded) => {
-      const { spawn } = await import('node:child_process');
-      const { spawnAntigravitySession } = await import('../src/lib/antigravity-session.js');
-      if (encoded !== undefined) {
-        process.env['CARDS_AGENT_LAUNCH_GRANT'] = encoded;
-      }
-
-      const handler = (await import('../src/cards-assistant.js')).default;
-      await expect(handler(baseInput({ codingAgent: 'antigravity-cli' }), createMockContext())).rejects.toThrow(
-        new RegExp(`\\[${expectedReason}\\]`)
-      );
-
-      expect(spawn).not.toHaveBeenCalled();
-      expect(vi.mocked(spawnAntigravitySession)).not.toHaveBeenCalled();
-    });
-
     it('fails closed on a spawn error without hanging', async () => {
-      installValidGrant();
       const { spawn } = await import('node:child_process');
       const child = createMockChild();
       vi.mocked(spawn).mockReturnValue(child);
