@@ -138,6 +138,8 @@ describe('card binary', () => {
   let variableGroupWorkspacePaths: Array<string | null>;
   /** Controls whether variable-group discovery succeeds. */
   let variableGroupRequestFails: boolean;
+  /** Controls whether GET /environments rejects the invoking checkout as unregistered. */
+  let environmentsRequestFails: boolean;
   /** Saved env around each test so inherited Cards-home overrides are restored. */
   let savedCardsHome: string | undefined;
   let savedXdgDataHome: string | undefined;
@@ -157,6 +159,7 @@ describe('card binary', () => {
     watcherDeleteResponse = { stopped: [], timedOut: [] };
     variableGroupWorkspacePaths = [];
     variableGroupRequestFails = false;
+    environmentsRequestFails = false;
     cardCounter = 0;
 
     // Create temp directory for homedir mock
@@ -196,6 +199,15 @@ describe('card binary', () => {
 
       // GET /environments
       if (method === 'GET' && url.pathname === '/environments') {
+        if (environmentsRequestFails) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(
+            JSON.stringify({
+              error: `Workspace not registered: ${url.searchParams.get('workspacePath')} (registered: /workspace)`
+            })
+          );
+          return;
+        }
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(environments));
         return;
@@ -568,6 +580,31 @@ describe('card binary', () => {
         const { getCard: getCardFn } = await import('../../src/bin/cards.js');
         await getCardFn('card-2', '$.repositoryPath');
         expect(logSpy).toHaveBeenCalledWith('/repos/card-2');
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it('prints the card when environment discovery rejects the invoking checkout', async () => {
+      const card = {
+        id: 'card-unregistered-worktree',
+        title: 'Linked Checkout Card',
+        status: 'active',
+        environment: 'default'
+      };
+      cards.set('card-unregistered-worktree', card);
+      environmentsRequestFails = true;
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const { getCard: getCardFn } = await import('../../src/bin/cards.js');
+        await getCardFn('card-unregistered-worktree');
+
+        expect(logSpy).toHaveBeenCalledTimes(1);
+        const printed = JSON.parse(logSpy.mock.calls[0]![0] as string) as Record<string, unknown>;
+        expect(printed['id']).toBe('card-unregistered-worktree');
+        expect(printed['title']).toBe('Linked Checkout Card');
+        expect(printed['environment']).toBe('default');
       } finally {
         logSpy.mockRestore();
       }
