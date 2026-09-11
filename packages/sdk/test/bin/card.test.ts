@@ -500,7 +500,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         const { getCard: getCardFn } = await import('../../src/bin/cards.js');
-        await getCardFn('card-actions');
+        await getCardFn('card-actions', undefined, true);
         expect(logSpy).toHaveBeenCalledWith(
           JSON.stringify(
             {
@@ -531,7 +531,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         const { getCard: getCardFn } = await import('../../src/bin/cards.js');
-        await getCardFn('card-missing-env');
+        await getCardFn('card-missing-env', undefined, true);
         expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ ...card, actions: [] }, null, 2));
       } finally {
         logSpy.mockRestore();
@@ -550,7 +550,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         const { getCard: getCardFn } = await import('../../src/bin/cards.js');
-        await getCardFn('card-action-path', '$.actions');
+        await getCardFn('card-action-path', '$.actions', true);
         expect(logSpy).toHaveBeenCalledWith(JSON.stringify([{ id: 'review', name: 'Review' }], null, 2));
       } finally {
         logSpy.mockRestore();
@@ -565,7 +565,7 @@ describe('card binary', () => {
       try {
         const { getCard: getCardFn } = await import('../../src/bin/cards.js');
         await getCardFn('card-1');
-        expect(logSpy).toHaveBeenCalledWith(JSON.stringify({ ...card, actions: [] }, null, 2));
+        expect(logSpy).toHaveBeenCalledWith(JSON.stringify(card, null, 2));
       } finally {
         logSpy.mockRestore();
       }
@@ -605,6 +605,26 @@ describe('card binary', () => {
         expect(printed['id']).toBe('card-unregistered-worktree');
         expect(printed['title']).toBe('Linked Checkout Card');
         expect(printed['environment']).toBe('default');
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it('surfaces the unregistered-workspace error when action summaries are requested', async () => {
+      cards.set('card-actions-unavailable', {
+        id: 'card-actions-unavailable',
+        title: 'Opt-in Card',
+        environment: 'default'
+      });
+      environmentsRequestFails = true;
+
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        const { getCard: getCardFn } = await import('../../src/bin/cards.js');
+        await expect(getCardFn('card-actions-unavailable', undefined, true)).rejects.toThrow(
+          /Workspace not registered/
+        );
+        expect(logSpy).not.toHaveBeenCalled();
       } finally {
         logSpy.mockRestore();
       }

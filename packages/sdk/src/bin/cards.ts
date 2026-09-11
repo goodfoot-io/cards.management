@@ -100,6 +100,10 @@ Options:
                           printed as JSON. Supported on get, create, list,
                           search, variable-group list, and action subcommands.
                           Example: --jsonpath '$.repositoryPath'
+  --include-actions       On a card fetch, also merge in the card environment's
+                          action summaries as \`actions\`. Requires the invoking
+                          checkout to be a registered editor workspace; without
+                          it the card is read without action discovery.
 
 Commands:
   <card-id>                      Fetch a card by its identifier
@@ -360,12 +364,25 @@ export function formatOutput(value: unknown, jsonPath?: string): string {
 /**
  * Fetches a card by ID and prints its metadata as JSON to stdout.
  *
+ * The card read is self-contained: it never consults the environment settings
+ * that back action discovery, so it succeeds wherever the core card route does,
+ * including linked worktrees that are not registered editor workspaces.
+ *
  * @param cardId - The card identifier to look up.
  * @param jsonPath - Optional JSONPath expression to filter the output.
+ * @param includeActions - When true, additionally resolves the card
+ *   environment's action summaries and merges them in as `actions`. Opt-in
+ *   because the environments route requires a registered editor settings
+ *   loader; requesting it explicitly surfaces that requirement as an error
+ *   rather than silently dropping the summaries from an otherwise fine read.
  */
-export async function getCard(cardId: string, jsonPath?: string): Promise<void> {
+export async function getCard(cardId: string, jsonPath?: string, includeActions?: boolean): Promise<void> {
   const client = await connectClient();
   const card = await client.getCard(cardId);
+  if (!includeActions) {
+    console.log(formatOutput(card, jsonPath));
+    return;
+  }
   const environments = await client.getEnvironments();
   const actions =
     environments
@@ -1652,8 +1669,8 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
       } else if (verb === 'shutdown') {
         run = runShutdownVerb(process.argv.slice(4));
       } else if (verb?.startsWith('--')) {
-        const getFlags = parseFlags(process.argv.slice(3));
-        run = getCard(command, getFlags['jsonpath']?.[0]);
+        const getFlags = parseFlags(process.argv.slice(3), new Set(['include-actions']));
+        run = getCard(command, getFlags['jsonpath']?.[0], getFlags['include-actions'] !== undefined);
       } else if (verb) {
         console.error(`cards: unknown verb "${verb}"`);
         process.exit(1);
