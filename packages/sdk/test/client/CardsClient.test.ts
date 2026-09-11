@@ -3,7 +3,7 @@ import { TestHttpClient } from '@cards.management/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CardsClient } from '../../src/client/cardsClient.js';
 import { ApiError } from '../../src/client/types/errors.js';
-import type { EnvironmentsResponse, StreamMeta } from '../../src/protocol/index.js';
+import type { EnvironmentsResponse, StreamMeta, VariableGroupsResponse } from '../../src/protocol/index.js';
 
 /**
  * Exercises cards client behavior in the client area through focused scenarios.
@@ -49,6 +49,35 @@ describe('CardsClient', () => {
     it('should return configured base URL', () => {
       const client = new CardsClient(options);
       expect(client.getBaseUrl()).toBe('http://localhost:3000');
+    });
+  });
+
+  describe('Variable Group Operations', () => {
+    it.skip('GETs safe variable-group summaries for the encoded configured workspace', async () => {
+      const httpClient = new TestHttpClient();
+      const expected: VariableGroupsResponse = [
+        {
+          id: 'shared-tools',
+          name: 'Shared tools',
+          description: 'Common tool credentials',
+          variableCount: 2,
+          secretCount: 1
+        }
+      ];
+      const workspacePath = '/workspace/project with spaces';
+      httpClient.responses.set(
+        `http://localhost:3000/variable-groups?workspacePath=${encodeURIComponent(workspacePath)}`,
+        expected
+      );
+      const client = new CardsClient({ ...options, workspacePath }, httpClient);
+
+      await expect(client.listVariableGroups()).resolves.toEqual(expected);
+      expect(httpClient.requests).toEqual([
+        {
+          method: 'GET',
+          url: `http://localhost:3000/variable-groups?workspacePath=${encodeURIComponent(workspacePath)}`
+        }
+      ]);
     });
   });
 

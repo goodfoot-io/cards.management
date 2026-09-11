@@ -821,6 +821,16 @@ export async function listCards(args: string[]): Promise<void> {
 }
 
 /**
+ * Lists safe variable-group summaries for a workspace.
+ *
+ * @param args - CLI arguments after the `variable-group list` subcommand.
+ */
+export async function listVariableGroups(args: string[]): Promise<void> {
+  void args;
+  throw new Error('Not Implemented');
+}
+
+/**
  * Searches cards using a unified query syntax supporting free text, #tag filters,
  * and @relation filters. Mirrors the web UI's useServerSearch pattern:
  *

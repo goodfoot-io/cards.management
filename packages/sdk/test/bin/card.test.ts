@@ -71,6 +71,7 @@ import {
   createCard,
   executeAction,
   listCards,
+  listVariableGroups,
   parseCardCreateInput,
   searchCards
 } from '../../src/bin/cards.js';
@@ -132,6 +133,10 @@ describe('card binary', () => {
   let activeWatchers: Map<string, { watcherId: string; cardId: string; metadata: Record<string, unknown> }>;
   /** Controls the DELETE response body (stopped/timedOut) for watcher teardown tests. */
   let watcherDeleteResponse: { stopped: string[]; timedOut: string[] };
+  /** Workspace paths received by GET /variable-groups. */
+  let variableGroupWorkspacePaths: Array<string | null>;
+  /** Controls whether variable-group discovery succeeds. */
+  let variableGroupRequestFails: boolean;
   /** Saved env around each test so inherited Cards-home overrides are restored. */
   let savedCardsHome: string | undefined;
   let savedXdgDataHome: string | undefined;
@@ -149,6 +154,8 @@ describe('card binary', () => {
     watcherRegistryAvailable = true;
     activeWatchers = new Map();
     watcherDeleteResponse = { stopped: [], timedOut: [] };
+    variableGroupWorkspacePaths = [];
+    variableGroupRequestFails = false;
     cardCounter = 0;
 
     // Create temp directory for homedir mock
@@ -172,6 +179,19 @@ describe('card binary', () => {
     server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
       const url = new URL(req.url ?? '/', `http://localhost`);
       const method = req.method ?? 'GET';
+
+      // GET /variable-groups
+      if (method === 'GET' && url.pathname === '/variable-groups') {
+        variableGroupWorkspacePaths.push(url.searchParams.get('workspacePath'));
+        if (variableGroupRequestFails) {
+          res.writeHead(503, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Variable group discovery unavailable' }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify([{ id: 'shared-tools', name: 'Shared tools', variableCount: 2, secretCount: 1 }]));
+        return;
+      }
 
       // GET /environments
       if (method === 'GET' && url.pathname === '/environments') {
@@ -753,6 +773,38 @@ describe('card binary', () => {
     it('throws on invalid offset', async () => {
       await expect(listCards(['--workspace-path', '/tmp', '--offset', '-1'])).rejects.toThrow(
         '--offset must be a non-negative integer'
+      );
+    });
+  });
+
+  describe('listVariableGroups', () => {
+    it.skip('prints JSON and passes an explicit workspace override to discovery', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await listVariableGroups(['--workspace-path', '/tmp/workspace with spaces']);
+        expect(variableGroupWorkspacePaths).toEqual(['/tmp/workspace with spaces']);
+        expect(JSON.parse(logSpy.mock.calls[0]![0] as string)).toEqual([
+          { id: 'shared-tools', name: 'Shared tools', variableCount: 2, secretCount: 1 }
+        ]);
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it.skip('detects the current git workspace when no override is supplied', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        await listVariableGroups([]);
+        expect(variableGroupWorkspacePaths).toEqual([realpathSync(resolve(process.cwd()))]);
+      } finally {
+        logSpy.mockRestore();
+      }
+    });
+
+    it.skip('surfaces discovery failures', async () => {
+      variableGroupRequestFails = true;
+      await expect(listVariableGroups(['--workspace-path', '/tmp/workspace'])).rejects.toThrow(
+        'Variable group discovery unavailable'
       );
     });
   });
