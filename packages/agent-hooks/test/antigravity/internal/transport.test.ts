@@ -96,10 +96,13 @@ describe('dispatchAntigravityHook', () => {
         reason: '[watcher-setup] spawn returned false'
       });
       // Both readers take the sorted-first `.failure` of the session
-      // directory, so the retry is read exactly when the conversation-scoped
-      // marker is absent and can never shadow one that exists.
+      // directory, so a retry is read exactly when the conversation-scoped
+      // marker is absent and can never shadow one that exists. That ordering
+      // is the readers' own property, pinned in their suites (the
+      // `readAntigravityHookFailure` selection controls in
+      // `default-configuration`), not here: this file witnesses only that the
+      // retry landed under the placeholder name.
       expect(retryPath.endsWith(`${UNKNOWN_CONVERSATION}.failure`)).toBe(true);
-      expect(`${CONVERSATION_ID}.failure`.localeCompare(`${UNKNOWN_CONVERSATION}.failure`)).toBeLessThan(0);
     } finally {
       removeTempDir(root);
     }
