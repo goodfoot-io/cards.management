@@ -157,7 +157,8 @@ export default worktreeCreateHook({}, async (input, { logger }) => {
       cardId,
       compiledScriptPaths,
       parentBranch,
-      sessionId: input.session_id
+      sessionId: input.session_id,
+      registrationIntent: 'create'
     });
   } else {
     // Derive parentBranch before creating the worktree — it is the only point

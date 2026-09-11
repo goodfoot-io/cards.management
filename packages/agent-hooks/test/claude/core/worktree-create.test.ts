@@ -205,7 +205,12 @@ describe('WorktreeCreate hook', () => {
     expect(mockCreateWorktreeForCard).toHaveBeenCalledWith(
       fakeClient,
       'feature/test-branch',
-      expect.objectContaining({ cardId: 'main-42', cwd: '/test/workspace', parentBranch: 'main' })
+      expect.objectContaining({
+        cardId: 'main-42',
+        cwd: '/test/workspace',
+        parentBranch: 'main',
+        registrationIntent: 'create'
+      })
     );
   });
 

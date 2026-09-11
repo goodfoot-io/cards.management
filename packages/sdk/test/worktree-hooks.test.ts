@@ -64,7 +64,7 @@ function resolveBash(): string {
  */
 function makeFakeClient(): CardsClient {
   return {
-    addBranch: async () => undefined,
+    addBranch: async () => ({ outcome: 'created', revision: 'test-revision' }),
     removeBranch: async () => undefined
   } as unknown as CardsClient;
 }

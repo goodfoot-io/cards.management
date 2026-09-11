@@ -88,7 +88,7 @@ import { findAgentPid } from '../src/process-tree.js';
  */
 function makeClient(): CardsClient {
   return {
-    addBranch: async () => undefined,
+    addBranch: async () => ({ outcome: 'upserted', revision: 'test-revision' }),
     removeBranch: async () => undefined
   } as unknown as CardsClient;
 }

@@ -4,11 +4,10 @@
  * Accepts a branch name, tag name, or commit SHA. Detects the ref type
  * automatically and creates either a branch-based or detached worktree.
  *
- * With `--card-id <id>`, the worktree is registered with the Cards API via
- * `createWorktreeForCard` (fail-closed: exit 2 if the API cannot be
- * discovered). The branch's `parentBranch` defaults to the source repo's
- * current branch and can be overridden with `--parent-branch <name>`. Without
- * `--card-id` the CLI stays fully offline — no client, no parent branch.
+ * Card identity is selected explicitly with `--card-id <id>` or inherited
+ * from the invoking checkout's `.cards/CARD_ID` marker. Explicit selection
+ * wins and ambient environment variables are never selectors. Selected-card
+ * creation is fail-closed; only a truly unbound checkout stays offline.
  *
  * Outputs JSON: `{"branch":"...","worktree":"...","baseSha":"...","copiedFromInclude":N,"reroutedSymlinks":N}`
  *
@@ -21,7 +20,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { compiledHookScriptPaths, resolveExtensionPath } from '@cards.management/sdk';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
-import { createWorktree } from '@cards.management/sdk/worktree';
+import { createWorktree, resolveCheckoutCardBinding } from '@cards.management/sdk/worktree';
 import { createWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 import { WorktreeIncludeError } from '../worktreeInclude.js';
 
@@ -77,26 +76,19 @@ if (cardId !== undefined && cardId.length === 0) {
   process.exit(2);
 }
 
-// --parent-branch only has meaning for a card-bound worktree (it is recorded in
-// the branch record). Supplying it without --card-id is a usage error rather
-// than a silent no-op.
-if (parentBranchArg !== undefined && cardId === undefined) {
-  process.stderr.write('Error: --parent-branch requires --card-id\n');
-  process.exit(2);
-}
-
 /**
  * Resolves the parent branch for a card-bound worktree: the explicit
  * `--parent-branch` value when given, otherwise the source repo's current
  * branch (the same HEAD createWorktree resolves the new branch from).
  *
+ * @param sourceRoot - Canonical root of the invoking checkout.
  * @returns The parent branch name.
  */
-async function resolveParentBranch(): Promise<string> {
+async function resolveParentBranch(sourceRoot: string): Promise<string> {
   if (parentBranchArg !== undefined && parentBranchArg.length > 0) {
     return parentBranchArg;
   }
-  const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD']);
+  const { stdout } = await execFileAsync('git', ['-C', sourceRoot, 'rev-parse', '--abbrev-ref', 'HEAD']);
   const branch = stdout.trim();
   // In a detached-HEAD source repo `--abbrev-ref HEAD` returns the literal
   // "HEAD", which is not a valid parent branch. Fail closed with guidance
@@ -111,7 +103,14 @@ async function resolveParentBranch(): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  if (cardId !== undefined) {
+  const source = await resolveCheckoutCardBinding(process.cwd());
+  const effectiveCardId = cardId ?? source.cardId;
+
+  if (parentBranchArg !== undefined && effectiveCardId === undefined) {
+    throw new Error('Error: --parent-branch requires a card-bound source or --card-id');
+  }
+
+  if (effectiveCardId !== undefined) {
     const compiledScriptPaths = compiledHookScriptPaths(await resolveExtensionPath());
 
     // Fail-closed: a card-bound worktree must never exist on disk without a
@@ -124,11 +123,13 @@ async function main(): Promise<void> {
       process.exit(2);
     }
 
-    const parentBranch = await resolveParentBranch();
+    const parentBranch = await resolveParentBranch(source.sourceRoot);
     const { settle } = await createWorktreeForCard(client, ref!, {
-      cardId,
+      cwd: source.sourceRoot,
+      cardId: effectiveCardId,
       compiledScriptPaths,
-      parentBranch
+      parentBranch,
+      registrationIntent: 'create'
     });
     const result = await settle;
     process.stdout.write(`${JSON.stringify(result)}\n`);
@@ -136,7 +137,7 @@ async function main(): Promise<void> {
   }
 
   // Card-less: fully offline, no client, no parent branch.
-  const { settle } = await createWorktree(ref!);
+  const { settle } = await createWorktree(ref!, { cwd: source.sourceRoot });
   const result = await settle;
   process.stdout.write(`${JSON.stringify(result)}\n`);
 }

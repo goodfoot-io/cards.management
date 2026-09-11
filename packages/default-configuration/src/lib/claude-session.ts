@@ -331,7 +331,8 @@ export async function resolveOrCreateWorktree(
       cardId: input.cardId,
       compiledScriptPaths: compiledHookScriptPaths(input.extensionPath),
       parentBranch: branch.parentBranch,
-      sessionId
+      sessionId,
+      registrationIntent: 'upsert'
     });
 
     return { worktreePath, branchName: branch.name, parentBranch: branch.parentBranch, settle };
@@ -370,7 +371,8 @@ export async function resolveOrCreateWorktree(
     cardId: input.cardId,
     compiledScriptPaths: compiledHookScriptPaths(input.extensionPath),
     parentBranch: baseBranch,
-    sessionId
+    sessionId,
+    registrationIntent: 'create'
   });
 
   logger.info('Created new worktree', { branch: branchName, worktree: worktreePath });

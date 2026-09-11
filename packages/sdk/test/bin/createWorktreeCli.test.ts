@@ -42,7 +42,7 @@ async function startStubApi(discoveryPath: string): Promise<{
       req.on('end', () => {
         addBranchCalls.push({ cardId: decodeURIComponent(match[1]!), body: raw ? JSON.parse(raw) : null });
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end('{}');
+        res.end(JSON.stringify({ outcome: 'created', revision: 'test-revision' }));
       });
       return;
     }
@@ -152,6 +152,31 @@ async function initGitRepo(dir: string): Promise<void> {
   await fs.writeFile(path.join(dir, 'README.md'), '# test\n');
   exec('git', ['add', '.'], { cwd: dir });
   exec('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+}
+
+/**
+ * Creates the extension/home/API fixtures required by a card-bound CLI run.
+ *
+ * @param tmpBase - Isolated test directory containing the fixture resources.
+ * @returns Paths and the running Cards API fixture.
+ */
+async function prepareCardBoundRun(tmpBase: string): Promise<{
+  extDir: string;
+  homeDir: string;
+  discoveryPath: string;
+  stub: Awaited<ReturnType<typeof startStubApi>>;
+}> {
+  const extDir = path.join(tmpBase, 'ext');
+  const gitHooksDir = path.join(extDir, 'dist', 'git-hooks');
+  await fs.mkdir(gitHooksDir, { recursive: true });
+  for (const name of ['pre-commit', 'post-commit', 'post-rewrite']) {
+    await fs.writeFile(path.join(gitHooksDir, `${name}.mjs`), `// ${name} stub\n`);
+  }
+  const homeDir = path.join(tmpBase, 'home');
+  await fs.mkdir(homeDir, { recursive: true });
+  const discoveryPath = path.join(tmpBase, 'cards-api.json');
+  const stub = await startStubApi(discoveryPath);
+  return { extDir, homeDir, discoveryPath, stub };
 }
 
 /**
@@ -314,6 +339,118 @@ describe('create-worktree CLI', () => {
   );
 
   it(
+    'inherits the checkout card from a package subdirectory and ignores ambient CARD_ID',
+    async () => {
+      tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
+      const repoDir = path.join(tmpBase, 'repo');
+      const packageDir = path.join(repoDir, 'packages', 'example');
+      await fs.mkdir(packageDir, { recursive: true });
+      await initGitRepo(repoDir);
+      await fs.mkdir(path.join(repoDir, '.cards'));
+      await fs.writeFile(path.join(repoDir, '.cards', 'CARD_ID'), 'main-inherited\n');
+      const parentBranch = execFileSync('git', ['-C', repoDir, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+        encoding: 'utf8'
+      }).trim();
+
+      const fixture = await prepareCardBoundRun(tmpBase);
+      stubStop = fixture.stub.stop;
+      const result = await runCreateWorktreeAsync(['worker-branch'], packageDir, {
+        EXTENSION_PATH: fixture.extDir,
+        HOME: fixture.homeDir,
+        CARDS_DISCOVERY_PATH: fixture.discoveryPath,
+        CARD_ID: 'main-ambient'
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(fixture.stub.addBranchCalls).toHaveLength(1);
+      expect(fixture.stub.addBranchCalls[0]).toMatchObject({
+        cardId: 'main-inherited',
+        body: { name: 'worker-branch', parentBranch, intent: 'create' }
+      });
+      const output = JSON.parse(result.stdout.trim()) as { worktree: string };
+      await expect(fs.readFile(path.join(output.worktree, '.cards', 'CARD_ID'), 'utf8')).resolves.toBe(
+        'main-inherited\n'
+      );
+    },
+    CLI_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'uses an explicit card instead of the inherited marker',
+    async () => {
+      tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
+      const repoDir = path.join(tmpBase, 'repo');
+      await fs.mkdir(repoDir);
+      await initGitRepo(repoDir);
+      await fs.mkdir(path.join(repoDir, '.cards'));
+      await fs.writeFile(path.join(repoDir, '.cards', 'CARD_ID'), 'main-parent\n');
+      const fixture = await prepareCardBoundRun(tmpBase);
+      stubStop = fixture.stub.stop;
+
+      const result = await runCreateWorktreeAsync(['--card-id', 'main-explicit', 'worker-explicit'], repoDir, {
+        EXTENSION_PATH: fixture.extDir,
+        HOME: fixture.homeDir,
+        CARDS_DISCOVERY_PATH: fixture.discoveryPath
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(fixture.stub.addBranchCalls[0]!.cardId).toBe('main-explicit');
+    },
+    CLI_TEST_TIMEOUT_MS
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'canonicalizes a symlinked invocation before inheriting checkout identity',
+    async () => {
+      tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
+      const repoDir = path.join(tmpBase, 'repo');
+      await fs.mkdir(repoDir);
+      await initGitRepo(repoDir);
+      await fs.mkdir(path.join(repoDir, '.cards'));
+      await fs.writeFile(path.join(repoDir, '.cards', 'CARD_ID'), 'main-symlinked\n');
+      const alias = path.join(tmpBase, 'checkout-alias');
+      await fs.symlink(repoDir, alias);
+      const fixture = await prepareCardBoundRun(tmpBase);
+      stubStop = fixture.stub.stop;
+
+      const result = await runCreateWorktreeAsync(['symlink-worker'], alias, {
+        EXTENSION_PATH: fixture.extDir,
+        HOME: fixture.homeDir,
+        CARDS_DISCOVERY_PATH: fixture.discoveryPath
+      });
+
+      expect(result.exitCode).toBe(0);
+      expect(fixture.stub.addBranchCalls[0]!.cardId).toBe('main-symlinked');
+    },
+    CLI_TEST_TIMEOUT_MS
+  );
+
+  it(
+    'does not inherit an outer checkout marker across a nested repository boundary',
+    async () => {
+      tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
+      const outer = path.join(tmpBase, 'outer');
+      await fs.mkdir(outer);
+      await initGitRepo(outer);
+      await fs.mkdir(path.join(outer, '.cards'));
+      await fs.writeFile(path.join(outer, '.cards', 'CARD_ID'), 'main-outer\n');
+      const nested = path.join(outer, 'nested');
+      await fs.mkdir(nested);
+      await initGitRepo(nested);
+
+      const result = runCreateWorktree(['nested-worker'], nested, { CARD_ID: 'main-ambient' });
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      const output = JSON.parse(result.stdout.trim()) as { worktree: string };
+      await expect(fs.access(path.join(output.worktree, '.cards', 'CARD_ID'))).rejects.toMatchObject({
+        code: 'ENOENT'
+      });
+    },
+    CLI_TEST_TIMEOUT_MS
+  );
+
+  it(
     'defaults parentBranch to the source repo HEAD when --parent-branch is omitted',
     async () => {
       tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
@@ -461,11 +598,15 @@ describe('create-worktree CLI', () => {
   );
 
   it(
-    'exits 2 when --parent-branch is supplied without --card-id',
-    () => {
-      const result = runCreateWorktree(['--parent-branch', 'main', 'some-branch'], os.tmpdir());
+    'exits 2 when --parent-branch is supplied from an unbound checkout',
+    async () => {
+      tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
+      const repoDir = path.join(tmpBase, 'repo');
+      await fs.mkdir(repoDir);
+      await initGitRepo(repoDir);
+      const result = runCreateWorktree(['--parent-branch', 'main', 'some-branch'], repoDir);
       expect(result.exitCode).toBe(2);
-      expect(result.stderr).toContain('--parent-branch requires --card-id');
+      expect(result.stderr).toContain('--parent-branch requires a card-bound source or --card-id');
     },
     CLI_TEST_TIMEOUT_MS
   );

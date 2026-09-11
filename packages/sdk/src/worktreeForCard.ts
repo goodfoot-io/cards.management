@@ -150,6 +150,8 @@ export interface OutfitWorktreeForCardOptions {
    * unit of work on the card.
    */
   agentPid?: number;
+  /** Registration intent. Binding/reattachment upserts unless creation explicitly requires absence. */
+  registrationIntent?: 'create' | 'upsert';
 }
 
 /**
@@ -172,6 +174,8 @@ export interface OutfitAttributionOutcome {
   activated?: boolean;
   /** Why attribution was skipped; present only when `attribution` is `'skipped'`. */
   reason?: string;
+  /** Opaque revision returned by the branch registration write. */
+  registrationRevision: string;
 }
 
 /**
@@ -305,6 +309,7 @@ export async function outfitWorktreeForCard(
   // pre-check: the store upserts, and a pre-check would reintroduce the TOCTOU.
   // Fail-closed: a lock-acquire timeout propagates.
   const lockPath = resolveBindLockPath(worktreeDir);
+  let registrationRevision!: string;
   await perf.measure('outfit:acquireLock', () => acquireLock(lockPath, BIND_LOCK_TIMEOUT_MS));
   try {
     // Record the parent branch as durable `branch.<name>.cardsParent` git
@@ -314,9 +319,19 @@ export async function outfitWorktreeForCard(
     await perf.measure('outfit:writeCardsParentConfig', () =>
       writeCardsParentConfig(worktreeDir, branchName, parentBranch)
     );
-    await perf.measure('outfit:addBranch', () =>
-      client.addBranch(cardId, { name: branchName, worktree: worktreeDir, parentBranch }, { sessionId })
+    const registration = await perf.measure('outfit:addBranch', () =>
+      client.addBranch(
+        cardId,
+        {
+          name: branchName,
+          worktree: worktreeDir,
+          parentBranch,
+          intent: options.registrationIntent ?? 'upsert'
+        },
+        { sessionId }
+      )
     );
+    registrationRevision = registration.revision;
   } finally {
     releaseLock(lockPath);
   }
@@ -329,7 +344,7 @@ export async function outfitWorktreeForCard(
   // unchanged. Activation is NOT written here; it stays inside adhoc-cleanup so
   // an `active` card always has a live monitor + ref.
   if (!transcriptPath || transcriptPath.length === 0 || !sessionId || sessionId.length === 0) {
-    return { attribution: 'skipped', reason: 'no-transcript' };
+    return { attribution: 'skipped', reason: 'no-transcript', registrationRevision };
   }
 
   // A transcript with no resolvable runtime cannot select a SessionSyncManifest
@@ -339,7 +354,7 @@ export async function outfitWorktreeForCard(
       'outfitWorktreeForCard: bound worktree but could not resolve the session runtime — attribution not spawned',
       { cardId }
     );
-    return { attribution: 'skipped', reason: 'runtime-unresolved' };
+    return { attribution: 'skipped', reason: 'runtime-unresolved', registrationRevision };
   }
 
   const cardRepoPath = await resolveCardRepoPath(cardId, stderrLogger);
@@ -350,7 +365,7 @@ export async function outfitWorktreeForCard(
         cardId
       }
     );
-    return { attribution: 'skipped', reason: 'card-repo-path-unresolved' };
+    return { attribution: 'skipped', reason: 'card-repo-path-unresolved', registrationRevision };
   }
 
   const agentPid = options.agentPid ?? (await findAgentPid());
@@ -361,7 +376,7 @@ export async function outfitWorktreeForCard(
         cardId
       }
     );
-    return { attribution: 'skipped', reason: 'agent-pid-unresolved' };
+    return { attribution: 'skipped', reason: 'agent-pid-unresolved', registrationRevision };
   }
 
   const attributionLockPath = join(resolveGlobalCardsConfigDir(), 'adhoc-sessions', `${sessionId}.lock`);
@@ -370,9 +385,9 @@ export async function outfitWorktreeForCard(
     stderrLogger
   );
   if (spawnOutcome && spawnOutcome.activated === false) {
-    return { attribution: 'skipped', activated: false, reason: spawnOutcome.reason };
+    return { attribution: 'skipped', activated: false, reason: spawnOutcome.reason, registrationRevision };
   }
-  return { attribution: 'spawned' };
+  return { attribution: 'spawned', registrationRevision };
 }
 
 /**
@@ -400,6 +415,8 @@ export interface CreateWorktreeForCardOptions {
   parentBranch: string;
   /** Session ID forwarded to addBranch for commit attribution. */
   sessionId?: string;
+  /** Whether registration must create a new record or may repair an existing one. */
+  registrationIntent: 'create' | 'upsert';
 }
 
 /**
@@ -426,7 +443,7 @@ export async function createWorktreeForCard(
   ref: string,
   options: CreateWorktreeForCardOptions
 ): Promise<EarlyWorktreeResult> {
-  const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId } = options;
+  const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId, registrationIntent } = options;
 
   const result = await createWorktree(ref, { cwd });
 
@@ -441,12 +458,43 @@ export async function createWorktreeForCard(
   void result.settle.catch(() => undefined);
 
   try {
-    await outfitWorktreeForCard(client, result.path, {
+    const outfit = await outfitWorktreeForCard(client, result.path, {
       cardId,
       parentBranch,
       sessionId,
-      compiledScriptPaths
+      compiledScriptPaths,
+      registrationIntent
     });
+
+    // Settlement owns all asynchronous materialization. If it fails, wait for
+    // that work to become quiescent (the rejection is the boundary), then
+    // conditionally release only the registration revision created here before
+    // removing the invocation-owned Git worktree and branch.
+    const settle = result.settle.catch(async (settleError: unknown) => {
+      const cleanupFailures: string[] = [];
+      try {
+        await client.removeBranch(cardId, ref, {
+          sessionId,
+          expectedRevision: outfit.registrationRevision
+        });
+      } catch (error: unknown) {
+        cleanupFailures.push(`registration=${error instanceof Error ? error.message : String(error)}`);
+      }
+      try {
+        await removeWorktree(result.path);
+      } catch (error: unknown) {
+        cleanupFailures.push(`worktree=${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (cleanupFailures.length > 0) {
+        throw new Error(
+          `createWorktreeForCard: settlement failed and rollback was incomplete at ${result.path}: ` +
+            `settle=${settleError instanceof Error ? settleError.message : String(settleError)}; ` +
+            cleanupFailures.join('; ')
+        );
+      }
+      throw settleError;
+    });
+    return { path: result.path, settle };
   } catch (outfitError) {
     // Atomicity: the worktree dir + git branch now exist on disk but outfit
     // failed partway (e.g. addBranch rejected), so no fully-registered worktree
@@ -465,8 +513,6 @@ export async function createWorktreeForCard(
     }
     throw outfitError;
   }
-
-  return result;
 }
 
 export interface ReleaseWorktreeForCardOptions {

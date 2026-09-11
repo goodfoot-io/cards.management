@@ -815,7 +815,7 @@ async function cleanStaleWorktreeRegistration(repoRoot: string, worktreeDir: str
   }
 }
 
-interface GitRoots {
+export interface GitRoots {
   sourceRoot: string;
   repoRoot: string;
 }
@@ -831,7 +831,10 @@ interface GitRoots {
  * @returns Paths for the current checkout root and the primary repo root.
  */
 export async function findGitRoots(startDir: string): Promise<GitRoots> {
-  let currentDir = path.resolve(startDir);
+  // Resolve the invoking directory before walking. Besides making downstream
+  // paths stable, this keeps a symlinked entry into a checkout bounded to the
+  // checkout it actually names rather than to ancestors of the symlink itself.
+  let currentDir = await fs.realpath(path.resolve(startDir));
   // Walk up until the filesystem root. `path.dirname(root) === root` on every
   // platform (`/` on POSIX, `C:\` on Windows) — comparing against the literal
   // `'/'` never terminates on Windows.
@@ -862,6 +865,30 @@ export async function findGitRoots(startDir: string): Promise<GitRoots> {
       throw new Error('Not in a git repository');
     }
     currentDir = parentDir;
+  }
+}
+
+/**
+ * Resolves the invoking checkout and reads its card-binding marker.
+ *
+ * Lookup is deliberately checkout-bounded: only `<sourceRoot>/.cards/CARD_ID`
+ * is consulted. Missing and whitespace-only markers mean unbound; every other
+ * filesystem failure is propagated so callers cannot silently create an
+ * unbound child after losing access to binding state.
+ *
+ * @param startDir - Directory from which the command was invoked.
+ * @returns Canonical Git roots and the checkout's card ID, when bound.
+ */
+export async function resolveCheckoutCardBinding(startDir: string): Promise<GitRoots & { cardId: string | undefined }> {
+  const roots = await findGitRoots(startDir);
+  try {
+    const cardId = (await fs.readFile(path.join(roots.sourceRoot, '.cards', 'CARD_ID'), 'utf8')).trim();
+    return { ...roots, cardId: cardId.length > 0 ? cardId : undefined };
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return { ...roots, cardId: undefined };
+    }
+    throw error;
   }
 }
 

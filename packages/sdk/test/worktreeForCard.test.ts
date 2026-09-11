@@ -104,11 +104,13 @@ function makeClient(overrides?: {
       overrides?.addBranch ??
       (async (...args) => {
         addBranchCalls.push(args as Parameters<CardsClient['addBranch']>);
+        return { outcome: 'created', revision: 'test-revision' };
       }),
     removeBranch:
       overrides?.removeBranch ??
       (async (...args) => {
         removeBranchCalls.push(args as Parameters<CardsClient['removeBranch']>);
+        return { outcome: 'removed' };
       }),
     addBranchCalls,
     removeBranchCalls
@@ -123,7 +125,8 @@ const BASE_OPTIONS = {
   cardId: 'main-95',
   compiledScriptPaths: { 'post-commit': '/hooks/post-commit.mjs' },
   parentBranch: 'main',
-  sessionId: 'sess-abc'
+  sessionId: 'sess-abc',
+  registrationIntent: 'create'
 } as const;
 
 // ---------------------------------------------------------------------------
@@ -197,6 +200,7 @@ describe('createWorktreeForCard', () => {
     const client = makeClient({
       addBranch: async (...args) => {
         addBranchArgs.push(args as Parameters<CardsClient['addBranch']>);
+        return { outcome: 'created', revision: 'test-revision' };
       }
     });
 
@@ -205,7 +209,12 @@ describe('createWorktreeForCard', () => {
     expect(addBranchArgs).toHaveLength(1);
     const [cardId, data, opts] = addBranchArgs[0]!;
     expect(cardId).toBe('main-95');
-    expect(data).toEqual({ name: 'cards/main-95/1', worktree: EARLY_PATH, parentBranch: 'main' });
+    expect(data).toEqual({
+      name: 'cards/main-95/1',
+      worktree: EARLY_PATH,
+      parentBranch: 'main',
+      intent: 'create'
+    });
     expect(opts).toEqual({ sessionId: 'sess-abc' });
   });
 
@@ -227,6 +236,7 @@ describe('createWorktreeForCard', () => {
         // By the time addBranch is called, settle must NOT have been awaited
         expect(settleAwaited).toBe(false);
         addBranchArgs.push(args as Parameters<CardsClient['addBranch']>);
+        return { outcome: 'created', revision: 'test-revision' };
       }
     });
 
@@ -251,6 +261,22 @@ describe('createWorktreeForCard', () => {
     settleResolve();
     // Confirm settle resolves (doesn't hang or reject) once triggered.
     await result.settle;
+  });
+
+  it('conditionally unregisters its revision and removes the quiescent worktree when settlement fails', async () => {
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      settle: Promise.reject(new Error('materialization failed')) as EarlyWorktreeResult['settle']
+    });
+    const client = makeClient();
+
+    const result = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
+    await expect(result.settle).rejects.toThrow('materialization failed');
+
+    expect(client.removeBranchCalls).toEqual([
+      ['main-95', 'cards/main-95/1', { sessionId: 'sess-abc', expectedRevision: 'test-revision' }]
+    ]);
+    expect(removeWorktree).toHaveBeenCalledWith(EARLY_PATH);
   });
 
   it('never calls addBranch when createWorktree rejects', async () => {
