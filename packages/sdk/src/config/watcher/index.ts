@@ -6,28 +6,11 @@
  */
 
 export type { WatcherContext } from './context.js';
-export {
-  type DialedWatcherSocket,
-  dialWatcherSocket,
-  type WatcherHandle,
-  type WatcherHandler,
-  type WatcherRegistration
-} from './createWatcher.js';
-export { WatcherHandshakeError, WatcherRegistrationError } from './errors.js';
-export type {
-  ServerControlMessage,
-  ServerHelloAckMessage,
-  ServerToWatcherMessage,
-  WatcherEventMessage,
-  WatcherHelloMessage,
-  WatcherLogMessage,
-  WatcherStopAckMessage,
-  WatcherToServerMessage
-} from './protocol.js';
+export { WatcherRegistrationError } from './errors.js';
 export {
   createReconnectingWatcher,
   RECONNECT_BASE_DELAY_MS,
   RECONNECT_MAX_DELAY_MS,
-  type ReconnectingWatcherHandle
+  type ReconnectingWatcherHandle,
+  type WatcherRegistration
 } from './reconnectingWatcher.js';
-export { socketEndpoint } from './socketEndpoint.js';

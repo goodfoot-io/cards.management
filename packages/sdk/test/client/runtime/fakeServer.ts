@@ -144,6 +144,22 @@ export class FakeRuntimeServer {
     );
   }
 
+  /**
+   * Sends one correlated watcher stop command to the newest connection.
+   * @param messageId - Stable server command identity.
+   * @param watcherId - Watcher the command targets.
+   */
+  sendWatcherStop(messageId: string, watcherId: string): void {
+    this.connections.at(-1)?.send(
+      JSON.stringify({
+        ...this.envelope('watcher.stopCommand', { watcherId }),
+        messageId,
+        requestId: 'req-1',
+        execution: null
+      })
+    );
+  }
+
   /** Stops the server and releases the port. */
   async stop(): Promise<void> {
     this.dropConnections();
@@ -151,7 +167,7 @@ export class FakeRuntimeServer {
   }
 
   private envelope(
-    type: 'runtime.accepted' | 'runtime.resumeAck' | 'execution.cancelCommand',
+    type: 'runtime.accepted' | 'runtime.resumeAck' | 'execution.cancelCommand' | 'watcher.stopCommand',
     payload: unknown
   ): Record<string, unknown> {
     return {

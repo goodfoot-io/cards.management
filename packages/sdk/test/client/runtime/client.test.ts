@@ -317,21 +317,13 @@ describe('sending', () => {
 });
 
 describe('post-barrier own-record drain', () => {
-  it('resends an own pending result after resume and retires only after runtime.accepted', async () => {
+  it('automatically resends an own pending result after resume and retires only after runtime.accepted', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(pendingResult('pending-result'));
     server = await FakeRuntimeServer.start();
     client = createRuntimeClient(optionsFor(server, { outbox }));
     await client.connect();
 
-    const report = await drainRuntimeClientOutbox({
-      client,
-      outbox,
-      executionId: 'exec-1',
-      role: 'runtime-wrapper'
-    });
-
-    expect(report).toMatchObject({ ok: true, retired: [{ messageId: 'pending-result' }] });
     expect(outbox.stored).toHaveLength(0);
     expect(server.received.filter(({ messageId }) => messageId === 'pending-result')).toHaveLength(1);
   });

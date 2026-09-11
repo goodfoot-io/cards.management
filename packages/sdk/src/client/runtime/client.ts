@@ -199,6 +199,7 @@ class RuntimeClientImpl implements RuntimeClient {
 
     this.synchronization = synchronization;
     this.currentState = 'connected';
+    await this.redrainOwnOutbox();
     this.flushInbound(socket);
     return { status: 'connected', generation: registration.generation, resumed, synchronization };
   }
@@ -293,10 +294,7 @@ class RuntimeClientImpl implements RuntimeClient {
     envelope: RuntimeEnvelope<TType>,
     deliveryClass: string
   ): Promise<SendOutcome | null> {
-    const executionId = message.execution?.executionId;
-    if (executionId === undefined || executionId === null) {
-      return { status: 'rejected', messageId: message.messageId, reason: 'scope-mismatch' };
-    }
+    const executionId = message.execution?.executionId ?? this.executionId();
     try {
       await this.options.outbox.enqueue({
         messageId: message.messageId,
@@ -494,7 +492,10 @@ class RuntimeClientImpl implements RuntimeClient {
     outstanding: readonly string[]
   ): OutboundMessage<'runtime.register'> | OutboundMessage<'runtime.resume'> {
     const executionId = this.executionId();
-    const execution = { executionId, launchRequestId: this.options.credential.requestId };
+    const execution =
+      this.options.identity.subject.kind === 'card'
+        ? null
+        : { executionId, launchRequestId: this.options.credential.requestId };
     const base = {
       revision: 0,
       capabilities: DECLARED_CAPABILITIES,
@@ -671,6 +672,25 @@ class RuntimeClientImpl implements RuntimeClient {
   private executionId(): string {
     const subject = this.options.identity.subject;
     return subject.kind === 'execution' ? subject.executionId : subject.cardId;
+  }
+
+  /** Replays this producer's still-unaccepted durable obligations after every synchronization barrier. */
+  private async redrainOwnOutbox(): Promise<void> {
+    const role = this.options.identity.producer.role;
+    const scan = await this.options.outbox.scan({ executionId: this.executionId(), role });
+    for (const record of scan.records) {
+      const envelope = record.envelope;
+      const result = await this.send({
+        type: envelope.type,
+        payload: envelope.payload,
+        messageId: envelope.messageId,
+        requestId: envelope.requestId,
+        causationId: envelope.causationId,
+        execution: envelope.execution,
+        deadlineMs: 5_000
+      } as OutboundMessage);
+      if (result.status !== 'accepted') return;
+    }
   }
 }
 

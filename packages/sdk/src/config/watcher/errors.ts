@@ -8,7 +8,3 @@
 export class WatcherRegistrationError extends Error {
   override readonly name = 'WatcherRegistrationError';
 }
-
-export class WatcherHandshakeError extends Error {
-  override readonly name = 'WatcherHandshakeError';
-}

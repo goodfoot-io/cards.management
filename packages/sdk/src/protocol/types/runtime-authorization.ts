@@ -151,7 +151,7 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     type: 'runtime.log',
     direction: 'client-to-server',
     deliveryClass: 'disposable-telemetry',
-    allowedRoles: ['runtime-wrapper', 'agent-handler', 'agent-hook', 'cli'],
+    allowedRoles: ['runtime-wrapper', 'agent-handler', 'agent-hook', 'watcher', 'cli'],
     executionRequirement: 'admitted',
     requiresRequestId: false,
     requiresCausationId: false,

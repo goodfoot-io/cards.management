@@ -1,217 +1,237 @@
 /**
- * Reconnecting variant of the watcher control channel.
- *
- * {@link createWatcher} treats an unexpected socket close as fatal — the right
- * behavior for the old transcript watcher, whose handler is a single
- * long-lived callback tightly coupled to `run()`'s lifetime. The transcript-
- * sync engine's composition root needs different behavior: sync work must
- * keep running across an extension restart (which drops the control socket)
- * rather than dying and losing sync progress. This module re-registers with
- * capped exponential backoff (1s, 2s, 4s, ... capped at 60s) instead of
- * failing, and exposes a `ctx` that transparently forwards `emit`/log traffic
- * to whichever socket is currently connected. Heartbeats are stateless, so an
- * emit that lands while disconnected is simply dropped — nothing is buffered
- * across a reconnect.
- *
- * Built on {@link dialWatcherSocket} (the connect-and-handshake portion of
- * `createWatcher`) so both modules share the exact registration/handshake
- * logic and error types.
- *
- * @summary Control channel that survives control-socket loss via reconnect-with-backoff
+ * Authenticated watcher channel over the shared runtime client.
+ * @summary Reconnecting runtime watcher producer
  * @module
  */
-
-import type * as net from 'node:net';
+import { createHash, randomUUID } from 'node:crypto';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { resolveGlobalCardsConfigDir } from '../../cards-config.js';
+import { discoverApiInfo } from '../../client/api-discovery.js';
+import {
+  createRuntimeClientFromCredentialFile,
+  loadRuntimeCredential,
+  type RuntimeClient
+} from '../../client/runtime/index.js';
+import { createFileClientOutbox, resolveOutboxRoot } from '../../client/runtime/outbox/index.js';
+import type { RuntimeEnvelope, RuntimePayload } from '../../protocol/index.js';
 import type { ILogger, LogLevel } from '../logger.js';
 import { Logger } from '../logger.js';
 import type { WatcherContext } from './context.js';
-import { dialWatcherSocket, type WatcherRegistration } from './createWatcher.js';
-import type {
-  ServerToWatcherMessage,
-  WatcherEventMessage,
-  WatcherLogMessage,
-  WatcherToServerMessage
-} from './protocol.js';
+import { WatcherRegistrationError } from './errors.js';
 
-/** Initial reconnect delay. */
 export const RECONNECT_BASE_DELAY_MS = 1_000;
-/** Reconnect delay cap. */
 export const RECONNECT_MAX_DELAY_MS = 60_000;
 
-function writeMessage(socket: net.Socket, msg: WatcherToServerMessage): void {
-  socket.write(`${JSON.stringify(msg)}\n`);
-}
-
-/** Handle returned by {@link createReconnectingWatcher}. */
 export interface ReconnectingWatcherHandle {
-  /** Stable context whose emit/log/onControl work across reconnects. */
   ctx: WatcherContext;
-  /**
-   * Resolves once a stop control has been received, its handler has run, and
-   * the stop has been acknowledged. Rejects if the stop handler itself throws.
-   */
   waitForStop(): Promise<void>;
-  /**
-   * Stops all reconnect attempts and closes the current socket without
-   * running the stop handshake. Used for shutdown paths other than the
-   * stop-control path (sentinel detection, PID death, max lifetime).
-   */
   shutdown(): void;
 }
 
+/** Identity and diagnostic metadata for one admitted watcher producer. */
+export interface WatcherRegistration {
+  readonly watcherId: string;
+  readonly cardId: string;
+  readonly metadata: Readonly<Record<string, unknown>>;
+}
+
+type StopClaim = 'claimed' | 'in-doubt' | 'completed' | 'conflict' | 'unavailable';
+
+function stopCommandJournal(root: string, claimantId: string) {
+  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  const status = fs.lstatSync(root);
+  if (status.isSymbolicLink() || (process.platform !== 'win32' && (status.mode & 0o077) !== 0))
+    throw new Error('Watcher command journal must be owner-only');
+  const fileFor = (id: string) => path.join(root, `${createHash('sha256').update(id).digest('hex')}.json`);
+  const identity = (envelope: RuntimeEnvelope) => createHash('sha256').update(JSON.stringify(envelope)).digest('hex');
+  const write = (file: string, value: unknown) => {
+    const temporary = `${file}.${randomUUID()}.tmp`;
+    const descriptor = fs.openSync(temporary, 'wx', 0o600);
+    fs.writeFileSync(descriptor, `${JSON.stringify(value)}\n`);
+    fs.fsyncSync(descriptor);
+    fs.closeSync(descriptor);
+    fs.renameSync(temporary, file);
+    const directory = fs.openSync(root, 'r');
+    fs.fsyncSync(directory);
+    fs.closeSync(directory);
+  };
+  return {
+    claim(envelope: RuntimeEnvelope): StopClaim {
+      try {
+        const file = fileFor(envelope.messageId);
+        const fingerprint = identity(envelope);
+        if (fs.existsSync(file)) {
+          const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as {
+            fingerprint: string;
+            state: 'claimed' | 'completed';
+          };
+          if (existing.fingerprint !== fingerprint) return 'conflict';
+          return existing.state === 'completed' ? 'completed' : 'in-doubt';
+        }
+        write(file, { version: 1, fingerprint, envelope, state: 'claimed', claimantId });
+        return 'claimed';
+      } catch {
+        return 'unavailable';
+      }
+    },
+    complete(messageId: string): void {
+      const file = fileFor(messageId);
+      const existing = JSON.parse(fs.readFileSync(file, 'utf8')) as Record<string, unknown>;
+      write(file, { ...existing, state: 'completed' });
+    }
+  };
+}
+
+function telemetryPayload(
+  watcherId: string,
+  event: { type: string; data: unknown }
+): RuntimePayload<'watcher.telemetry'> | null {
+  if (event.type === 'watching') return { watcherId, event: { type: 'watching' } };
+  if (event.type === 'status') {
+    const data = event.data as { files?: unknown };
+    if (!Array.isArray(data?.files)) return null;
+    return { watcherId, event: { type: 'status', files: data.files as never } };
+  }
+  if (event.type === 'error') {
+    const data = event.data as { message?: unknown; relPath?: unknown };
+    if (typeof data?.message !== 'string') return null;
+    return {
+      watcherId,
+      event: {
+        type: 'error',
+        message: data.message,
+        ...(typeof data.relPath === 'string' ? { relPath: data.relPath } : {})
+      }
+    };
+  }
+  return null;
+}
+
 /**
- * Establishes a reconnecting watcher control channel.
- *
- * The initial connection must succeed — callers that need fail-closed
- * startup behavior (nothing else is possible before a control channel
- * exists) should let a failure here propagate and exit. Once connected, any
- * later unexpected disconnect triggers capped-exponential-backoff
- * re-registration instead of throwing; `ctx` remains valid and usable across
- * every reconnect.
- *
- * @param registration - Identifies the watcher and attaches metadata.
- * @returns A handle whose `ctx` is stable for the process lifetime.
+ * Opens an authenticated watcher producer and keeps its runtime connection alive.
+ * @param registration - Watcher identity whose card must match the protected credential.
+ * @returns Stable context and lifecycle controls for the watcher process.
  */
 export async function createReconnectingWatcher(registration: WatcherRegistration): Promise<ReconnectingWatcherHandle> {
-  let socket: net.Socket | undefined;
-  let generation = 0;
-  let reconnectAttempt = 0;
-  let stopControlHandler: (() => Promise<void> | void) | undefined;
-  let stopAckSent = false;
-  let stopInProgress = false;
-  let shuttingDown = false;
-  let reconnectTimer: NodeJS.Timeout | undefined;
-
+  const loaded = loadRuntimeCredential('watcher');
+  if (loaded.scope.cardId !== registration.cardId) {
+    throw new WatcherRegistrationError('Watcher registration card does not match its admitted credential');
+  }
+  const outbox = createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) });
+  const journal = stopCommandJournal(
+    path.join(resolveGlobalCardsConfigDir(), 'runtime', 'watcher-commands', loaded.credential.producerId),
+    loaded.credential.producerId
+  );
+  const logger = new Logger();
+  let stopHandler: (() => Promise<void> | void) | undefined;
+  let stopped = false;
   let resolveStop!: () => void;
   let rejectStop!: (error: unknown) => void;
-  const stopWaitPromise = new Promise<void>((resolve, reject) => {
+  const stopPromise = new Promise<void>((resolve, reject) => {
     resolveStop = resolve;
     rejectStop = reject;
   });
+  let client: RuntimeClient;
 
-  const watcherLogger = new Logger();
-  const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-  for (const level of levels) {
-    watcherLogger.on(level, (event) => {
-      if (!socket || socket.destroyed) return;
-      const msg: WatcherLogMessage = { type: 'log', level: event.level, message: event.message };
-      writeMessage(socket, msg);
+  const send = async <T extends 'execution.commandCustody' | 'watcher.stopResult'>(
+    type: T,
+    payload: RuntimePayload<T>,
+    messageId: string,
+    causationId: string
+  ): Promise<boolean> => {
+    const result = await client.send({
+      type,
+      payload,
+      messageId,
+      requestId: loaded.credential.requestId,
+      causationId,
+      execution: type === 'watcher.stopResult' ? null : loaded.execution,
+      deadlineMs: 5_000
     });
-  }
+    return result.status === 'accepted';
+  };
 
-  const ctx: WatcherContext = {
-    logger: watcherLogger as ILogger,
-    cwd: process.cwd(),
-    emit(event) {
-      // Stateless heartbeats: silently drop while disconnected or post-stop-ack.
-      if (stopAckSent || !socket || socket.destroyed) return;
-      const msg: WatcherEventMessage = { type: 'event', event };
-      writeMessage(socket, msg);
-    },
-    onControl(_commandType, cb) {
-      stopControlHandler = cb;
+  const onMessage = async (message: RuntimeEnvelope): Promise<void> => {
+    if (
+      message.type !== 'watcher.stopCommand' ||
+      !('watcherId' in message.payload) ||
+      message.payload.watcherId !== registration.watcherId ||
+      stopped
+    )
+      return;
+    const claim = journal.claim(message);
+    if (claim === 'conflict' || claim === 'unavailable') return;
+    const custodyId = `${message.messageId}:watcher:custody`;
+    if (
+      !(await send('execution.commandCustody', { commandMessageId: message.messageId }, custodyId, message.messageId))
+    )
+      return;
+    try {
+      if (claim === 'claimed') await stopHandler?.();
+      const resultId = `${message.messageId}:watcher:stop-result`;
+      if (
+        !(await send(
+          'watcher.stopResult',
+          { watcherId: registration.watcherId, disposition: 'stopped' },
+          resultId,
+          message.messageId
+        ))
+      )
+        return;
+      stopped = true;
+      if (claim === 'claimed') journal.complete(message.messageId);
+      await client.stop();
+      resolveStop();
+    } catch (error) {
+      rejectStop(error);
     }
   };
 
-  function scheduleReconnect(): void {
-    if (shuttingDown || stopInProgress) return;
-    const delay = Math.min(RECONNECT_MAX_DELAY_MS, RECONNECT_BASE_DELAY_MS * 2 ** reconnectAttempt);
-    reconnectAttempt += 1;
-    reconnectTimer = setTimeout(() => {
-      attachConnection().catch((error: unknown) => {
-        watcherLogger.warn(`reconnectingWatcher: reconnect attempt failed: ${String(error)}`);
-        scheduleReconnect();
-      });
-    }, delay);
-    reconnectTimer.unref?.();
+  client = createRuntimeClientFromCredentialFile({
+    role: 'watcher',
+    outbox,
+    discover: async () => {
+      const info = await discoverApiInfo();
+      return info ? { host: info.host, port: info.port, accessToken: info.accessToken } : null;
+    },
+    onMessage
+  });
+  const connected = await client.start();
+  if (connected.status !== 'connected') {
+    await client.stop();
+    throw new WatcherRegistrationError(`Watcher runtime registration ${connected.status}`);
   }
 
-  async function attachConnection(): Promise<void> {
-    const myGeneration = ++generation;
-    const dialed = await dialWatcherSocket(registration);
-    if (shuttingDown) {
-      dialed.socket.destroy();
-      return;
-    }
-
-    socket = dialed.socket;
-    reconnectAttempt = 0;
-
-    let lineBuffer = dialed.handshakeRemainder;
-    const processBuffer = () => {
-      for (;;) {
-        const newlineIdx = lineBuffer.indexOf('\n');
-        if (newlineIdx === -1) break;
-        const line = lineBuffer.slice(0, newlineIdx);
-        lineBuffer = lineBuffer.slice(newlineIdx + 1);
-        if (!line.trim()) continue;
-
-        let msg: ServerToWatcherMessage;
-        try {
-          msg = JSON.parse(line) as ServerToWatcherMessage;
-        } catch {
-          continue;
-        }
-
-        if (msg.type !== 'control') continue;
-
-        if (msg.command.type !== 'stop') {
-          watcherLogger.warn(`Unregistered control command type: ${(msg.command as { type: string }).type}`);
-          continue;
-        }
-
-        stopInProgress = true;
-        const currentSocket = dialed.socket;
-        const cb = stopControlHandler;
-        void (async () => {
-          try {
-            if (cb) await cb();
-          } catch (error) {
-            rejectStop(error);
-            currentSocket.destroy();
-            return;
-          }
-          if (!stopAckSent) {
-            stopAckSent = true;
-            writeMessage(currentSocket, { type: 'stop-ack' });
-          }
-          currentSocket.end(() => resolveStop());
-        })();
-      }
-    };
-
-    dialed.socket.on('data', (chunk: Buffer) => {
-      lineBuffer += chunk.toString();
-      processBuffer();
+  const sendTelemetry = (type: 'runtime.log' | 'watcher.telemetry', payload: unknown): void => {
+    void client.send({
+      type,
+      payload: payload as never,
+      messageId: randomUUID(),
+      execution: type === 'watcher.telemetry' ? null : loaded.execution
     });
-
-    dialed.socket.on('close', () => {
-      // A superseded (already-replaced) socket's close is expected — ignore it.
-      if (myGeneration !== generation) return;
-      if (stopInProgress || shuttingDown) return;
-      watcherLogger.warn('reconnectingWatcher: control socket closed unexpectedly — reconnecting');
-      scheduleReconnect();
-    });
-
-    dialed.socket.on('error', (error) => {
-      if (myGeneration !== generation) return;
-      watcherLogger.warn(`reconnectingWatcher: control socket error: ${String(error)}`);
-    });
-
-    if (lineBuffer.length > 0) {
-      setImmediate(processBuffer);
-    }
+  };
+  const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
+  for (const level of levels) {
+    logger.on(level, (event) => sendTelemetry('runtime.log', { level: event.level, message: event.message }));
   }
-
-  await attachConnection();
-
+  const ctx: WatcherContext = {
+    logger: logger as ILogger,
+    cwd: process.cwd(),
+    emit(event) {
+      const payload = telemetryPayload(registration.watcherId, event);
+      if (payload) sendTelemetry('watcher.telemetry', payload);
+    },
+    onControl(_type, handler) {
+      stopHandler = handler;
+    }
+  };
   return {
     ctx,
-    waitForStop: () => stopWaitPromise,
+    waitForStop: () => stopPromise,
     shutdown() {
-      shuttingDown = true;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (socket && !socket.destroyed) socket.destroy();
+      stopped = true;
+      void client.stop();
     }
   };
 }
