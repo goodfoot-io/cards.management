@@ -66,8 +66,7 @@ vi.mock('@cards.management/sdk/worktree', () => ({
 }));
 
 vi.mock('@cards.management/sdk/bin/process-utils', () => ({
-  readCardStatus: vi.fn(),
-  transitionCardStatus: vi.fn()
+  readCardStatus: vi.fn()
 }));
 
 vi.mock('@cards.management/sdk/transcript-sync', () => ({
@@ -209,9 +208,8 @@ beforeEach(async () => {
   vi.mocked(fs.writeFile).mockResolvedValue(undefined);
   const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
   vi.mocked(finalizePersistedSqlitePollSession).mockResolvedValue({ kind: 'flushed', emitted: 0, partial: 0 });
-  const { readCardStatus, transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+  const { readCardStatus } = await import('@cards.management/sdk/bin/process-utils');
   vi.mocked(readCardStatus).mockResolvedValue('needs_review');
-  vi.mocked(transitionCardStatus).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -351,11 +349,6 @@ describe('launch action — antigravity branch', () => {
     await promise;
 
     const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
-    expect(vi.mocked(transitionCardStatus).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(spawnBranchCleanupWatcher).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
-    );
     expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
       { cardId: 'card-123', repoRoot: '/test/workspace', cardRepoPath: '/test/repo', sessionId: expect.any(String) },
       expect.anything()
@@ -416,8 +409,6 @@ describe('launch action — antigravity branch', () => {
       expect.stringMatching(/transcript finalization degraded/),
       expect.objectContaining({ reason: 'db-absent', detail: 'conversation DB is absent at final drain' })
     );
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
     errorSpy.mockRestore();
   });
 
@@ -457,12 +448,8 @@ describe('launch action — antigravity branch', () => {
     child.emit('close', 0);
     await promise;
 
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
     const termCall = vi.mocked(killSpy).mock.calls.findIndex(([, signal]) => signal === 'SIGTERM');
     expect(termCall).toBeGreaterThanOrEqual(0);
-    expect(killSpy.mock.invocationCallOrder[termCall]).toBeLessThan(
-      vi.mocked(transitionCardStatus).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
-    );
     killSpy.mockRestore();
   });
 
@@ -509,8 +496,6 @@ describe('launch action — antigravity branch', () => {
     await flushMicrotasks();
     child.emit('close', 0);
     await expect(promise).rejects.toThrow(/runtime hook failure \(watcher-setup: attach failed\)/);
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
   });
 
   it('fails a background launch on the marker a real hook failure wrote, with exit status and stderr both clean', async () => {
@@ -576,8 +561,7 @@ describe('launch action — antigravity branch', () => {
           readTextFileSync: (path: string) => realFs.readFileSync(path, 'utf8'),
           removeSync: (path: string) => realFs.rmSync(path, { force: true })
         },
-        loadActionInput: () => null,
-        runReconciliationSweep: async () => {}
+        loadActionInput: () => null
       };
       await expect(
         dispatchAntigravityHook(
@@ -611,8 +595,6 @@ describe('launch action — antigravity branch', () => {
       await expect(promise).rejects.toThrow(
         /runtime hook failure \(action-env: \[action-env\] the Cards action environment is missing or malformed\)/
       );
-      const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-      expect(transitionCardStatus).not.toHaveBeenCalled();
     } finally {
       delete process.env['CARDS_HOME'];
       delete process.env['CARD_ID'];
@@ -652,8 +634,6 @@ describe('launch action — antigravity branch', () => {
       // Nothing was spawned and nothing settled: the refusal happens before
       // the client, the worktree, and the child, on both modes.
       expect(vi.mocked(spawn)).not.toHaveBeenCalled();
-      const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-      expect(transitionCardStatus).not.toHaveBeenCalled();
     } finally {
       delete process.env['CARDS_HOME'];
       await realFsp.rm(cardsHome, { recursive: true, force: true });
@@ -764,8 +744,7 @@ describe('launch action — antigravity branch', () => {
           readTextFileSync: (path: string) => realFs.readFileSync(path, 'utf8'),
           removeSync: (path: string) => realFs.rmSync(path, { force: true })
         },
-        loadActionInput: () => null,
-        runReconciliationSweep: async () => {}
+        loadActionInput: () => null
       };
       await expect(
         dispatchAntigravityHook(
@@ -799,8 +778,6 @@ describe('launch action — antigravity branch', () => {
       // placeholder marker is the channel that reaches the launcher's read.
       child.emit('close', 0);
       await expect(promise).rejects.toThrow(/runtime hook failure \(input: \[input\]/);
-      const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-      expect(transitionCardStatus).not.toHaveBeenCalled();
     } finally {
       delete process.env['CARDS_HOME'];
       delete process.env['CARD_ID'];
@@ -834,8 +811,6 @@ describe('launch action — antigravity branch', () => {
     await expect(latePromise).resolves.toBeUndefined();
 
     // Neither run was rejected, and both kept the completion path they earned.
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).toHaveBeenCalledTimes(2);
   });
 
   it('fails an interactive action on a nonzero child exit', async () => {
@@ -850,11 +825,9 @@ describe('launch action — antigravity branch', () => {
     await expect(promise).rejects.toThrow(/agy exited with code 23/);
     const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
     expect(finalizePersistedSqlitePollSession).toHaveBeenCalledTimes(1);
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
   });
 
-  it('does not settle card status when the Antigravity process fails to spawn', async () => {
+  it('rejects when the Antigravity process fails to spawn', async () => {
     const { spawn } = await import('node:child_process');
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
@@ -865,8 +838,6 @@ describe('launch action — antigravity branch', () => {
     child.emit('error', Object.assign(new Error('spawn agy ENOENT'), { code: 'ENOENT' }));
 
     await expect(promise).rejects.toThrow(/agy process could not be launched/);
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
   });
 
   it('spawns child-owned agy -p --output-format stream-json and settles on a clean exit', async () => {
@@ -898,11 +869,6 @@ describe('launch action — antigravity branch', () => {
 
     // Inline cleanup only — no detached watcher behind a headless run.
     const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    const { readCardStatus, transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
-    expect(vi.mocked(transitionCardStatus).mock.invocationCallOrder[0]).toBeLessThan(
-      vi.mocked(readCardStatus).mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY
-    );
     expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
   });
 
@@ -926,8 +892,6 @@ describe('launch action — antigravity branch', () => {
 
     const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
     expect(finalizePersistedSqlitePollSession).toHaveBeenCalledTimes(2);
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).not.toHaveBeenCalled();
   });
 
   it('does not fail a truncated run when Cards itself requested the termination', async () => {
@@ -967,8 +931,6 @@ describe('launch action — antigravity branch', () => {
 
     // The run keeps the ordinary completion path a card-requested termination
     // has always taken; the latch adds no failure to it.
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
     killSpy.mockRestore();
   });
 

@@ -114,7 +114,7 @@ describe('performTeardown', () => {
     process.env['CARDS_HOME'] = cardsHome;
     await mkdir(adhocActiveDir(cardId), { recursive: true });
 
-    // Real card repo backing the filesystem fallback.
+    // Real card repo path passed through the cleanup contract.
     repoDir = await mkdtemp(join(tmpdir(), 'adhoc-teardown-repo-'));
     await writeFile(join(repoDir, 'CARD.meta.json'), JSON.stringify({ id: cardId, status: 'active' }, null, 2));
     execFileSync('git', ['init', '-q'], { cwd: repoDir });

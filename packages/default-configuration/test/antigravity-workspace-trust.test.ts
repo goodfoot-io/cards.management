@@ -80,8 +80,7 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 }));
 
 vi.mock('@cards.management/sdk/bin/process-utils', () => ({
-  readCardStatus: vi.fn(),
-  transitionCardStatus: vi.fn()
+  readCardStatus: vi.fn()
 }));
 
 vi.mock('@cards.management/sdk/transcript-sync', () => ({
@@ -436,9 +435,8 @@ beforeEach(async () => {
   const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
   vi.mocked(finalizePersistedSqlitePollSession).mockResolvedValue({ kind: 'flushed', emitted: 0, partial: 0 });
 
-  const { readCardStatus, transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+  const { readCardStatus } = await import('@cards.management/sdk/bin/process-utils');
   vi.mocked(readCardStatus).mockResolvedValue('needs_review');
-  vi.mocked(transitionCardStatus).mockResolvedValue(undefined);
 });
 
 afterEach(async () => {

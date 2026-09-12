@@ -79,8 +79,7 @@ vi.mock('@cards.management/sdk/worktree', () => ({
 }));
 
 vi.mock('@cards.management/sdk/bin/process-utils', () => ({
-  readCardStatus: vi.fn(),
-  transitionCardStatus: vi.fn()
+  readCardStatus: vi.fn()
 }));
 
 vi.mock('@cards.management/sdk/transcript-sync', () => ({
@@ -229,9 +228,8 @@ beforeEach(async () => {
   vi.mocked(fs.writeFile).mockResolvedValue(undefined);
   const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
   vi.mocked(finalizePersistedSqlitePollSession).mockResolvedValue({ kind: 'flushed', emitted: 0, partial: 0 });
-  const { readCardStatus, transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
+  const { readCardStatus } = await import('@cards.management/sdk/bin/process-utils');
   vi.mocked(readCardStatus).mockResolvedValue('needs_review');
-  vi.mocked(transitionCardStatus).mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -375,8 +373,6 @@ describe('background launch outcome — real agy captures', () => {
     child.emit('close', 0);
     await expect(promise).resolves.toBeUndefined();
 
-    const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
-    expect(transitionCardStatus).toHaveBeenCalledWith('/test/repo', expect.anything());
     const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
     expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
   });

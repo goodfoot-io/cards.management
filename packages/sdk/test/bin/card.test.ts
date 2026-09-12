@@ -122,7 +122,7 @@ describe('card binary', () => {
   let cardCounter: number;
   /** Files stored via PUT /cards/:id/fs/:path, keyed by `${cardId}/${filePath}`. */
   let files: Map<string, string>;
-  /** Bodies received via POST /cards/:id/actions/:name. */
+  /** Bodies received via POST /cards/:id/runtime/actions. */
   let actionRequests: Array<{ cardId: string; actionName: string; body: Record<string, unknown> | undefined }>;
   /** Response returned by the action endpoint. */
   let actionResult: Record<string, unknown>;

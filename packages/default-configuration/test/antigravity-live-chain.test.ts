@@ -114,8 +114,7 @@ describe('Antigravity live transcript chain', () => {
       spawnWatcher: ({ manifest }: { manifest: SessionSyncManifest }) => {
         serializedManifest = serializeManifest(manifest);
         return true;
-      },
-      runReconciliationSweep: async () => {}
+      }
     };
 
     await dispatchAntigravityHook(
