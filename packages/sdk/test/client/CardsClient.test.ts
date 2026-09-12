@@ -319,8 +319,7 @@ describe('CardsClient', () => {
       ['addBranch', (client, cardId) => client.addBranch(cardId, { name: 'feature/test', parentBranch: 'main' })],
       ['removeBranch', (client, cardId) => client.removeBranch(cardId, 'feature/test')],
       ['listStreams', (client, cardId) => client.listStreams(cardId)],
-      ['getStream', (client, cardId) => client.getStream(cardId, 'claude-session', 'session.log')],
-      ['executeAction', (client, cardId) => client.executeAction(cardId, 'launch', 'request-1', 'message-1')]
+      ['getStream', (client, cardId) => client.getStream(cardId, 'claude-session', 'session.log')]
     ];
 
     it.each(cardIdCallers)('encodes the cardId segment in %s', async (_method, call) => {
@@ -673,95 +672,6 @@ describe('CardsClient', () => {
       expect(httpClient.requests[0]).toMatchObject({
         method: 'GET',
         url: 'http://localhost:3000/variable-groups?workspacePath=%2Fworkspace%2Frepo'
-      });
-    });
-
-    it('executeAction sends POST to /cards/:id/actions/:name and returns ActionResult', async () => {
-      const httpClient = new TestHttpClient();
-      const expectedResult = { success: true, exitCode: 0 };
-      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', expectedResult);
-      const client = new CardsClient(options, httpClient);
-
-      const result = await client.executeAction('card-123', 'launch', 'request-1', 'message-1');
-
-      expect(httpClient.requests[0]).toMatchObject({
-        method: 'POST',
-        url: expect.stringContaining('/cards/card-123/actions/launch')
-      });
-      expect(httpClient.requests[0]!.body).toEqual({ requestId: 'request-1', messageId: 'message-1' });
-      expect(result).toEqual(expectedResult);
-    });
-
-    it('executeAction sends the execution mode in the request body when provided', async () => {
-      const httpClient = new TestHttpClient();
-      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/chat', { success: true, exitCode: 0 });
-      const client = new CardsClient(options, httpClient);
-
-      await client.executeAction('card-123', 'chat', 'request-1', 'message-1', 'interactive');
-
-      expect(httpClient.requests[0]).toMatchObject({
-        method: 'POST',
-        url: expect.stringContaining('/cards/card-123/actions/chat'),
-        body: { requestId: 'request-1', messageId: 'message-1', mode: 'interactive' }
-      });
-    });
-
-    it('executeAction serializes a selected coding agent without changing omitted requests', async () => {
-      const httpClient = new TestHttpClient();
-      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
-      const client = new CardsClient(options, httpClient);
-
-      await client.executeAction('card-123', 'launch', 'request-1', 'message-1', undefined, false, 'codex-cli');
-
-      expect(httpClient.requests[0]?.body).toEqual({
-        requestId: 'request-1',
-        messageId: 'message-1',
-        selectedAgent: 'codex-cli'
-      });
-    });
-
-    it('executeAction serializes ordered variable-group IDs including an explicit empty selection', async () => {
-      const httpClient = new TestHttpClient();
-      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
-      const client = new CardsClient(options, httpClient);
-
-      await client.executeAction('card-123', 'launch', 'request-1', 'message-1', undefined, false, undefined, [
-        'vg-b',
-        'vg-a'
-      ]);
-      await client.executeAction('card-123', 'launch', 'request-2', 'message-2', undefined, false, undefined, []);
-
-      expect(httpClient.requests.map(({ body }) => body)).toEqual([
-        { requestId: 'request-1', messageId: 'message-1', variableGroupIds: ['vg-b', 'vg-a'] },
-        { requestId: 'request-2', messageId: 'message-2', variableGroupIds: [] }
-      ]);
-    });
-
-    it('executeAction preserves model and effort launch controls', async () => {
-      const httpClient = new TestHttpClient();
-      httpClient.responses.set('http://localhost:3000/cards/card-123/actions/launch', { success: true, exitCode: 0 });
-      const client = new CardsClient(options, httpClient);
-
-      await client.executeAction(
-        'card-123',
-        'launch',
-        'request-1',
-        'message-1',
-        undefined,
-        false,
-        'antigravity-cli',
-        ['vg-a'],
-        'gemini-3-pro',
-        'high'
-      );
-
-      expect(httpClient.requests[0]?.body).toEqual({
-        requestId: 'request-1',
-        messageId: 'message-1',
-        selectedAgent: 'antigravity-cli',
-        variableGroupIds: ['vg-a'],
-        model: 'gemini-3-pro',
-        effort: 'high'
       });
     });
   });

@@ -152,7 +152,12 @@ describe('card binary', () => {
     commits = new Map();
     files = new Map();
     actionRequests = [];
-    actionResult = { success: true, exitCode: 0 };
+    actionResult = {
+      disposition: 'replayed',
+      execution: { executionId: 'execution-1', launchRequestId: 'request-1' },
+      spawnPhase: 'attempted',
+      retrievedOutcome: null
+    };
     deletedWatcherCardIds = [];
     watcherRegistryAvailable = true;
     activeWatchers = new Map();
@@ -318,13 +323,13 @@ describe('card binary', () => {
         return;
       }
 
-      // POST /cards/:id/actions/:name
-      const actionMatch = url.pathname.match(/^\/cards\/([^/]+)\/actions\/([^/]+)$/);
+      // POST /cards/:id/runtime/actions
+      const actionMatch = url.pathname.match(/^\/cards\/([^/]+)\/runtime\/actions$/);
       if (method === 'POST' && actionMatch) {
         const raw = await collectBody(req);
         actionRequests.push({
           cardId: actionMatch[1]!,
-          actionName: actionMatch[2]!,
+          actionName: (JSON.parse(raw) as { params: { actionId: string } }).params.actionId,
           body: raw ? (JSON.parse(raw) as Record<string, unknown>) : undefined
         });
         res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -655,6 +660,20 @@ describe('card binary', () => {
 
   describe('executeAction', () => {
     const actionIdentity = { requestId: 'request-1', messageId: 'message-1' };
+    const launchBody = (params: Record<string, unknown> = {}) => ({
+      ...actionIdentity,
+      params: {
+        actionId: 'launch',
+        environmentName: 'default',
+        mode: 'interactive',
+        exitWhenDone: false,
+        ...params
+      }
+    });
+
+    beforeEach(() => {
+      cards.set('card-1', { id: 'card-1', title: 'Test', status: 'todo' });
+    });
 
     it('forwards ordered variable-group IDs including an explicit empty selection', async () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -662,8 +681,8 @@ describe('card binary', () => {
         await executeAction('card-1', 'launch', { ...actionIdentity, variableGroupIds: ['vg-b', 'vg-a'] });
         await executeAction('card-1', 'launch', { ...actionIdentity, variableGroupIds: [] });
         expect(actionRequests.map(({ body }) => body)).toEqual([
-          { ...actionIdentity, variableGroupIds: ['vg-b', 'vg-a'] },
-          { ...actionIdentity, variableGroupIds: [] }
+          launchBody({ variableGroupIds: ['vg-b', 'vg-a'] }),
+          launchBody({ variableGroupIds: [] })
         ]);
       } finally {
         logSpy.mockRestore();
@@ -677,9 +696,8 @@ describe('card binary', () => {
       try {
         await executeAction('card-1', 'launch', actionIdentity);
         expect(logSpy).toHaveBeenCalledOnce();
-        const output = JSON.parse(logSpy.mock.calls[0]![0] as string) as { success: boolean; exitCode: number };
-        expect(output.success).toBe(true);
-        expect(output.exitCode).toBe(0);
+        const output = JSON.parse(logSpy.mock.calls[0]![0] as string) as { status: string };
+        expect(output.status).toBe('accepted');
       } finally {
         logSpy.mockRestore();
       }
@@ -691,7 +709,7 @@ describe('card binary', () => {
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
       try {
         await executeAction('card-1', 'launch', actionIdentity);
-        expect(actionRequests).toEqual([{ cardId: 'card-1', actionName: 'launch', body: actionIdentity }]);
+        expect(actionRequests).toEqual([{ cardId: 'card-1', actionName: 'launch', body: launchBody() }]);
       } finally {
         logSpy.mockRestore();
       }
@@ -704,7 +722,7 @@ describe('card binary', () => {
       try {
         await executeAction('card-1', 'launch', { ...actionIdentity, background: true });
         expect(actionRequests).toEqual([
-          { cardId: 'card-1', actionName: 'launch', body: { ...actionIdentity, mode: 'background' } }
+          { cardId: 'card-1', actionName: 'launch', body: launchBody({ mode: 'background' }) }
         ]);
       } finally {
         logSpy.mockRestore();
@@ -718,7 +736,7 @@ describe('card binary', () => {
       try {
         await executeAction('card-1', 'launch', { ...actionIdentity, exitWhenDone: true });
         expect(actionRequests).toEqual([
-          { cardId: 'card-1', actionName: 'launch', body: { ...actionIdentity, exitWhenDone: true } }
+          { cardId: 'card-1', actionName: 'launch', body: launchBody({ exitWhenDone: true }) }
         ]);
       } finally {
         logSpy.mockRestore();
@@ -735,7 +753,7 @@ describe('card binary', () => {
           {
             cardId: 'card-1',
             actionName: 'launch',
-            body: { ...actionIdentity, mode: 'background', exitWhenDone: true }
+            body: launchBody({ mode: 'background', exitWhenDone: true })
           }
         ]);
       } finally {
@@ -756,7 +774,7 @@ describe('card binary', () => {
           {
             cardId: 'card-1',
             actionName: 'launch',
-            body: { ...actionIdentity, mode: 'background', exitWhenDone: true, selectedAgent: 'opencode-cli' }
+            body: launchBody({ mode: 'background', exitWhenDone: true, selectedAgent: 'opencode-cli' })
           }
         ]);
       } finally {
@@ -767,7 +785,7 @@ describe('card binary', () => {
     it('sets a non-zero process exit status when an explicit-agent action fails', async () => {
       const originalExitCode = process.exitCode;
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      actionResult = { success: false, exitCode: 0, error: 'codex-cli is unavailable' };
+      actionResult = { disposition: 'rejected', reason: 'parameter-mismatch', execution: null };
       try {
         await executeAction('card-1', 'launch', { ...actionIdentity, selectedAgent: 'codex-cli' });
         expect(process.exitCode).toBe(1);
@@ -777,13 +795,13 @@ describe('card binary', () => {
       }
     });
 
-    it('leaves process exit status unchanged for a failed default-agent action', async () => {
+    it('sets a non-zero process exit status for any rejected durable launch', async () => {
       const originalExitCode = process.exitCode;
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      actionResult = { success: false, exitCode: 0, error: 'default launch failed' };
+      actionResult = { disposition: 'rejected', reason: 'parameter-mismatch', execution: null };
       try {
         await executeAction('card-1', 'launch', actionIdentity);
-        expect(process.exitCode).toBe(originalExitCode);
+        expect(process.exitCode).toBe(1);
       } finally {
         process.exitCode = originalExitCode;
         logSpy.mockRestore();

@@ -16,9 +16,6 @@
 export type {
   Action,
   ActionClientMessage,
-  ActionExecuteRequestEvent,
-  ActionExecuteResultEvent,
-  ActionExecutorRegisterMessage,
   ActionMessage,
   ActionResult,
   ActionState,
@@ -110,7 +107,6 @@ export type {
   EnvironmentInfo,
   EnvironmentsResponse,
   EventMessage,
-  ExecuteActionRequest,
   ExecutionMode,
   ExtensionToWebviewMessage,
   FieldError,

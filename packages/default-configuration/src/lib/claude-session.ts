@@ -16,7 +16,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { type ActionContext, type ActionInput, CARDS_ENV_VARS, resolveWorktreeDir } from '@cards.management/sdk';
 import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
-import { readCardStatus, transitionCardStatus } from '@cards.management/sdk/bin/process-utils';
+import { readCardStatus } from '@cards.management/sdk/bin/process-utils';
 import type { CardsClient } from '@cards.management/sdk/client';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { compiledHookScriptPaths } from '@cards.management/sdk/git-hooks';
@@ -863,39 +863,6 @@ export async function cleanupMergedBranches(
   return outcomes;
 }
 
-/**
- * Settles the card's on-disk status (`active` → `needs_review`) before
- * post-exit branch cleanup runs.
- *
- * The sweep's first gate is the card status read from disk
- * ({@link cleanupMergedBranches}); the `active`→`needs_review` transition is
- * otherwise written by a separate process (the ad-hoc cleanup monitor) with no
- * ordering against this exit path. A sweep that reads the file before the flip
- * lands sees `active`, skips the whole card, and removes its cleanup-attempt
- * marker — nothing ever retries, so a merged, idle card keeps its worktree
- * indefinitely. Settling here, awaited before the sweep (detached or inline)
- * is spawned, makes the sweep's first decision deterministic.
- *
- * The flip is guarded by {@link transitionCardStatus}, which no-ops unless
- * the on-disk status is `active` — a card already settled, or one a sibling
- * live session still owns, is untouched; the sweep's per-branch liveness gate
- * remains the protection for sibling actions. Fail-open: a settle failure
- * (e.g. a rejected commit) is logged and cleanup proceeds exactly as before.
- *
- * @param cardRepoPath - Absolute path to the card's git repository.
- * @param logger - Logger for diagnostic output.
- */
-export async function settleCardStatusForCleanup(cardRepoPath: string, logger: ActionContext['logger']): Promise<void> {
-  try {
-    await transitionCardStatus(cardRepoPath, logger);
-  } catch (error) {
-    logger.warn('Failed to settle card status before branch cleanup (non-fatal)', {
-      cardRepoPath,
-      error: errorMessage(error)
-    });
-  }
-}
-
 // ============================================================================
 // Unified session spawner
 // ============================================================================
@@ -1135,9 +1102,6 @@ export async function spawnClaudeSession(
   // sweep's first gate is the on-disk status, which otherwise races this exit
   // path from a separate process — a sweep that wins the race skips the card
   // as `active` and no later attempt is ever scheduled. See
-  // {@link settleCardStatusForCleanup}.
-  await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
-
   // Post-exit cleanup: remove fully-merged branches.
   // In background mode there is no watcher, so we run cleanup inline.
   // In interactive mode we spawn a detached process so the terminal closes

@@ -2,23 +2,21 @@
  * Shared process utilities for detached bin scripts.
  *
  * Extracts `isProcessAlive` so both stream-sync-watcher and adhoc-cleanup can
- * use it without circular imports. Also provides
- * `transitionCardStatus` (filesystem fallback for setting needs_review) and
- * `isKnownAgentComm` (comm-check gate for PID validation).
+ * use it without circular imports. Also provides `isKnownAgentComm`
+ * (comm-check gate for PID validation).
  *
  * @summary Shared process utilities for detached bin scripts
  * @module
  */
 
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
-import { execFileNoWindowAsync, execFileSyncNoWindow } from './childProcess.js';
+import { execFileSyncNoWindow } from './childProcess.js';
 
 // These utilities are imported by the detached `adhoc-cleanup` bin (console-less
 // under stock node on win32). Their `tasklist` / `git` invocations force
 // `windowsHide: true` via the SDK no-window helpers so no per-call console
 // window appears; the option is a no-op for the POSIX `cat`/`ps` probes.
-const execFileAsync = execFileNoWindowAsync;
 const execFileSync = execFileSyncNoWindow;
 
 /**
@@ -292,70 +290,6 @@ export function isKnownAgentComm(pid: number, logger?: ProcessUtilsLogger): bool
  * @param logger - Optional logger for warn output on commit failure.
  * @throws When the status write cannot be committed (after reverting the write).
  */
-export async function transitionCardStatus(cardRepoPath: string, logger?: ProcessUtilsLogger): Promise<void> {
-  const metaPath = join(cardRepoPath, 'CARD.meta.json');
-
-  let content: string;
-  try {
-    content = await readFile(metaPath, 'utf-8');
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return;
-    }
-    throw error;
-  }
-
-  const meta = JSON.parse(content) as { status?: string };
-  if (meta.status !== 'active') return;
-
-  meta.status = 'needs_review';
-  await writeFile(metaPath, `${JSON.stringify(meta, null, 2)}\n`, 'utf-8');
-
-  // Explicit committer identity so the commit cannot fail on a missing
-  // user.name/user.email — mirrors the wrapper's detached-cleanup commit.
-  const commitEnv = {
-    ...process.env,
-    GIT_AUTHOR_NAME: 'system',
-    GIT_AUTHOR_EMAIL: 'system@cards.local',
-    GIT_COMMITTER_NAME: 'system',
-    GIT_COMMITTER_EMAIL: 'system@cards.local'
-  };
-
-  try {
-    await execFileAsync('git', ['add', 'CARD.meta.json'], { cwd: cardRepoPath });
-    await execFileAsync(
-      'git',
-      [
-        'commit',
-        '--no-gpg-sign',
-        '-m',
-        'Changed status from active to needs_review.',
-        '--author',
-        'system <system@cards.local>'
-      ],
-      { cwd: cardRepoPath, env: commitEnv }
-    );
-  } catch (error) {
-    // Fail closed: the commit did not happen, so the working tree must not be
-    // left claiming `needs_review` while the committed state is still `active`.
-    // Restore the committed contents and surface the failure.
-    logger?.warn('transitionCardStatus: git commit failed — reverting meta write', {
-      cardRepoPath,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    try {
-      await writeFile(metaPath, content, 'utf-8');
-      await execFileAsync('git', ['reset', '--', 'CARD.meta.json'], { cwd: cardRepoPath });
-    } catch (revertError) {
-      logger?.warn('transitionCardStatus: failed to revert meta write after commit failure', {
-        cardRepoPath,
-        error: revertError instanceof Error ? revertError.message : String(revertError)
-      });
-    }
-    throw error instanceof Error ? error : new Error(String(error));
-  }
-}
-
 /**
  * Render a caught error for top-level CLI output, walking the `cause` chain.
  *

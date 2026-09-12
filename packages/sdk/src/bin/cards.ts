@@ -31,13 +31,16 @@ import {
   NetworkError
 } from '@cards.management/sdk/client';
 import { discoverApiInfo } from '@cards.management/sdk/client/discovery';
-import { createRuntimeClientFromCredentialFile, loadRuntimeCredential } from '@cards.management/sdk/client/runtime';
+import {
+  createRuntimeActionClient,
+  createRuntimeClientFromCredentialFile,
+  loadRuntimeCredential
+} from '@cards.management/sdk/client/runtime';
 import { createFileClientOutbox, resolveOutboxRoot } from '@cards.management/sdk/client/runtime/outbox';
 import { readPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config/env';
 import { buildCardRepoLogBlock, buildWorkspaceRepoLogBlocks } from '@cards.management/sdk/context';
 import {
-  type ActionResult,
   type CardCommit,
   type CardCommitEvent,
   CODING_AGENT_IDS,
@@ -1268,20 +1271,29 @@ export async function executeAction(
     variableGroupIds?: string[];
   }
 ): Promise<void> {
-  const mode: ExecutionMode | undefined = opts?.background ? 'background' : undefined;
+  const mode: ExecutionMode = opts.background ? 'background' : 'interactive';
   const client = await connectClient();
-  const result: ActionResult = await client.executeAction(
-    cardId,
-    actionName,
-    opts.requestId,
-    opts.messageId,
-    mode,
-    opts?.exitWhenDone ?? false,
-    opts?.selectedAgent,
-    opts?.variableGroupIds
-  );
-  console.log(formatOutput(result, opts?.jsonPath));
-  if (opts?.selectedAgent && !result.success) process.exitCode = 1;
+  const card = await client.getCard(cardId);
+  const runtime = createRuntimeActionClient({
+    discover: async () => {
+      const info = await discoverApiInfo();
+      return info ? { host: info.host, port: info.port, accessToken: info.accessToken } : null;
+    }
+  });
+  const result = await runtime.launch(cardId, {
+    requestId: opts.requestId,
+    messageId: opts.messageId,
+    params: {
+      actionId: actionName,
+      environmentName: card.environment ?? 'default',
+      mode,
+      exitWhenDone: opts.exitWhenDone ?? false,
+      ...(opts.selectedAgent === undefined ? {} : { selectedAgent: opts.selectedAgent }),
+      ...(opts.variableGroupIds === undefined ? {} : { variableGroupIds: opts.variableGroupIds })
+    }
+  });
+  console.log(formatOutput(result, opts.jsonPath));
+  if (result.status === 'rejected' || result.status === 'uncertain') process.exitCode = 1;
 }
 
 /**

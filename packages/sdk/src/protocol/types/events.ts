@@ -12,7 +12,6 @@
 import type { VariableGroupSummary } from './api-requests.js';
 import type { BranchInfo } from './branch.js';
 import type { CardGates, CardRelation } from './card.js';
-import type { CodingAgentId } from './coding-agent.js';
 import type { CompareState } from './compare.js';
 import type { CardCommit } from './fs.js';
 import type {
@@ -21,8 +20,6 @@ import type {
   CardSnapshotMessage,
   CardSubscribeFailedMessage
 } from './journal.js';
-import type { OriginalCallerRequestId } from './runtime-admission.js';
-import type { ActionResult, ExecutionMode } from './settings.js';
 import type { CardStatus } from './status.js';
 import type { StreamMeta } from './stream.js';
 import type { CommentTimelineItem, CommitDetails, CommitTimelineItem } from './timeline.js';
@@ -381,60 +378,6 @@ export interface CardsMetadataEvent {
   hasUnread: boolean;
 }
 
-// --- Action Events ---
-
-/**
- * Event payload requesting execution of a card action.
- */
-export interface ActionExecuteRequestEvent {
-  /** Event type discriminator. */
-  type: 'action:executeRequest';
-  /** Correlation ID linking the request to its result. */
-  correlationId: string;
-  /** Stable original caller identity, reused unchanged by every retry. */
-  requestId: OriginalCallerRequestId;
-  /** Stable launch-message identity, reused unchanged by every retry. */
-  messageId: string;
-  /** ID of the card whose action is being executed. */
-  cardId: string;
-  /** ID of the action to execute. */
-  actionId: string;
-  /** Name of the environment in which to run the action. */
-  environmentName: string;
-  /** Absolute workspace path of the single executor that should handle the action. */
-  workspacePath: string;
-  /** One-shot coding-agent override. Omitted to preserve default selection. */
-  selectedAgent?: CodingAgentId;
-  /** Execution mode controlling whether the action runs interactively or in the background. */
-  mode: ExecutionMode;
-  /** When true, the spawned agent is signalled to exit cleanly once the action completes. */
-  exitWhenDone: boolean;
-  /** Ordered one-shot variable-group selection; omission preserves persisted selection. */
-  variableGroupIds?: string[];
-}
-
-/**
- * Event payload carrying the result of a card action execution.
- */
-export interface ActionExecuteResultEvent {
-  /** Event type discriminator. */
-  type: 'action:executeResult';
-  /** Correlation ID linking this result back to its originating request. */
-  correlationId: string;
-  /** Outcome of the action execution. */
-  result: ActionResult;
-}
-
-/** Client-to-server registration of the executor for a workspace. */
-export interface ActionExecutorRegisterMessage {
-  /** Message type discriminator. */
-  type: 'action:executorRegister';
-  /** Absolute path of the workspace this connection can execute actions for. */
-  workspacePath: string;
-  /** Repository identifier used to resolve linked worktrees safely. */
-  repositoryId: string;
-}
-
 /** Event requesting safe variable-group summaries for an exact workspace. */
 export interface VariableGroupListRequestEvent {
   /** Event type discriminator. */
@@ -456,10 +399,7 @@ export interface VariableGroupListResultEvent {
 }
 
 /** Client-to-server action relay messages. */
-export type ActionClientMessage =
-  | ActionExecutorRegisterMessage
-  | ActionExecuteResultEvent
-  | VariableGroupListResultEvent;
+export type ActionClientMessage = VariableGroupListResultEvent;
 
 // --- Domain Event Union ---
 
@@ -507,8 +447,6 @@ export type DomainEvent =
   | WorkspaceCommitEvent
   | CardIncomingRelationsChangedEvent
   | CardsMetadataEvent
-  | ActionExecuteRequestEvent
-  | ActionExecuteResultEvent
   | VariableGroupListRequestEvent
   | VariableGroupListResultEvent
   // Journal / subscribe-replay protocol (server -> client only; the client ->

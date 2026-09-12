@@ -7,15 +7,11 @@
  */
 
 import type {
-  ActionResult,
   AddBranchResponse,
   Card,
-  CodingAgentId,
   CompareRequest,
   CompareState,
   EnvironmentsResponse,
-  ExecuteActionRequest,
-  ExecutionMode,
   HttpClient,
   RemoveBranchResponse,
   StreamMeta,
@@ -939,53 +935,6 @@ export class CardsClient {
       tail !== undefined ? { tail } : undefined
     );
     return this.request(() => this.getHttpClient().get<{ meta: StreamMeta; lines: string[] }>(url));
-  }
-
-  // --- Action Operations ---
-
-  /**
-   * Executes an action on a card via the server relay.
-   *
-   * @param cardId - Identifier of the card to execute the action on.
-   * @param actionName - Action identifier (e.g., 'launch').
-   * @param requestId - Stable original caller identity, persisted before the first attempt.
-   * @param messageId - Stable launch-message identity, reused by every retry.
-   * @param mode - Optional execution mode. When omitted, the server runs the
-   *   action interactively (the default).
-   * @param exitWhenDone - When true, the spawned agent is signalled to exit
-   *   once the action completes. Omitted from the request when false, which is
-   *   the server default.
-   * @param selectedAgent - Optional one-shot coding-agent override. Omitted to
-   *   preserve default-agent resolution.
-   * @param variableGroupIds - Optional ordered one-shot variable-group selection.
-   *   Omitted to preserve the persisted selection; an empty array selects none.
-   * @param model - Optional one-shot model override.
-   * @param effort - Optional one-shot reasoning-effort override.
-   * @returns Promise resolving to the action execution result.
-   * @throws ApiError when the server rejects the request.
-   * @throws NetworkError when the request fails to reach the server.
-   */
-  async executeAction(
-    cardId: string,
-    actionName: string,
-    requestId: string,
-    messageId: string,
-    mode?: ExecutionMode,
-    exitWhenDone?: boolean,
-    selectedAgent?: CodingAgentId,
-    variableGroupIds?: string[],
-    model?: string,
-    effort?: string
-  ): Promise<ActionResult> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/actions/${encodeURIComponent(actionName)}`);
-    const body: ExecuteActionRequest = { requestId, messageId };
-    if (mode) body.mode = mode;
-    if (exitWhenDone) body.exitWhenDone = true;
-    if (selectedAgent) body.selectedAgent = selectedAgent;
-    if (variableGroupIds !== undefined) body.variableGroupIds = variableGroupIds;
-    if (model !== undefined) body.model = model;
-    if (effort !== undefined) body.effort = effort;
-    return this.request(() => this.getHttpClient().post<ActionResult>(url, body), false);
   }
 
   // --- Compare Operations ---

@@ -59,8 +59,7 @@ import {
   errorMessage,
   resolveBaseBranch,
   resolveMarketplacePath,
-  resolveOrCreateWorktree,
-  settleCardStatusForCleanup
+  resolveOrCreateWorktree
 } from './claude-session.js';
 import {
   CODEX_PLUGIN_CONTENT_STAMP,
@@ -1224,9 +1223,6 @@ export async function spawnOpencodeSession(
   // Settle the card's status (active → needs_review) before cleanup can
   // read it: the sweep's first gate is the on-disk status, which otherwise
   // races this exit path from a separate process. See
-  // {@link settleCardStatusForCleanup}.
-  await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
-
   // Post-exit cleanup: remove fully-merged branches. In background mode there
   // is no terminal to keep open, so the sweep runs inline before the action
   // resolves; in interactive mode a detached watcher takes over so the

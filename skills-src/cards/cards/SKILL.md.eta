@@ -156,7 +156,7 @@ Actions run interactively by default. `--background` is rejected with a 400 erro
 ```
 cards "$CARD_ID" shutdown --outcome success|blocked|error [--message "..."]
 ```
-Outcome defaults to `success`. Exit 0 confirms delivery; the handler terminates the session gracefully and the card still settles on `needs_review`. Without `SOCKET_PATH` the command exits non-zero — it only works inside an action.
+Outcome defaults to `success`. Exit 0 confirms durable acceptance by the authenticated runtime; the handler terminates the session gracefully and the card still settles on `needs_review`. Without protected runtime credentials the command exits non-zero — it only works inside an admitted action.
 
 **Watch for commits** — Block until the next unattributed commit on a card's repository:
 ```

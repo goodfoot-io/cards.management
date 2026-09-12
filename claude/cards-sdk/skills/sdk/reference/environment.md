@@ -18,7 +18,7 @@ CARDS_ENV_VARS.EXIT_WHEN_DONE                // 'EXIT_WHEN_DONE'
 CARDS_ENV_VARS.CODING_AGENT                  // 'CODING_AGENT'
 CARDS_ENV_VARS.VSCODE_NODE                   // 'VSCODE_NODE'
 CARDS_ENV_VARS.NODE                          // 'NODE'
-CARDS_ENV_VARS.SOCKET_PATH                   // 'SOCKET_PATH'
+CARDS_ENV_VARS.RUNTIME_CREDENTIAL_FILE       // 'CARDS_RUNTIME_CREDENTIAL_FILE'
 CARDS_ENV_VARS.SWITCH_TO_INTERACTIVE_DATA_PATH // 'SWITCH_TO_INTERACTIVE_DATA_PATH'
 CARDS_ENV_VARS.CONFIG_PATH                   // 'CONFIG_PATH'
 CARDS_ENV_VARS.WORKSPACE_PATH                // 'WORKSPACE_PATH'
@@ -128,12 +128,12 @@ The runtime exits 42 itself as part of the `onSwitchToInteractive` flow — see 
 
 ## Shutdown Signalling
 
-`EXIT_WHEN_DONE=true` tells the agent to check in at its terminal states; `SOCKET_PATH` is how it reports back. Any process inside an action tree can run:
+`EXIT_WHEN_DONE=true` tells the agent to check in at its terminal states. An admitted action receives a protected runtime credential file, and any process in that action tree can run:
 
 ```bash
 cards "$CARD_ID" shutdown --outcome success|blocked|error [--message "..."]
 ```
 
-The verb connects to `$SOCKET_PATH`, writes one `shutdownRequest` line, and exits 0 on delivery (missing/unreachable socket fails closed with guidance — there is no fallback surface). The dispatcher records the outcome, relays an `agentShutdown` command, and handlers registered via `context.onAgentShutdown` perform termination. The recorded outcome travels on `action:completed`; status still settles to `needs_review` regardless.
+The verb loads `CARDS_RUNTIME_CREDENTIAL_FILE`, rediscovers the authenticated runtime endpoint, and durably submits an `execution.shutdownRequest`. Missing credentials, discovery failure, or an uncertain acknowledgement exits non-zero and leaves the request available for an explicit retry. Platform drain hooks submit correlated readiness evidence before the runtime issues `execution.agentShutdownCommand`; completion is recorded as a durable terminal outcome.
 
 </instructions>

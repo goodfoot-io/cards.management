@@ -25,7 +25,6 @@ export type {
   CreateCardRequest,
   EnvironmentInfo,
   EnvironmentsResponse,
-  ExecuteActionRequest,
   GateApprovalResponse,
   GateName,
   HasUpdatesResponse,
@@ -86,9 +85,6 @@ export { buildHtmlFileCspPolicy } from './csp.js';
 // --- WebSocket Event Types ---
 export type {
   ActionClientMessage,
-  ActionExecuteRequestEvent,
-  ActionExecuteResultEvent,
-  ActionExecutorRegisterMessage,
   AttachmentAddedEvent,
   AttachmentRemovedEvent,
   CardCommitEvent,

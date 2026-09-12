@@ -60,25 +60,9 @@ Persisted by the same `persistSessionEnv()` call. Points to the Claude Code or C
 
 **Written by**: `writeRef()` in `public/packages/sdk/src/bin/adhoc-refs.ts`.
 
-**Read by**: `liveRefsRemain()` (checks if monitored processes are still alive), `reconcileStrandedActiveCards()` (finds orphaned active cards).
+**Read by**: `liveRefsRemain()` (checks if monitored processes are still alive).
 
-**Purpose**: The `adhoc-cleanup` daemon spawns when a session starts, records the agent PID, and monitors it. On PID death, it transitions the card to `needs_review`. The `.ref` file survives a daemon crash (OOM, SIGKILL, reboot), so a `.ref` whose PID is dead means the daemon died before settling the card — the sweep below picks it up.
-
-### Reconciliation Sweep
-
-**Source**: `public/packages/sdk/src/bin/adhoc-refs.ts`::`reconcileStrandedActiveCards()`.
-
-Backstop for a crashed `adhoc-cleanup` daemon. Runs at the start of **every** Claude Code and Codex session, via the `SessionStart` hook at `public/packages/agent-hooks/src/claude/runtime/session-start.ts` and its Codex counterpart, and at every Antigravity invocation via the runtime `PreInvocation` hook (`public/packages/agent-hooks/src/antigravity/`). OpenCode sessions have no session-start hook and get no sweep.
-
-**Mechanism step by step**:
-1. Scans all directories under `~/.cards/adhoc-active/{cardId}/`.
-2. For each card, reads all `.ref` files and tests whether any ref's PID is still alive (with start-time matching to defeat PID reuse).
-3. **If ANY ref is live**: The card has a healthy monitor — skipped entirely.
-4. **If ALL refs are dead**: The daemon crashed. The sweep checks whether a live action wrapper is present for that card (same fail-closed guard the daemon's own teardown uses).
-5. **If a live action wrapper IS present**: The sweep defers — retaining the dead refs so a later sweep can settle once the action clears.
-6. **If no action wrapper is present**: The sweep settles the card — transitions it from `active` to `needs_review` via `transitionCardStatus()` (filesystem fallback in `public/packages/sdk/src/bin/process-utils.ts`), and deletes the dead `.ref` files.
-
-**Narrow gap**: A daemon crash between the `active` API write and the `writeRef` call leaves the card `active` with no `.ref` file — invisible to the sweep, so it will not settle on its own.
+**Purpose**: The `adhoc-cleanup` daemon records the agent PID and monitors it. On PID death it requests `needs_review` through the Cards API; API failure is retained for explicit recovery and never falls back to editing card metadata.
 
 ### Session Locks
 

@@ -25,8 +25,7 @@ import {
   errorMessage,
   resolveBaseBranch,
   resolveMarketplacePath,
-  resolveOrCreateWorktree,
-  settleCardStatusForCleanup
+  resolveOrCreateWorktree
 } from './claude-session.js';
 import { buildPluginHooksState, type HooksJson, type HookTrustEntry } from './codex-hook-trust.js';
 import { createCodexTerminationController } from './codex-termination.js';
@@ -1011,9 +1010,6 @@ export async function spawnCodexSession(
   // Settle the card's status (active → needs_review) before the watcher can
   // read it: the sweep's first gate is the on-disk status, which otherwise
   // races this exit path from a separate process. See
-  // {@link settleCardStatusForCleanup}.
-  await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
-
   // Interactive sessions hand cleanup to a detached watcher so their terminal
   // closes immediately. Background actions have no terminal to release, so run
   // the same sweep inline before reporting completion.

@@ -34,9 +34,6 @@
  */
 
 import type { Card, CardRelation } from './card.js';
-import type { CodingAgentId } from './coding-agent.js';
-import type { OriginalCallerRequestId } from './runtime-admission.js';
-import type { ExecutionMode } from './settings.js';
 import type { CardStatus } from './status.js';
 import type { TimelineItem } from './timeline.js';
 
@@ -574,56 +571,6 @@ export interface EnvironmentInfo {
  * An array of available environments, each containing its action summaries.
  */
 export type EnvironmentsResponse = EnvironmentInfo[];
-
-/**
- * Request body for `POST /cards/:id/actions/:name`.
- *
- * Controls how the relayed action is executed by the extension client.
- */
-export interface ExecuteActionRequest {
-  /** Stable original caller identity, persisted before the first attempt. */
-  requestId: OriginalCallerRequestId;
-
-  /** Stable launch-message identity, persisted before the first attempt. */
-  messageId: string;
-
-  /** One-shot coding-agent override. Omitted to preserve default selection. */
-  selectedAgent?: CodingAgentId;
-
-  /** One-shot model override forwarded to the selected coding agent. */
-  model?: string;
-
-  /** One-shot reasoning-effort override forwarded to the selected coding agent. */
-  effort?: string;
-
-  /**
-   * Execution mode for the action.
-   *
-   * When omitted, the server runs the action interactively (the default). An
-   * explicit `'background'` request for an action that does not support
-   * background mode is rejected with 400.
-   */
-  mode?: ExecutionMode;
-
-  /**
-   * When true, the spawned agent is signalled to exit cleanly once the action
-   * completes rather than leaving the session open. When omitted, defaults to
-   * false.
-   */
-  exitWhenDone?: boolean;
-
-  /**
-   * Ordered one-shot variable-group selection for this launch.
-   *
-   * Omission preserves the persisted selection; an explicit empty array
-   * selects no variable groups.
-   */
-  variableGroupIds?: string[];
-}
-
-// ============================================================================
-// Health API Types
-// ============================================================================
 
 /**
  * Response from `GET /health`.

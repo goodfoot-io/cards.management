@@ -34,13 +34,7 @@ import {
 import { createAntigravityTerminationController } from './antigravity-termination.js';
 import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
 import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
-import {
-  cleanupMergedBranches,
-  errorMessage,
-  resolveBaseBranch,
-  resolveOrCreateWorktree,
-  settleCardStatusForCleanup
-} from './claude-session.js';
+import { cleanupMergedBranches, errorMessage, resolveBaseBranch, resolveOrCreateWorktree } from './claude-session.js';
 import { spawnAgentCli } from './spawn-cli.js';
 
 /**
@@ -602,7 +596,6 @@ export async function spawnAntigravitySession(
   // Settle before the mode split: both modes settle with the same policy and
   // differ only in who performs post-exit branch cleanup, and the settle has to
   // stay ahead of the cleanup watcher's on-disk status read in either mode.
-  await settleCardStatusForCleanup(input.cardRepoPath, context.logger);
 
   if (!isInteractive) {
     context.logger.info(`${input.actionName} background launch settled`, { sessionId });

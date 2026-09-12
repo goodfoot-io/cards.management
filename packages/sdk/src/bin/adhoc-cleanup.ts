@@ -5,13 +5,10 @@
  * Claude session enters a card-owned worktree. Marks the card `active` via the API client,
  * writes a per-card reference file (recording the agent PID and its start-time
  * to defeat PID reuse), then polls the agent PID. On PID death it performs
- * ref-counted teardown — flipping the card to `needs_review` (API first,
- * filesystem fallback) only when no other live ad-hoc session remains AND no
- * live action wrapper is present (the wrapper owns the lifecycle of a card it
- * is operating on). When the flip is deferred to a live action wrapper this
- * session's (dead-PID) ref is RETAINED so the reconciliation sweep settles the
- * card once the action clears; the ref is removed only on the paths where the
- * card's status is actually resolved. The de-dupe lock is released only by the
+ * ref-counted teardown — asking the Cards API to move the card to
+ * `needs_review` only when no other live ad-hoc session remains. API failure is
+ * surfaced and the reference remains for an explicit retry; teardown never
+ * edits or commits card metadata directly. The de-dupe lock is released only by the
  * cleanup that owns it: when a second card binds within an already-locked
  * session, its cleanup is spawned with an EMPTY lock path and never touches
  * the lock (or the session-scoped unbound-candidate state) on teardown.
@@ -28,7 +25,7 @@ import { createCardsClient } from '../client/api-discovery.js';
 import type { CardUpdateData } from '../client/types/client.js';
 import { clearUnboundCandidates } from '../unboundWorktreeCandidates.js';
 import { adhocActiveDir, liveRefsRemain, removeRef, writeRef } from './adhoc-refs.js';
-import { isProcessAliveWithStartTime, readProcessStartTime, transitionCardStatus } from './process-utils.js';
+import { isProcessAliveWithStartTime, readProcessStartTime } from './process-utils.js';
 
 export { adhocActiveDir, liveRefsRemain } from './adhoc-refs.js';
 
@@ -187,7 +184,7 @@ export async function performTeardown(
   args: Pick<AdhocCleanupArgs, 'sessionId' | 'cardId' | 'cardRepoPath' | 'lockPath'>,
   logger: CleanupLogger
 ): Promise<void> {
-  const { sessionId, cardId, cardRepoPath, lockPath } = args;
+  const { sessionId, cardId, lockPath } = args;
   try {
     if (await liveRefsRemain(cardId, sessionId, logger)) {
       // Another live ad-hoc session already owns `active`. This session's ref
@@ -195,21 +192,13 @@ export async function performTeardown(
       await removeRef(cardId, sessionId);
     } else {
       // No other live ad-hoc session remains, so this session resolves the card.
-      try {
-        await client.updateCard(cardId, { status: 'needs_review', author: 'system <system@cards.local>' });
-      } catch (error) {
-        logger.warn('API needs_review failed — falling back to filesystem', {
-          cardId,
-          error: error instanceof Error ? error.message : String(error)
-        });
-        await transitionCardStatus(cardRepoPath, logger);
-      }
+      await client.updateCard(cardId, { status: 'needs_review', author: 'system <system@cards.local>' });
       await removeRef(cardId, sessionId);
     }
   } finally {
     // Session-end teardown — lock-owner only. In a `finally` so a rethrow from
-    // transitionCardStatus (API-down + commit-failure) does not leak the lock
-    // or strand the per-session candidate directory. A non-owner cleanup
+    // API failure does not leak the lock or strand the per-session candidate
+    // directory. A non-owner cleanup
     // (empty lockPath) skips both: unlinking the lock would break the
     // one-watcher-per-session de-dupe, and the session-scoped candidate state
     // belongs to the lock owner.

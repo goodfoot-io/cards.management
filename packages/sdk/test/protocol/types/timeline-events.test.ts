@@ -248,10 +248,6 @@ describe('timeline event types', () => {
             return 'card-incoming-relations-changed';
           case 'cards:metadata':
             return 'cards-metadata';
-          case 'action:executeRequest':
-            return 'action-execute-request';
-          case 'action:executeResult':
-            return 'action-execute-result';
           case 'variableGroup:listRequest':
             return 'variable-group-list-request';
           case 'variableGroup:listResult':

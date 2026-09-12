@@ -175,37 +175,15 @@ describe('performTeardown', () => {
     await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  it('releases the lock even when the API write throws and the filesystem fallback runs', async () => {
+  it('fails closed without mutating card metadata when the API write throws', async () => {
     const ownRef = join(adhocActiveDir(cardId), `${sessionId}.ref`);
     await writeFile(ownRef, String(process.pid));
-    // Client throws on the needs_review write → filesystem fallback transitions
-    // the real repo; the lock must still be released via the finally.
     const client = new RecordingClient(true);
 
-    await performTeardown(client, teardownArgs(), noopLogger);
+    await expect(performTeardown(client, teardownArgs(), noopLogger)).rejects.toThrow();
 
-    expect(await status()).toBe('needs_review');
+    expect(await status()).toBe('active');
+    await expect(access(ownRef)).resolves.toBeUndefined();
     await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
-  });
-
-  it('releases the lock on the transitionCardStatus rethrow path', async () => {
-    const ownRef = join(adhocActiveDir(cardId), `${sessionId}.ref`);
-    await writeFile(ownRef, String(process.pid));
-
-    // Point the fallback at a non-git directory with an `active` card so
-    // `git add`/`commit` fail and transitionCardStatus rethrows; the lock must
-    // still be released via the finally (it would otherwise leak).
-    const badRepo = await mkdtemp(join(tmpdir(), 'adhoc-teardown-badrepo-'));
-    await writeFile(join(badRepo, 'CARD.meta.json'), JSON.stringify({ id: cardId, status: 'active' }, null, 2));
-    const client = new RecordingClient(true);
-
-    try {
-      await expect(
-        performTeardown(client, { sessionId, cardId, cardRepoPath: badRepo, lockPath }, noopLogger)
-      ).rejects.toThrow();
-      await expect(access(lockPath)).rejects.toMatchObject({ code: 'ENOENT' });
-    } finally {
-      await rm(badRepo, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-    }
   });
 });

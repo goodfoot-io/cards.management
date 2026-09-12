@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ActionExecutorRegisterMessage, DomainEvent, ValidationErrorCode } from '../../src/protocol/index.js';
+import type { DomainEvent, ValidationErrorCode } from '../../src/protocol/index.js';
 import { CODING_AGENT_IDS, isCodingAgentId, TAG_PATTERN } from '../../src/protocol/index.js';
 
 /**
@@ -17,19 +17,6 @@ describe('Input Constraints', () => {
     expect(isCodingAgentId('antigravity-cli')).toBe(true);
     expect(isCodingAgentId('unknown-cli')).toBe(false);
     expect(isCodingAgentId(42)).toBe(false);
-  });
-
-  it('requires executor registrations to identify both workspace and repository', () => {
-    const registration: ActionExecutorRegisterMessage = {
-      type: 'action:executorRegister',
-      workspacePath: '/workspace/project',
-      repositoryId: 'github.com/example/project'
-    };
-    expect(registration).toEqual({
-      type: 'action:executorRegister',
-      workspacePath: '/workspace/project',
-      repositoryId: 'github.com/example/project'
-    });
   });
 
   it('TAG_PATTERN matches lowercase alphanumeric with hyphens', () => {
