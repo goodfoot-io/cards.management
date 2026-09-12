@@ -168,12 +168,9 @@ export async function main(logger: CleanupLogger = consoleLogger): Promise<void>
  * exit by the cleanup that OWNS it (`lockPath` non-empty); a non-owner cleanup
  * (second card bound under an already-held session lock, spawned with an
  * empty `lockPath`) leaves both the lock and the session-scoped
- * unbound-candidate state to the owner. This session's REF is only removed once the card's
- * status is actually resolved. Crucially the ref-removal decision happens AFTER
- * the deferral decision: if the flip is deferred because a live action owns the
- * card, this session's (dead-PID) ref is RETAINED so the reconciliation sweep
- * can settle the card later, once the action clears. Removing it here would
- * strand the card `active` with an empty ref dir that the sweep skips.
+ * unbound-candidate state to the owner. This session's ref is removed only
+ * after another live session is confirmed or the Cards API accepts the final
+ * status update. An API failure keeps the ref as durable retry evidence.
  *
  * @param client - Cards client used for the `needs_review` API write.
  * @param args - The session/card/lock identifiers for this teardown.
