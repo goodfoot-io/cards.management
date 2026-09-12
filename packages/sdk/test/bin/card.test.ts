@@ -70,6 +70,7 @@ import {
   connectClient,
   createCard,
   executeAction,
+  executeCliAction,
   listCards,
   listVariableGroups,
   parseCardCreateInput,
@@ -673,6 +674,22 @@ describe('card binary', () => {
 
     beforeEach(() => {
       cards.set('card-1', { id: 'card-1', title: 'Test', status: 'todo' });
+    });
+
+    it('reuses a persisted ordinary-CLI identity after an uncertain response', async () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const originalExitCode = process.exitCode;
+      try {
+        actionResult = { disposition: 'unavailable', reason: 'admission-store-unavailable', execution: null };
+        await executeCliAction('card-1', 'launch', { background: true });
+        actionResult = { disposition: 'rejected', reason: 'parameter-mismatch', execution: null };
+        await executeCliAction('card-1', 'launch', { background: true });
+        expect(actionRequests).toHaveLength(2);
+        expect(actionRequests[1]!.body).toEqual(actionRequests[0]!.body);
+      } finally {
+        process.exitCode = originalExitCode;
+        logSpy.mockRestore();
+      }
     });
 
     it('forwards ordered variable-group IDs including an explicit empty selection', async () => {

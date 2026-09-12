@@ -9,8 +9,8 @@
  */
 
 import { execFile, execFileSync, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
@@ -34,7 +34,8 @@ import { discoverApiInfo } from '@cards.management/sdk/client/discovery';
 import {
   createRuntimeActionClient,
   createRuntimeClientFromCredentialFile,
-  loadRuntimeCredential
+  loadRuntimeCredential,
+  type RuntimeActionLaunchResult
 } from '@cards.management/sdk/client/runtime';
 import { createFileClientOutbox, resolveOutboxRoot } from '@cards.management/sdk/client/runtime/outbox';
 import { readPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
@@ -1254,9 +1255,7 @@ async function htmlCommand(args: string[]): Promise<void> {
  * @param opts.selectedAgent - Optional one-shot coding-agent override.
  * @param opts.variableGroupIds - Ordered one-shot variable-group selection.
  *   Omitted to preserve persisted selection; an empty array selects none.
- * @remarks `requestId` and `messageId` are an intermediate programmatic ingress
- * contract. Milestone 4 must mint and persist them at the outermost CLI caller;
- * accepting flags here does not itself provide end-user retry persistence.
+ * @returns The canonical durable launch outcome.
  */
 export async function executeAction(
   cardId: string,
@@ -1270,7 +1269,7 @@ export async function executeAction(
     selectedAgent?: CodingAgentId;
     variableGroupIds?: string[];
   }
-): Promise<void> {
+): Promise<RuntimeActionLaunchResult> {
   const mode: ExecutionMode = opts.background ? 'background' : 'interactive';
   const client = await connectClient();
   const card = await client.getCard(cardId);
@@ -1294,6 +1293,89 @@ export async function executeAction(
   });
   console.log(formatOutput(result, opts.jsonPath));
   if (result.status === 'rejected' || result.status === 'uncertain') process.exitCode = 1;
+  return result;
+}
+
+interface CliActionOptions {
+  jsonPath?: string;
+  background?: boolean;
+  exitWhenDone?: boolean;
+  selectedAgent?: CodingAgentId;
+  variableGroupIds?: string[];
+}
+
+interface CliActionIdentity {
+  requestId: string;
+  messageId: string;
+}
+
+function cliActionOperationDirectory(cardId: string, actionName: string, opts: CliActionOptions): string {
+  const operation = JSON.stringify({ cardId, actionName, opts });
+  const key = createHash('sha256').update(operation).digest('hex');
+  return join(resolveGlobalCardsConfigDir(), 'runtime', 'cli-action-operations', key);
+}
+
+/**
+ * Acquires the durable identity for an ordinary CLI action invocation.
+ *
+ * A temporary directory is populated before an atomic rename publishes it. A
+ * concurrent or restarted invocation therefore observes either the complete
+ * prior identity or wins publication of its own, never a partial record.
+ *
+ * @param cardId - Card identifier included in the operation key.
+ * @param actionName - Action identifier included in the operation key.
+ * @param opts - Immutable action options included in the operation key.
+ * @returns The acquired identity and its durable operation directory.
+ * @throws When persistent identity storage cannot be read or written.
+ */
+export function acquireCliActionIdentity(
+  cardId: string,
+  actionName: string,
+  opts: CliActionOptions
+): { identity: CliActionIdentity; operationDirectory: string } {
+  const operationDirectory = cliActionOperationDirectory(cardId, actionName, opts);
+  const identityPath = join(operationDirectory, 'identity.json');
+  try {
+    return {
+      identity: JSON.parse(readFileSync(identityPath, 'utf8')) as CliActionIdentity,
+      operationDirectory
+    };
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
+  const identity = { requestId: randomUUID(), messageId: randomUUID() };
+  const parent = join(resolveGlobalCardsConfigDir(), 'runtime', 'cli-action-operations');
+  mkdirSync(parent, { recursive: true, mode: 0o700 });
+  const temporary = join(parent, `.pending-${process.pid}-${randomUUID()}`);
+  mkdirSync(temporary, { mode: 0o700 });
+  writeFileSync(join(temporary, 'identity.json'), `${JSON.stringify(identity)}\n`, { mode: 0o600 });
+  try {
+    renameSync(temporary, operationDirectory);
+    return { identity, operationDirectory };
+  } catch (error) {
+    rmSync(temporary, { recursive: true, force: true });
+    if ((error as NodeJS.ErrnoException).code !== 'EEXIST' && (error as NodeJS.ErrnoException).code !== 'ENOTEMPTY') {
+      throw error;
+    }
+    return {
+      identity: JSON.parse(readFileSync(identityPath, 'utf8')) as CliActionIdentity,
+      operationDirectory
+    };
+  }
+}
+
+/**
+ * Executes an ordinary CLI action while retaining identity only for uncertain custody.
+ *
+ * @param cardId - Card identifier.
+ * @param actionName - Action identifier.
+ * @param opts - Immutable action options.
+ */
+export async function executeCliAction(cardId: string, actionName: string, opts: CliActionOptions): Promise<void> {
+  const { identity, operationDirectory } = acquireCliActionIdentity(cardId, actionName, opts);
+  const outcome = await executeAction(cardId, actionName, { ...identity, ...opts });
+  if (outcome.status !== 'uncertain') rmSync(operationDirectory, { recursive: true, force: true });
 }
 
 /**
@@ -1676,19 +1758,10 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
         run = Promise.resolve().then(() => {
           const actionFlags = parseFlags(process.argv.slice(5), new Set(['background', 'exit-when-done']));
           const selectedAgent = actionFlags['agent']?.[0];
-          const requestId = actionFlags['request-id']?.[0];
-          const messageId = actionFlags['message-id']?.[0];
           if (selectedAgent !== undefined && !isCodingAgentId(selectedAgent)) {
             throw new Error(`invalid coding agent "${selectedAgent}"; expected one of: ${CODING_AGENT_IDS.join(', ')}`);
           }
-          if (requestId === undefined || messageId === undefined) {
-            throw new Error(
-              'action requires --request-id and --message-id from an outer caller that persists retry identity'
-            );
-          }
-          return executeAction(command, actionId, {
-            requestId,
-            messageId,
+          return executeCliAction(command, actionId, {
             jsonPath: actionFlags['jsonpath']?.[0],
             background: actionFlags['background'] !== undefined,
             exitWhenDone: actionFlags['exit-when-done'] !== undefined,
