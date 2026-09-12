@@ -78,7 +78,7 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes a
 
 ### Corruption Recovery
 
-On `SQLITE_CORRUPT`, `SQLITE_NOTADB`, `SQLITE_IOERR`, or FTS corruption (`vtable constructor failed`), the database is deleted and rebuilt from card repositories (Git repos are the source of truth). WAL/SHM/journal files are also cleaned up.
+On `SQLITE_CORRUPT`, `SQLITE_NOTADB`, `SQLITE_IOERR`, or FTS corruption (`vtable constructor failed` or `cards_fts has an unexpected schema`), the database is deleted and rebuilt from card repositories (Git repos are the source of truth). WAL/SHM/journal files are also cleaned up.
 
 **Source**: the extension's database-corruption check, run whenever opening the database fails.
 
