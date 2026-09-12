@@ -25,7 +25,7 @@ import { createCardsClient } from '../client/api-discovery.js';
 import type { CardUpdateData } from '../client/types/client.js';
 import { clearUnboundCandidates } from '../unboundWorktreeCandidates.js';
 import { adhocActiveDir, liveRefsRemain, removeRef, writeRef } from './adhoc-refs.js';
-import { isProcessAliveWithStartTime, readProcessStartTime } from './process-utils.js';
+import { readProcessStartTime } from './process-utils.js';
 
 export { adhocActiveDir, liveRefsRemain } from './adhoc-refs.js';
 
@@ -123,6 +123,9 @@ export async function main(logger: CleanupLogger = consoleLogger): Promise<void>
 
   // Capture the monitored PID's start-time to defeat PID reuse.
   const startTime = readProcessStartTime(agentPid);
+  if (startTime === null) {
+    throw new Error(`Cannot monitor PID ${agentPid}: process start time is unavailable`);
+  }
 
   const client = await createCardsClient();
   if (client === null) {
@@ -152,7 +155,7 @@ export async function main(logger: CleanupLogger = consoleLogger): Promise<void>
   await writeRef(cardId, sessionId, agentPid);
 
   // 3. Poll the PID until it dies (or is recycled to a different process).
-  while (isProcessAliveWithStartTime(agentPid, startTime)) {
+  while (readProcessStartTime(agentPid) === startTime) {
     await new Promise<void>((resolve) => setTimeout(resolve, PID_POLL_INTERVAL_MS));
   }
 

@@ -5,17 +5,17 @@
  * monitored agent PID and its start-time so a recycled PID (PID reuse) reads as
  * dead. Status settlement remains an authenticated Cards API operation.
  *
- * @summary Ad-hoc attribution refs, action-presence, and reconciliation sweep
+ * @summary Strict process-identity references for ad-hoc attribution ownership
  * @module
  */
 
 import { readdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '../cards-config.js';
-import { isProcessAliveWithStartTime, readProcessStartTime } from './process-utils.js';
+import { readProcessStartTime } from './process-utils.js';
 
 /**
- * Minimal logger interface used by ref/sweep helpers.
+ * Minimal logger interface used by reference helpers.
  */
 export interface AdhocRefsLogger {
   warn(message: string, data?: Record<string, unknown>): void;
@@ -27,8 +27,8 @@ export interface AdhocRefsLogger {
 export interface AdhocRef {
   /** Monitored agent PID. */
   pid: number;
-  /** Start-time token captured when monitoring began, or null when unavailable. */
-  startTime: string | null;
+  /** Start-time token captured when monitoring began. */
+  startTime: string;
 }
 
 /**
@@ -54,33 +54,34 @@ export function adhocActiveDir(cardId: string): string {
 }
 
 /**
- * Serializes a ref's contents to the on-disk format (`pid` then start-time on
- * the next line, when known).
+ * Serializes a ref's contents to the on-disk format (`pid` then mandatory
+ * start-time token on the next line).
  *
  * @param pid - Monitored agent PID.
- * @param startTime - Start-time token, or null when unavailable.
+ * @param startTime - Non-empty process start-time token.
  * @returns The file contents to write.
+ * @throws When the PID or start-time token cannot identify one process instance.
  */
-export function serializeRef(pid: number, startTime: string | null): string {
-  return startTime === null ? String(pid) : `${pid}\n${startTime}`;
+export function serializeRef(pid: number, startTime: string): string {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Ad-hoc ref PID must be a positive integer');
+  if (startTime.trim().length === 0) throw new Error('Ad-hoc ref requires a process start-time token');
+  return `${pid}\n${startTime.trim()}`;
 }
 
 /**
- * Parses a ref file's contents into a {@link AdhocRef}, or null when the PID is
- * unparseable.
- *
- * Accepts both the legacy single-line (`pid` only) format and the two-line
- * (`pid` + start-time) format.
+ * Parses a ref file's contents into a {@link AdhocRef}. Missing or malformed
+ * identity fields fail closed.
  *
  * @param content - Raw file contents.
- * @returns The parsed ref, or null when the PID cannot be read.
+ * @returns The parsed ref, or null when either identity field is invalid.
  */
 export function parseRef(content: string): AdhocRef | null {
   const lines = content.split('\n');
   const pid = Number(lines[0]?.trim());
-  if (!Number.isFinite(pid) || pid <= 0) return null;
+  if (!Number.isSafeInteger(pid) || pid <= 0) return null;
   const startTime = lines[1]?.trim();
-  return { pid, startTime: startTime && startTime.length > 0 ? startTime : null };
+  if (!startTime || startTime.length === 0 || lines.slice(2).some((line) => line.trim().length > 0)) return null;
+  return { pid, startTime };
 }
 
 /**
@@ -108,6 +109,7 @@ async function unlinkIfExists(path: string): Promise<void> {
  */
 export async function writeRef(cardId: string, sessionId: string, pid: number): Promise<void> {
   const startTime = readProcessStartTime(pid);
+  if (startTime === null) throw new Error(`Cannot record ad-hoc ref for PID ${pid}: process start time is unavailable`);
   const refPath = join(adhocActiveDir(cardId), `${sessionId}.ref`);
   await writeFile(refPath, serializeRef(pid, startTime), 'utf-8');
 }
@@ -160,7 +162,7 @@ export async function liveRefsRemain(cardId: string, sessionId: string, logger: 
       continue;
     }
 
-    if (ref && isProcessAliveWithStartTime(ref.pid, ref.startTime)) {
+    if (ref && readProcessStartTime(ref.pid) === ref.startTime) {
       anyLive = true;
     } else {
       // Stale ref from a crashed cleanup or a recycled PID — unlink it.

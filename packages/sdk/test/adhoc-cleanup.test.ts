@@ -15,11 +15,34 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { adhocActiveDir, liveRefsRemain, performTeardown, type TeardownClient } from '../src/bin/adhoc-cleanup.js';
+import { parseRef, serializeRef } from '../src/bin/adhoc-refs.js';
+import { readProcessStartTime } from '../src/bin/process-utils.js';
 import { resolveGlobalCardsConfigDir } from '../src/cards-config.js';
 import type { CardUpdateData } from '../src/client/types/client.js';
 import { addUnboundCandidate } from '../src/unboundWorktreeCandidates.js';
 
 const noopLogger = { warn: () => {} };
+
+function liveRef(pid: number): string {
+  const startTime = readProcessStartTime(pid);
+  if (startTime === null) throw new Error(`Missing process start time for test PID ${pid}`);
+  return serializeRef(pid, startTime);
+}
+
+describe('ad-hoc ref format', () => {
+  it('requires both a PID and process start token', () => {
+    expect(parseRef('123')).toBeNull();
+    expect(parseRef('123\n')).toBeNull();
+    expect(parseRef('1.5\nstart')).toBeNull();
+    expect(parseRef('123\nstart\nunexpected')).toBeNull();
+    expect(parseRef('123\nstart')).toEqual({ pid: 123, startTime: 'start' });
+  });
+
+  it('refuses to serialize a missing start token', () => {
+    expect(() => serializeRef(123, '')).toThrow(/start-time token/);
+    expect(() => serializeRef(1.5, 'start')).toThrow(/positive integer/);
+  });
+});
 
 /**
  * Spawns a cross-platform long-lived child process with a real, live PID.
@@ -71,14 +94,14 @@ describe('liveRefsRemain', () => {
   });
 
   it('returns false when only the dying session ref remains', async () => {
-    await writeFile(join(adhocActiveDir(cardId), `${dyingSession}.ref`), String(process.pid));
+    await writeFile(join(adhocActiveDir(cardId), `${dyingSession}.ref`), liveRef(process.pid));
     expect(await liveRefsRemain(cardId, dyingSession, noopLogger)).toBe(false);
   });
 
   it('returns true when another session ref has a live PID', async () => {
     const child = spawnSleep();
     try {
-      await writeFile(join(adhocActiveDir(cardId), 'other-session.ref'), String(child.pid));
+      await writeFile(join(adhocActiveDir(cardId), 'other-session.ref'), liveRef(child.pid!));
       expect(await liveRefsRemain(cardId, dyingSession, noopLogger)).toBe(true);
     } finally {
       child.kill('SIGKILL');
@@ -87,7 +110,7 @@ describe('liveRefsRemain', () => {
 
   it('unlinks a stale dead-PID ref and returns false', async () => {
     const staleRef = join(adhocActiveDir(cardId), 'stale-session.ref');
-    await writeFile(staleRef, '2147483646');
+    await writeFile(staleRef, '2147483646\n1');
 
     expect(await liveRefsRemain(cardId, dyingSession, noopLogger)).toBe(false);
 
