@@ -22,17 +22,14 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { resolveGlobalCardsConfigDir } from '@cards.management/sdk';
-import { runReconciliationSweep } from '@cards.management/sdk/bin/adhoc-refs';
 import { spawnStreamSyncWatcher } from '@cards.management/sdk/bin/spawn-stream-sync-watcher';
+import { resolveGlobalCardsConfigDir } from '@cards.management/sdk/cards-config';
 import {
   type ActionInput,
   clearPendingShutdownRequest,
   extractActionInput,
   type PendingShutdownRequest,
-  readPendingShutdownRequest,
-  type ShutdownReadyMessage,
-  sendShutdownReady
+  readPendingShutdownRequest
 } from '@cards.management/sdk/config';
 import { findAgentPid, isAgentProcessTreeDrained } from '@cards.management/sdk/process-tree';
 import type { SessionSyncManifest } from '@cards.management/sdk/transcript-sync';
@@ -53,6 +50,9 @@ import {
   removeSessionHeadSha,
   removeSessionRouteNudge
 } from '@cards.management/sessions/card-repo';
+import { deliverShutdownReadiness } from '../../shared/shutdown-drain.js';
+import type { WorkAuthority } from '../../shared/work-authority.js';
+import { createHookWorkAuthority } from '../../shared/work-authority.js';
 import { canonicalConversationDbPath, resolveCardsSessionId } from './inputs.js';
 import type { AntigravityIo } from './io.js';
 import { defaultAntigravityIo } from './io.js';
@@ -91,6 +91,8 @@ export { ANTIGRAVITY_STREAM_TYPE };
  * @summary Overridable edges for Antigravity runtime handlers
  */
 export interface AntigravityHandlerDeps {
+  /** Authenticated authority gating root and child work boundaries. */
+  workAuthority: WorkAuthority;
   /** Filesystem seam backing the marker store and cleanup steps. */
   io: AntigravityIo;
   /** Cards global configuration directory (honors `$CARDS_HOME`). */
@@ -132,12 +134,10 @@ export interface AntigravityHandlerDeps {
   readCardMeta(cardRepoPath: string): AntigravityCardMeta;
   /** Loads the session's pending shutdown request, when one exists. */
   readPendingShutdownRequest(sessionId: string): PendingShutdownRequest | undefined;
-  /** Sends the shutdown-ready acknowledgement over the action socket. */
-  sendShutdownReady(socketPath: string, message: ShutdownReadyMessage): Promise<void>;
+  /** Sends readiness through the authenticated runtime authority. */
+  deliverShutdownReadiness(sessionId: string, request: PendingShutdownRequest): Promise<void>;
   /** Clears the session's pending shutdown request after acknowledgement. */
   clearPendingShutdownRequest(sessionId: string, requestId: string): void;
-  /** Runs the bounded dead-ad-hoc-monitor reconciliation sweep (best-effort). */
-  runReconciliationSweep(logger: { warn(message: string, data?: Record<string, unknown>): void }): Promise<void>;
   /** Proves the agent's process tree holds no work outside the hook branch. */
   isAgentProcessTreeDrained(agentPid: number): Promise<boolean | null>;
   /** Absolute path of the installed merge runbook (`card` skill references). */
@@ -180,6 +180,10 @@ export function resolveRunbookFrom(fromUrl: string, relative: string): string {
  */
 export function defaultAntigravityHandlerDeps(): AntigravityHandlerDeps {
   return {
+    workAuthority: {
+      admit: async (boundary) => createHookWorkAuthority().admit(boundary),
+      observeRevision: async () => createHookWorkAuthority().observeRevision()
+    },
     io: defaultAntigravityIo,
     cardsConfigDir: () => resolveGlobalCardsConfigDir(),
     loadActionInput: () => {
@@ -226,14 +230,11 @@ export function defaultAntigravityHandlerDeps(): AntigravityHandlerDeps {
     },
     readCardMeta: (cardRepoPath) => JSON.parse(readFileSync(join(cardRepoPath, 'CARD.meta.json'), 'utf-8')),
     readPendingShutdownRequest: (sessionId) => readPendingShutdownRequest(sessionId),
-    sendShutdownReady: async (socketPath, message) => {
-      await sendShutdownReady(socketPath, message);
+    deliverShutdownReadiness: async (sessionId, request) => {
+      await deliverShutdownReadiness(sessionId, request);
     },
     clearPendingShutdownRequest: (sessionId, requestId) => {
       clearPendingShutdownRequest(sessionId, requestId);
-    },
-    runReconciliationSweep: async (logger) => {
-      await runReconciliationSweep(logger);
     },
     isAgentProcessTreeDrained: async (agentPid) => isAgentProcessTreeDrained(agentPid),
     mergeRunbookPath: () => resolveRunbook('merge.md'),

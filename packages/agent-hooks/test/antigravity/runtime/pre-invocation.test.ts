@@ -1,15 +1,14 @@
 /**
  * Tests for the Antigravity PreInvocation handler contract: registration,
- * card-context readiness, watcher setup, and the marker invariants — the
- * failure marker is the only kind, written by the transport on both paths,
- * and no path writes a marker the launcher is not owed.
+ * card-context readiness, watcher setup, and the ready/failure marker
+ * invariants.
  *
  * @summary Tests for the Antigravity PreInvocation handler
  */
 
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AntigravityHandlerDeps } from '../../../src/antigravity/internal/deps.js';
 import { type HandlerFailure, handlePreInvocation } from '../../../src/antigravity/internal/handlers.js';
 import { defaultAntigravityIo } from '../../../src/antigravity/internal/io.js';
@@ -47,8 +46,8 @@ function cardsHome(): string {
   return join(root, 'cards-home');
 }
 
-function sessionMarkerDir(): string {
-  return join(cardsHome(), 'antigravity', 'runtime', 'markers', SESSION_ID);
+function readyMarker(): string {
+  return markerPath(cardsHome(), SESSION_ID, CONVERSATION_ID, 'ready');
 }
 
 function failureMarker(): string {
@@ -78,10 +77,43 @@ async function run(
 }
 
 describe('PreInvocation success contract', () => {
-  it('returns no message and writes no runtime marker on the host 0-indexed first invocation', async () => {
+  it('admits the root invocation before registration and watcher work', async () => {
+    const admit = vi.fn(async () => ({ workRevision: 1 }));
+    const { failure } = await run({ workAuthority: { admit, observeRevision: async () => 0 } });
+    expect(failure).toBeNull();
+    expect(admit).toHaveBeenCalledWith(
+      expect.objectContaining({ cause: 'turn', requestId: `antigravity:turn:${CONVERSATION_ID}:0` })
+    );
+  });
+
+  it('fails closed before setup when root admission is rejected', async () => {
+    const { failure, recorders } = await run({
+      workAuthority: {
+        admit: async () => {
+          throw new Error('drain barrier held');
+        },
+        observeRevision: async () => 0
+      }
+    });
+    expect(failure?.reason).toContain('drain barrier held');
+    expect(recorders.watcherSpawns).toEqual([]);
+  });
+
+  it('returns no message and writes the ready marker on the host 0-indexed first invocation', async () => {
     const { result } = await run();
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(true);
+  });
+
+  it('records the durable session ↔ conversation mapping in the ready marker', async () => {
+    const { failure } = await run();
+    expect(failure).toBeNull();
+    expect(JSON.parse(defaultAntigravityIo.readTextFileSync(readyMarker()))).toEqual({
+      conversationId: CONVERSATION_ID,
+      sessionId: SESSION_ID,
+      transcriptPath: join(root, 'gemini-home', '.gemini', 'antigravity-cli', 'conversations', `${CONVERSATION_ID}.db`),
+      modelName: 'gemini-3-pro'
+    });
   });
 
   it('registers the session → worktree/transcript mapping', async () => {
@@ -112,12 +144,6 @@ describe('PreInvocation success contract', () => {
     );
     expect(registered).not.toBe(join(root, 'transcripts', `${CONVERSATION_ID}.jsonl`));
     expect(existsSync(registered as string)).toBe(false);
-  });
-
-  it('runs the reconciliation sweep', async () => {
-    const { failure, recorders } = await run();
-    expect(failure).toBeNull();
-    expect(recorders.reconciliations).toBe(1);
   });
 
   it('spawns the watcher with the canonical sqlite-poll manifest keyed by the agent PID', async () => {
@@ -186,9 +212,12 @@ describe('Cards Assistant PreInvocation contract', () => {
       }
     ]);
     expect(recorders.watcherSpawns).toEqual([]);
-    // Registration is the whole contract: the Assistant path publishes no
-    // launcher-facing evidence, so it leaves no marker behind.
-    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
+    expect(JSON.parse(defaultAntigravityIo.readTextFileSync(readyMarker()))).toMatchObject({
+      sessionId: SESSION_ID,
+      windowId: 'window-453',
+      workspacePath: join(root, 'workspace'),
+      conversationId: CONVERSATION_ID
+    });
   });
 
   it('keeps a foreign agy session inert even when it inherits a session-like variable', async () => {
@@ -200,7 +229,7 @@ describe('Cards Assistant PreInvocation contract', () => {
     expect(result?.output).toEqual({});
     expect(recorders.registrations).toEqual([]);
     expect(recorders.watcherSpawns).toEqual([]);
-    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails an Assistant launch when its window identity is missing', async () => {
@@ -212,6 +241,7 @@ describe('Cards Assistant PreInvocation contract', () => {
 
     expect(failure?.stage).toBe('session-identity');
     expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 });
 
@@ -220,7 +250,7 @@ describe('PreInvocation failure contract', () => {
     delete process.env['CARD_ID'];
     const { result } = await run();
     expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(sessionMarkerDir())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed on invalid input and scopes the failure marker to the conversation', async () => {
@@ -234,6 +264,7 @@ describe('PreInvocation failure contract', () => {
     };
     expect(payload.stage).toBe('input');
     expect(payload.reason).toContain('transcriptPath');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('scopes the failure marker to the unknown-conversation placeholder when no conversation id arrived', async () => {
@@ -248,32 +279,38 @@ describe('PreInvocation failure contract', () => {
     const { failure } = await run({ resolveSessionId: () => null });
     expect(failure?.stage).toBe('session-identity');
     expect(defaultAntigravityIo.existsSync(markerPath(cardsHome(), null, CONVERSATION_ID, 'failure'))).toBe(true);
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the action environment is broken', async () => {
     const { failure } = await run({ loadActionInput: () => null });
     expect(failure?.stage).toBe('action-env');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the card repository is inaccessible', async () => {
     rmSync(join(root, 'cards', 'main-453', 'CARD.meta.json'));
     const { failure } = await run();
     expect(failure?.stage).toBe('card-context');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the agent PID cannot be identified', async () => {
     const { failure } = await run({ findMonitorPid: async () => null });
     expect(failure?.stage).toBe('watcher-setup');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the manifest builder rejects the canonical conversation DB path', async () => {
     const { failure } = await run({ conversationDbPath: () => join(root, 'conversations', 'wrong.jsonl') });
     expect(failure?.stage).toBe('watcher-setup');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the watcher spawn does not happen', async () => {
     const { failure } = await run({ spawnWatcher: () => false });
     expect(failure?.stage).toBe('watcher-setup');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when session registration fails', async () => {
@@ -283,5 +320,22 @@ describe('PreInvocation failure contract', () => {
       }
     });
     expect(failure?.stage).toBe('session-registration');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
+  });
+
+  it('fails closed when the ready marker cannot be written', async () => {
+    const failingIo = {
+      ...defaultAntigravityIo,
+      writeTextFileSync: (path: string, data: string) => {
+        if (path.endsWith('.ready')) {
+          throw new Error('read-only filesystem');
+        }
+        defaultAntigravityIo.writeTextFileSync(path, data);
+      }
+    };
+    const { failure } = await run({ io: failingIo });
+    expect(failure?.stage).toBe('ready-marker');
+    expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
+    expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
   });
 });

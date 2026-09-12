@@ -4,12 +4,12 @@
  * @summary Tests for the OpenCode stop-exit-when-done handler
  */
 
-import * as net from 'node:net';
 import { join } from 'node:path';
 import type { ActionInput } from '@cards.management/sdk/config';
 import { readPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStopExitWhenDonePlugin } from '../../../src/opencode/internal/runtime-handlers.js';
+import { deliverShutdownReadiness } from '../../../src/shared/shutdown-drain.js';
 import {
   type LogEntry,
   makeCardRepo,
@@ -26,6 +26,8 @@ let tempDir: string;
 let logEntries: LogEntry[];
 const stderrWrites: string[] = [];
 let stderrSpy: ReturnType<typeof vi.spyOn>;
+vi.mock('../../../src/shared/shutdown-drain.js', () => ({ deliverShutdownReadiness: vi.fn(async () => undefined) }));
+const mockDeliverShutdownReadiness = vi.mocked(deliverShutdownReadiness);
 
 beforeEach(() => {
   tempDir = makeTempDir('exit-done');
@@ -164,36 +166,15 @@ describe('CardsStopExitWhenDone (runtime)', () => {
   });
 
   describe('pending shutdown drain acknowledgement', () => {
-    // Real storage/socket, no module mocks: `readPendingShutdownRequest` and
-    // `sendShutdownReady` operate on `~/.cards/card-repo-commits/` and a real
-    // Unix socket, so the fixture redirects HOME and listens on a real socket
-    // exactly as the production `cards shutdown` -> Stop-hook handoff does.
+    // The durable pending-request marker uses the redirected Cards home. Runtime
+    // readiness delivery is observed at the authenticated transport boundary.
     let originalHome: string | undefined;
-    let socketPath: string;
-    let server: net.Server;
-    let received: Array<{ type: string; requestId: string }>;
-
-    beforeEach(async () => {
+    beforeEach(() => {
       originalHome = process.env['HOME'];
       process.env['HOME'] = tempDir;
-      socketPath = join(tempDir, 'action.sock');
-      received = [];
-      server = net.createServer((socket) => {
-        let buffer = '';
-        socket.on('data', (chunk) => {
-          buffer += chunk.toString();
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? '';
-          for (const line of lines) {
-            if (line.length > 0) received.push(JSON.parse(line));
-          }
-        });
-      });
-      await new Promise<void>((resolve) => server.listen(socketPath, resolve));
     });
 
-    afterEach(async () => {
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+    afterEach(() => {
       if (originalHome === undefined) {
         delete process.env['HOME'];
       } else {
@@ -201,16 +182,21 @@ describe('CardsStopExitWhenDone (runtime)', () => {
       }
     });
 
-    it('acknowledges shutdownReady on the socket once the idle session has no pending request', async () => {
+    it('submits durable runtime readiness once the idle session has no pending work', async () => {
       // Bug reproduction: the OpenCode exit-when-done plugin only ever logs a
       // nudge telling the model to run `cards shutdown` — it never reads the
-      // durable pending-request marker that verb writes, and never sends the
-      // `shutdownReady` acknowledgement the ActionDispatcher's readiness gate
+      // durable pending-request marker that verb writes, and never submits the
+      // current-revision readiness evidence the runtime authority
       // (packages/extension/src/runtime/ActionDispatcher.ts) waits on before
       // forwarding `agentShutdown`. Without this, OpenCode shutdowns can never
       // clear the 30s readiness timeout, so the owned process tree is left
       // running instead of being terminated.
-      writePendingShutdownRequest('ses-root', { version: 1, requestId: 'req-1', socketPath });
+      writePendingShutdownRequest('ses-root', {
+        version: 1,
+        requestId: 'req-1',
+        messageId: 'msg-1',
+        outcome: 'success'
+      });
 
       // Real `isAgentProcessTreeDrained` probe against the real `ps -e` table:
       // point the owned-tree root at this actual test process (matching how
@@ -225,27 +211,27 @@ describe('CardsStopExitWhenDone (runtime)', () => {
       await hooks.event?.(sessionCreatedEvent('ses-root'));
       await hooks.event?.(sessionIdleEvent('ses-root'));
 
-      // The plugin's `event` handler already awaits `sendShutdownReady`'s
-      // socket.write/end completion before returning, but that callback fires
-      // once the OS accepts the write — not once the server's 'data' handler
-      // has actually processed it. Poll with a generous bound instead of a
-      // single fixed sleep, which flaked under parallel test-file load.
-      const deadline = Date.now() + 2_000;
-      while (received.length === 0 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-
-      expect(received).toContainEqual({ type: 'shutdownReady', requestId: 'req-1' });
+      // The plugin's event handler awaits durable runtime acceptance before it
+      // clears the correlated request marker.
+      expect(mockDeliverShutdownReadiness).toHaveBeenCalledWith(
+        'ses-root',
+        expect.objectContaining({ requestId: 'req-1' })
+      );
       expect(readPendingShutdownRequest('ses-root')).toBeUndefined();
     });
 
-    it('acknowledges shutdownReady even when EXIT_WHEN_DONE is false or absent (regression)', async () => {
+    it('submits runtime readiness even when EXIT_WHEN_DONE is false or absent (regression)', async () => {
       // Bug: the drain-ack was gated behind `actionInput?.exitWhenDone`, so a
       // plain `Chat`-launched session (which never sets EXIT_WHEN_DONE=true)
       // could never acknowledge a pending `cards shutdown` request, no matter
       // how long it sat idle. The drain-ack must be unconditional; only the
       // separate exit-when-done nudge should depend on that flag.
-      writePendingShutdownRequest('ses-root', { version: 1, requestId: 'req-2', socketPath });
+      writePendingShutdownRequest('ses-root', {
+        version: 1,
+        requestId: 'req-2',
+        messageId: 'msg-2',
+        outcome: 'success'
+      });
 
       const { deps } = makeDeps(tempDir, {
         // No loadActionInput override: defaults to `() => null`, matching a
@@ -257,12 +243,10 @@ describe('CardsStopExitWhenDone (runtime)', () => {
       await hooks.event?.(sessionCreatedEvent('ses-root'));
       await hooks.event?.(sessionIdleEvent('ses-root'));
 
-      const deadline = Date.now() + 2_000;
-      while (received.length === 0 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-
-      expect(received).toContainEqual({ type: 'shutdownReady', requestId: 'req-2' });
+      expect(mockDeliverShutdownReadiness).toHaveBeenCalledWith(
+        'ses-root',
+        expect.objectContaining({ requestId: 'req-2' })
+      );
       expect(readPendingShutdownRequest('ses-root')).toBeUndefined();
       // No exit-when-done nudge should have fired for this non-exit-when-done session.
       expect(deps.markers.hasExitWhenDoneFired('ses-root')).toBe(false);
@@ -273,7 +257,12 @@ describe('CardsStopExitWhenDone (runtime)', () => {
       // drain-ack still runs, and the function must not also fire the nudge
       // on the same idle event (matches the existing early-return-after-
       // pendingRequest-handling behavior).
-      writePendingShutdownRequest('ses-root', { version: 1, requestId: 'req-3', socketPath });
+      writePendingShutdownRequest('ses-root', {
+        version: 1,
+        requestId: 'req-3',
+        messageId: 'msg-3',
+        outcome: 'success'
+      });
 
       const { deps } = makeDeps(tempDir, {
         loadActionInput: () => actionInput(true),
@@ -284,12 +273,10 @@ describe('CardsStopExitWhenDone (runtime)', () => {
       await hooks.event?.(sessionCreatedEvent('ses-root'));
       await hooks.event?.(sessionIdleEvent('ses-root'));
 
-      const deadline = Date.now() + 2_000;
-      while (received.length === 0 && Date.now() < deadline) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
-
-      expect(received).toContainEqual({ type: 'shutdownReady', requestId: 'req-3' });
+      expect(mockDeliverShutdownReadiness).toHaveBeenCalledWith(
+        'ses-root',
+        expect.objectContaining({ requestId: 'req-3' })
+      );
       expect(readPendingShutdownRequest('ses-root')).toBeUndefined();
       expect(deps.markers.hasExitWhenDoneFired('ses-root')).toBe(false);
     });

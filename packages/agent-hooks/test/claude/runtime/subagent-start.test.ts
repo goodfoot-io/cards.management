@@ -8,9 +8,15 @@ import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { extractActionInput } from '@cards.management/sdk/config';
 import { TestGitWorkspace } from '@cards.management/test-utils';
-import { Logger } from '@goodfoot/agent-hooks/claude-code';
+import { Logger, subagentStartHook } from '@goodfoot/agent-hooks/claude-code';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import hook from '../../../src/claude/runtime/subagent-start.js';
+import { createClaudeSubagentStartHandler } from '../../../src/claude/runtime/subagent-start.js';
+
+const admission = vi.fn(async () => ({ workRevision: 1 }));
+const hook = subagentStartHook(
+  {},
+  createClaudeSubagentStartHandler(() => ({ admit: admission, observeRevision: async () => 1 }))
+);
 
 vi.mock('@cards.management/sdk/config', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cards.management/sdk/config')>();
@@ -68,6 +74,7 @@ describe('SubagentStart Hook', () => {
     let ACTION_ENV: Record<string, string>;
 
     beforeEach(() => {
+      admission.mockClear();
       ACTION_ENV = {
         CARD_ID: 'card-123',
         ACTION_NAME: 'Launch Claude',
@@ -108,6 +115,8 @@ describe('SubagentStart Hook', () => {
     it('returns additionalContext with XML context blocks', async () => {
       const result = await hook(baseInput, context);
 
+      expect(admission).toHaveBeenCalledOnce();
+
       expect(result).toHaveProperty('_type', 'SubagentStart');
       expect(result).toHaveProperty('stdout');
 
@@ -122,6 +131,12 @@ describe('SubagentStart Hook', () => {
 
       // additionalContext mirrors systemMessage
       expect(stdout.hookSpecificOutput?.additionalContext).toBe(stdout.systemMessage);
+    });
+
+    it('blocks child startup when durable admission fails', async () => {
+      admission.mockRejectedValueOnce(new Error('drain barrier held'));
+      const result = await hook(baseInput, context);
+      expect(result?.stdout.continue).toBe(false);
     });
 
     it('returns continue:false when card repo is inaccessible', async () => {

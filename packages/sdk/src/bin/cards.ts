@@ -1348,6 +1348,7 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
   const credential = loadRuntimeCredential('cli');
   const client = createRuntimeClientFromCredentialFile({
     role: 'cli',
+    capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
     outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
     discover: async () => ({ host: info.host, port: info.port, accessToken: info.accessToken }),
     onMessage: () => undefined

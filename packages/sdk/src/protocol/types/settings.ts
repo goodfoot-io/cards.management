@@ -230,8 +230,8 @@ export interface Environment {
  * Cards assistant handler configuration in settings.json.
  *
  * Defines the command used to launch the cards assistant, which operates
- * outside the per-card action pipeline (no card context, no worktree,
- * no socket, no ActionDispatcher).
+ * outside the per-card action pipeline (no card context, worktree, or
+ * per-action runtime authority).
  */
 export interface CardsAssistant {
   /** Command to execute for the cards assistant handler */
@@ -292,6 +292,18 @@ export interface ActionState {
    */
   mode: 'interactive' | 'background';
 
+  /** Authoritative runtime transport state; absence is never interpreted as terminal. */
+  runtimeConnection?: 'connected' | 'reconnecting' | 'disconnected' | 'unknown';
+
+  /** Last authenticated runtime contact, as a Unix timestamp in milliseconds. */
+  runtimeLastContactAt?: number;
+
+  /** Next scheduled reconnect attempt, as a Unix timestamp in milliseconds. */
+  runtimeRetryAt?: number;
+
+  /** Last authoritative transport rejection, retained while retrying. */
+  runtimeRejection?: string;
+
   /**
    * When present, indicates this is a synthetic terminal ActionState broadcast
    * for an action that was rejected by the coding-agent gate before dispatch.
@@ -311,11 +323,14 @@ export interface ActionState {
   /** Current phase of the correlated, bounded shutdown lifecycle. */
   shutdownState?: 'pending' | 'readiness_timeout' | 'terminating' | 'graceful' | 'forced' | 'failed';
 
+  /** Durable shutdown intent exists but cannot yet be safely completed. */
+  shutdownDisposition?: 'pending' | 'deferred' | 'terminal';
+
   /** Terminal result reported by the action handler after agent termination. */
   terminationResult?: 'graceful' | 'forced' | 'failed';
 
   /**
-   * Capabilities the running handler has advertised over the socket.
+   * Capabilities the running handler has advertised through the authenticated runtime.
    *
    * `switchToInteractive` is true when the handler called
    * `context.onSwitchToInteractive(...)`. The webview uses this to enable or

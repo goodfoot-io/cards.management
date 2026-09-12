@@ -4,7 +4,7 @@
  *
  * Each handler maps one Antigravity host event to the shared internals the
  * existing hosts already use — action-env extraction, session registration,
- * reconciliation, watcher setup, the idle/route/merge/shutdown decision, and
+ * watcher setup, the idle/route/merge/shutdown decision, and
  * process/session drain — under the Antigravity host contract's failure
  * policy: contract violations write a conversation-scoped failure marker and
  * never guess a continuation.
@@ -17,12 +17,14 @@
  * @module internal/handlers
  */
 
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import type { ActionInput, PendingShutdownRequest } from '@cards.management/sdk/config';
 import { getBaseBranch, getWorkspaceBranch, getWorkspacePath } from '@cards.management/sdk/config';
 import type { SessionSyncManifest } from '@cards.management/sdk/transcript-sync';
 import type { Logger } from '@goodfoot/agent-hooks';
 import { buildAdditionalContext } from '../../shared/context.js';
+import type { WorkAuthority } from '../../shared/work-authority.js';
 import { ANTIGRAVITY_STREAM_TYPE, type AntigravityCardMeta, type AntigravityHandlerDeps } from './deps.js';
 import {
   type AntigravityInvocationInput,
@@ -31,9 +33,11 @@ import {
   isCardsActionSession,
   parseCommonInput,
   parseInvocationInput,
+  parsePreToolUseInput,
   peekConversationId
 } from './inputs.js';
-import { postInvocationOutput, preInvocationOutput, stopOutput } from './outputs.js';
+import { markerPath, type ReadyMarkerPayload, type RouteMarkerPayload, writeMarker } from './markers.js';
+import { postInvocationOutput, preInvocationOutput, preToolUseOutput, stopOutput } from './outputs.js';
 
 /**
  * The contract stage a {@link HandlerFailure} occurred at, recorded in the
@@ -47,8 +51,10 @@ export type HandlerFailureStage =
   | 'session-registration'
   | 'session-cleanup'
   | 'watcher-setup'
+  | 'ready-marker'
   | 'decision'
   | 'drain-ack'
+  | 'drain-marker'
   | 'unexpected';
 
 /**
@@ -77,21 +83,83 @@ export interface AntigravityHandlerResult {
   output?: unknown;
 }
 
+/** Dependencies of the before-subagent admission gate. */
+export interface AntigravityPreToolUseDeps {
+  /** Authenticated durable authority injected by the entrypoint. */
+  readonly workAuthority: WorkAuthority;
+}
+
 /**
- * Registers a workspace/window Assistant invocation without entering any
- * card-action routing or settlement path.
+ * Gates `invoke_subagent` before child work starts.
  *
- * Registration is the whole contract: the session identity the launcher
- * exported pre-spawn is bound to its conversation and workspace so
- * `cards create`/`attach` and transcript resolution can find it. Nothing is
- * published back to the launcher — an Assistant launch is not gated on hook
- * evidence, and the only marker this path can produce is the shared failure
- * marker the transport writes when the contract is violated.
+ * @param raw - Host `PreToolUse` payload.
+ * @param deps - Injected durable work authority.
+ * @returns Allow only after admission; otherwise deny.
+ */
+export async function handlePreToolUse(
+  raw: unknown,
+  deps: AntigravityPreToolUseDeps
+): Promise<AntigravityHandlerResult> {
+  if (!isCardsActionSession()) return { output: preToolUseOutput({ decision: 'allow' }) };
+  const input = parsePreToolUseInput(raw);
+  const normalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(normalize);
+    if (typeof value !== 'object' || value === null) return value;
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, normalize(entry)])
+    );
+  };
+  const digest = createHash('sha256')
+    .update(
+      JSON.stringify(
+        normalize({
+          conversationId: input.conversationId,
+          stepIdx: input.stepIdx,
+          toolCall: input.toolCall
+        })
+      )
+    )
+    .digest('hex');
+  const identity = `antigravity:${input.conversationId}:${input.stepIdx}:${digest}`;
+  try {
+    await deps.workAuthority.admit({ cause: 'childTask', messageId: identity, requestId: identity });
+    return { output: preToolUseOutput({ decision: 'allow' }) };
+  } catch (error) {
+    return {
+      output: preToolUseOutput({
+        decision: 'deny',
+        reason: `Cards durable child admission failed: ${error instanceof Error ? error.message : String(error)}`
+      })
+    };
+  }
+}
+
+/** Durable workspace/window registration emitted for Cards Assistant. */
+export interface CardsAssistantRuntimeRegistration {
+  /** Cards-owned session identity inherited from the launcher. */
+  sessionId: string;
+  /** VS Code window/session identity that owns this Assistant process. */
+  windowId: string;
+  /** Exact active workspace selected as the launch cwd. */
+  workspacePath: string;
+  /** Host conversation identity from the pinned hook input. */
+  conversationId: string;
+  /** Canonical read-only SQLite conversation path for this conversation. */
+  transcriptPath: string;
+  /** Host model name recorded for diagnostics. */
+  modelName: string;
+}
+
+/**
+ * Registers and marks a workspace/window Assistant invocation without
+ * entering any card-action routing or settlement path.
  *
  * @param raw - Raw pinned PreInvocation input.
  * @param ctx - Handler dependencies and logger.
  * @returns The standard no-message PreInvocation response.
- * @throws {HandlerFailure} When identity or registration fails.
+ * @throws {HandlerFailure} When identity, registration, or ready-marker persistence fails.
  */
 export async function handleCardsAssistantPreInvocation(
   raw: unknown,
@@ -121,11 +189,28 @@ export async function handleCardsAssistantPreInvocation(
     );
   }
 
-  logger.info('Antigravity Cards Assistant session registered', {
+  const registration: CardsAssistantRuntimeRegistration = {
     sessionId,
     windowId,
+    workspacePath,
     conversationId: input.conversationId,
-    transcriptPath
+    transcriptPath,
+    modelName: input.modelName
+  };
+  try {
+    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'ready'), registration);
+  } catch (error) {
+    throw new HandlerFailure(
+      'ready-marker',
+      error instanceof Error ? error.message : String(error),
+      input.conversationId
+    );
+  }
+
+  logger.info('Antigravity Cards Assistant session ready', {
+    sessionId,
+    windowId,
+    conversationId: input.conversationId
   });
   return { output: preInvocationOutput() };
 }
@@ -137,7 +222,7 @@ export async function handleCardsAssistantPreInvocation(
  * @param raw - Raw pinned Stop input.
  * @param ctx - Handler dependencies and logger.
  * @returns The standard no-decision Stop response.
- * @throws {HandlerFailure} When registration/artifact cleanup fails.
+ * @throws {HandlerFailure} When registration/artifact cleanup or drain-marker persistence fails.
  */
 export async function handleCardsAssistantStop(raw: unknown, ctx: HandlerContext): Promise<AntigravityHandlerResult> {
   const { deps, logger } = ctx;
@@ -162,6 +247,15 @@ export async function handleCardsAssistantStop(raw: unknown, ctx: HandlerContext
     );
   }
 
+  try {
+    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'drain-ready'));
+  } catch (error) {
+    throw new HandlerFailure(
+      'drain-marker',
+      error instanceof Error ? error.message : String(error),
+      input.conversationId
+    );
+  }
   logger.info('Antigravity Cards Assistant cleanup complete', { sessionId, conversationId: input.conversationId });
   return { output: stopOutput() };
 }
@@ -273,12 +367,10 @@ function requireCardContext(actionInput: ActionInput, conversationId: string | n
  *
  * Contract: requires `conversationId`, non-empty `workspacePaths`,
  * `transcriptPath`, `artifactDirectoryPath`, `modelName`, `invocationNum`,
- * and `initialNumSteps`; returns no message. Success is the pinned no-message
- * output plus the registered session and spawned watcher — no durable marker
- * proves it, because the launcher's completion policy reads the native exit
- * status. Missing/invalid input, inaccessible card context, or watcher setup
- * failure prevents action success: it writes the failure marker and the
- * launcher terminates the child.
+ * and `initialNumSteps`; returns no message. Success writes the
+ * conversation-scoped ready marker. Missing/invalid input, inaccessible card
+ * context, or watcher setup failure prevents action success: it writes the
+ * failure marker and the launcher terminates the child.
  *
  * @param raw - The raw stdin JSON value.
  * @param ctx - Handler dependencies and logger.
@@ -297,13 +389,15 @@ export async function handlePreInvocation(raw: unknown, ctx: HandlerContext): Pr
 
   const input = parseInvocationOrThrow(raw);
   const sessionId = requireSessionId(deps, input.conversationId);
-
-  // Best-effort reconciliation of cards left `active` by dead ad-hoc
-  // monitors — never blocks session start (Codex session-start parity).
+  const hostBoundaryId = `antigravity:turn:${input.conversationId}:${input.invocationNum}`;
   try {
-    await deps.runReconciliationSweep(logger);
+    await deps.workAuthority.admit({ cause: 'turn', messageId: hostBoundaryId, requestId: hostBoundaryId });
   } catch (error) {
-    logger.warn('reconciliation sweep failed', { error: error instanceof Error ? error.message : String(error) });
+    throw new HandlerFailure(
+      'decision',
+      `work admission failed: ${error instanceof Error ? error.message : String(error)}`,
+      input.conversationId
+    );
   }
 
   const actionInput = requireActionInput(deps, input.conversationId);
@@ -350,6 +444,22 @@ export async function handlePreInvocation(raw: unknown, ctx: HandlerContext): Pr
   } catch (error) {
     throw new HandlerFailure(
       'session-registration',
+      error instanceof Error ? error.message : String(error),
+      input.conversationId
+    );
+  }
+
+  const readyPayload: ReadyMarkerPayload = {
+    conversationId: input.conversationId,
+    sessionId,
+    transcriptPath: conversationDbPath,
+    modelName: input.modelName
+  };
+  try {
+    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'ready'), readyPayload);
+  } catch (error) {
+    throw new HandlerFailure(
+      'ready-marker',
       error instanceof Error ? error.message : String(error),
       input.conversationId
     );
@@ -490,9 +600,8 @@ function requireUnmergedCommitCount(
  * `postInvocationOutput({ injectSteps: [{ ephemeralMessage }] })` only when
  * another model step is required. Decision errors write a failure marker and
  * inject no guessed route. A route is emitted at most once per state
- * transition, guarded by the shared once-per-session store
- * (`hasRouteNudgeFired`/`markRouteNudgeFired`); the injected step is the
- * route's whole record, and an idle turn writes nothing durable.
+ * transition (the shared once-per-session route markers); action settlement
+ * requires the durable decision/idle marker, not hook exit zero.
  *
  * @param raw - The raw stdin JSON value.
  * @param ctx - Handler dependencies and logger.
@@ -516,13 +625,11 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
     if (pendingRequest !== undefined) {
       const drained = await isSessionStrictlyDrained(sessionId, deps, input.conversationId);
       if (drained) {
-        await deps.sendShutdownReady(pendingRequest.socketPath, {
-          type: 'shutdownReady',
-          requestId: pendingRequest.requestId
-        });
+        await deps.deliverShutdownReadiness(sessionId, pendingRequest);
         deps.clearPendingShutdownRequest(sessionId, pendingRequest.requestId);
         logger.info('Acknowledged shutdown readiness', { sessionId });
       }
+      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'idle'));
       return { output: postInvocationOutput() };
     }
 
@@ -552,6 +659,9 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
 
     if (mergeDecision !== null) {
       deps.sessionMarkers.markRouteNudgeFired(sessionId);
+      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'route'), {
+        kind: 'merge'
+      } satisfies RouteMarkerPayload);
       logger.info('Injecting merge route', { sessionId, count: mergeDecision.count });
       return {
         output: postInvocationOutput({
@@ -573,6 +683,9 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
     // should run the shutdown verb. At most once per session.
     if (actionInput.exitWhenDone && !deps.sessionMarkers.hasExitWhenDoneFired(sessionId)) {
       deps.sessionMarkers.markExitWhenDoneFired(sessionId);
+      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'route'), {
+        kind: 'shutdown'
+      } satisfies RouteMarkerPayload);
       logger.info('Injecting shutdown route', { sessionId });
       return {
         output: postInvocationOutput({
@@ -591,9 +704,9 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
       };
     }
 
-    // 4. Idle: the decision machinery ran and required no next step. Nothing
-    // durable records it: a route is visible by the step it injected, and a
-    // run that injected none has no marker to read.
+    // 4. Idle: the decision machinery ran and required no next step. The
+    // durable marker — not hook exit zero — is what action settlement reads.
+    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'idle'));
     return { output: postInvocationOutput() };
   } catch (error) {
     if (error instanceof HandlerFailure) {
@@ -620,16 +733,16 @@ function writeFlushSentinel(deps: AntigravityHandlerDeps, cardRepoPath: string, 
  * `Stop` — process/session drain and call-scoped cleanup.
  *
  * Contract: requires `conversationId` plus the pinned common host fields;
- * returns no `continue` decision. Cleanup is idempotent and its completion is
- * carried by the exit status alone — no durable marker records it. It never
+ * returns no `continue` decision. Cleanup is idempotent and records drain
+ * readiness; a missing acknowledgement blocks Cards settlement. It never
  * uses `decision: "continue"` to turn cleanup failure into another model
  * turn.
  *
  * The pending-shutdown acknowledgement is settlement-critical: a failure
- * there (or an unprovable drain state) writes the failure marker and skips
- * the acknowledgement, so the launcher's bounded wait fails closed. The flush
- * sentinel and session-artifact cleanup are best-effort — the watcher
- * provides crash resilience, and leftover artifacts are harmless.
+ * there (or an unprovable drain state) writes the failure marker and
+ * withholds drain readiness, so the launcher's bounded wait fails closed.
+ * The flush sentinel and session-artifact cleanup are best-effort — the
+ * watcher provides crash resilience, and leftover artifacts are harmless.
  *
  * @param raw - The raw stdin JSON value.
  * @param ctx - Handler dependencies and logger.
@@ -651,8 +764,8 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
   const actionInput = requireActionInput(deps, input.conversationId);
 
   // 1. Pending-shutdown handshake under the strict drain authority. A
-  // failed acknowledgement must block settlement: throw before the response
-  // that reports Stop succeeded.
+  // failed acknowledgement must block settlement: throw before the
+  // drain-ready marker exists.
   let pendingRequest: PendingShutdownRequest | undefined;
   try {
     pendingRequest = deps.readPendingShutdownRequest(sessionId);
@@ -675,10 +788,7 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
     }
     if (drained) {
       try {
-        await deps.sendShutdownReady(pendingRequest.socketPath, {
-          type: 'shutdownReady',
-          requestId: pendingRequest.requestId
-        });
+        await deps.deliverShutdownReadiness(sessionId, pendingRequest);
         deps.clearPendingShutdownRequest(sessionId, pendingRequest.requestId);
         logger.info('Acknowledged shutdown readiness', { sessionId });
       } catch (error) {
@@ -709,6 +819,17 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
       sessionId,
       error: error instanceof Error ? error.message : String(error)
     });
+  }
+
+  // 4. Drain readiness: the idempotent acknowledgement the launcher waits for.
+  try {
+    writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'drain-ready'));
+  } catch (error) {
+    throw new HandlerFailure(
+      'drain-marker',
+      error instanceof Error ? error.message : String(error),
+      input.conversationId
+    );
   }
 
   logger.info('Antigravity session cleanup complete', { sessionId, conversationId: input.conversationId });

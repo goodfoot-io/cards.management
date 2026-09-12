@@ -34,12 +34,12 @@ import { join } from 'node:path';
 import {
   CARDS_ENV_VARS,
   clearPendingShutdownRequest,
+  extractActionInput,
   getBaseBranch,
   getCardRepoPath,
   getWorkspaceBranch,
   getWorkspacePath,
-  readPendingShutdownRequest,
-  sendShutdownReady
+  readPendingShutdownRequest
 } from '@cards.management/sdk/config';
 import { isAgentProcessTreeDrained } from '@cards.management/sdk/process-tree';
 import type { OpencodeManifestInput } from '@cards.management/sdk/transcript-sync/adapters';
@@ -47,6 +47,7 @@ import { getActiveSubagentCount } from '@cards.management/sessions/card-repo';
 import type { Plugin } from '@opencode-ai/plugin';
 import { buildAdditionalContext, CardRepoAccessError } from '../../shared/context.js';
 import { isSessionIdle } from '../../shared/session-idle.js';
+import { deliverShutdownReadiness } from '../../shared/shutdown-drain.js';
 import { createOpencodeLog, type OpencodeLog } from '../hook-log.js';
 import {
   createRootSessionRegistry,
@@ -145,10 +146,16 @@ interface RuntimeSessionRecord {
  * inert plugin when this returns false — accidental global registration stays
  * silent and side-effect-free instead of idling loudly on every hook.
  *
- * @returns `true` when `CARD_ID` is present in the process environment.
+ * @returns `true` when the complete Cards action envelope is present and valid.
  */
 export function isCardsActionSession(): boolean {
-  return Boolean(process.env[CARDS_ENV_VARS.CARD_ID]);
+  if (!process.env[CARDS_ENV_VARS.CARD_ID]) return false;
+  try {
+    extractActionInput();
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -895,7 +902,7 @@ async function isOpencodeSessionStrictlyIdle(sessionId: string, deps: OpencodeHa
  *
  * 1. **Drain-ack (unconditional).** Once the `cards shutdown` verb has run,
  *    it durably records a pending shutdown request
- *    (`readPendingShutdownRequest`/`sendShutdownReady` in
+ *    (`readPendingShutdownRequest`/`deliverShutdownReadiness` in
  *    `@cards.management/sdk/config`) that this plugin must acknowledge before
  *    `ActionDispatcher` (packages/extension/src/runtime/ActionDispatcher.ts)
  *    will forward `agentShutdown` to the launcher. On every idle event for a
@@ -969,10 +976,7 @@ export function createStopExitWhenDonePlugin(deps: OpencodeHandlerDeps = default
               return;
             }
             try {
-              await sendShutdownReady(pendingRequest.socketPath, {
-                type: 'shutdownReady',
-                requestId: pendingRequest.requestId
-              });
+              await deliverShutdownReadiness(sessionId, pendingRequest);
               clearPendingShutdownRequest(sessionId, pendingRequest.requestId);
             } catch (error) {
               await log.warn('stop-exit-when-done: failed to acknowledge shutdown readiness', {

@@ -34,6 +34,7 @@ const optionsFor = (
 ): RuntimeClientOptions => ({
   identity: makeIdentity(),
   credential: makeCredential(),
+  capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
   outbox: new MemoryOutbox(),
   authorities: makeAcceptingAuthorities(),
   discover: async () => ({ host: '127.0.0.1', port: target.port, accessToken: 'token-1' }),

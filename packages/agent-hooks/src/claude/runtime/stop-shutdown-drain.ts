@@ -4,7 +4,7 @@
  * Correlates a pending `cards shutdown` request against a strict, fail-closed
  * idle check (tracked subagents plus the launcher-owned process tree) and only
  * then signals readiness back to the action dispatcher over the request's
- * per-action socket. Matcher-less so it composes alongside `stop.ts`'s
+ * authenticated runtime authority. Matcher-less so it composes alongside `stop.ts`'s
  * unattributed-commit check in the same Stop event group; each hook is
  * independent and neither blocks nor depends on the other.
  *

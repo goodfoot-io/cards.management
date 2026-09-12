@@ -281,6 +281,7 @@ export {
   MAX_CONTROL_FRAME_BYTES,
   RUNTIME_MESSAGE_PAYLOADS,
   RUNTIME_MESSAGE_TYPES,
+  type RuntimeCapabilities,
   type RuntimeMessageType,
   type RuntimePayload,
   runtimeMessageTypeSchema

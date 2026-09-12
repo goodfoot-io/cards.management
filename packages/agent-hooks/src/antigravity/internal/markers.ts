@@ -3,20 +3,16 @@
  *
  * The Antigravity adapter is a set of one-shot subprocesses: unlike the
  * OpenCode plugins, no state survives between hook invocations, so the
- * launcher-facing protocol lives entirely on disk. One durable marker
- * survives; the proof markers (`ready`, `route`, `idle`, `drain-ready`) are
- * retired, because an action's outcome rides the native exit status and the
- * bounded stderr latch, and positive launcher-written proof was never what
- * the launcher needed to learn:
+ * launcher-facing protocol lives entirely on disk. Every handler terminates
+ * its conversation's protocol in exactly one durable marker:
  *
  * | Marker | Written by | Meaning |
  * |---|---|---|
+ * | `ready` | PreInvocation | Registration, card context, and watcher setup succeeded; the launcher may proceed. |
  * | `failure` | any handler | The contract failed at `stage` with `reason`; the launcher must fail the action. |
- *
- * `failure` is the one marker the native process cannot replace: a failing
- * hook leaves `agy` exiting 0 with an empty stderr and a `SUCCESS` record, so
- * the marker is that class's only channel. It is read at close on both paths —
- * the action's outcome gate and the Assistant's window-owned lifecycle.
+ * | `route` | PostInvocation | A route step was injected this session (`merge` or `shutdown`). |
+ * | `idle` | PostInvocation | The decision machinery ran and required no next step. |
+ * | `drain-ready` | Stop | Idempotent cleanup finished; the launcher may settle. |
  *
  * Markers live under `<cards-config-dir>/antigravity/runtime/markers/`, keyed
  * first by the Cards session id the launcher exported pre-spawn (the launcher
@@ -33,8 +29,8 @@
 import { join } from 'node:path';
 import type { AntigravityIo } from './io.js';
 
-/** The runtime marker kinds. */
-export type RuntimeMarkerKind = 'failure';
+/** The five runtime marker kinds. */
+export type RuntimeMarkerKind = 'ready' | 'failure' | 'route' | 'idle' | 'drain-ready';
 
 /** Placeholder for a marker whose input carried no conversation id. */
 export const UNKNOWN_CONVERSATION = 'unknown-conversation';
@@ -42,12 +38,30 @@ export const UNKNOWN_CONVERSATION = 'unknown-conversation';
 /** Placeholder directory for markers whose session identity could not be resolved. */
 export const UNATTRIBUTED_SESSION = 'unattributed';
 
+/** Payload of the `ready` marker: the durable session ↔ conversation mapping. */
+export interface ReadyMarkerPayload {
+  /** Host conversation id the marker is scoped to. */
+  conversationId: string;
+  /** Cards session id the launcher exported pre-spawn. */
+  sessionId: string;
+  /** Canonical conversation DB path registered and watched for the session. */
+  transcriptPath: string;
+  /** Model name reported by the host. */
+  modelName: string;
+}
+
 /** Why a handler wrote the `failure` marker. */
 export interface FailureMarkerPayload {
   /** Contract stage the failure occurred at (e.g. `input`, `watcher-setup`). */
   stage: string;
   /** Human-readable reason the launcher surfaces. */
   reason: string;
+}
+
+/** Which route a `route` marker records as already injected. */
+export interface RouteMarkerPayload {
+  /** Which route was injected this session. */
+  kind: 'merge' | 'shutdown';
 }
 
 /**

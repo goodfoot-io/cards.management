@@ -94,7 +94,11 @@ describe('runtime action HTTP client', () => {
     });
   });
 
-  it('maps a completed replay to completed with its durable launch outcome', async () => {
+  it.each([
+    ['spawned', 'accepted'],
+    ['failed', 'completed'],
+    ['uncertain', 'uncertain']
+  ] as const)('maps a %s replay to %s without inventing terminal completion', async (disposition, status) => {
     await listen((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
       response.end(
@@ -102,13 +106,13 @@ describe('runtime action HTTP client', () => {
           disposition: 'replayed',
           execution: EXECUTION,
           spawnPhase: 'confirmed',
-          retrievedOutcome: { disposition: 'spawned', processBootId: 'boot-1' }
+          retrievedOutcome: { disposition, processBootId: 'boot-1' }
         })
       );
     });
 
     await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
-      status: 'completed',
+      status,
       requestId: 'request-1'
     });
   });
@@ -136,13 +140,32 @@ describe('runtime action HTTP client', () => {
         JSON.stringify({
           status: 'completed',
           execution: EXECUTION,
-          retrievedOutcome: { disposition: 'spawned', processBootId: 'boot-1' }
+          retrievedOutcome: { disposition: 'spawned', processBootId: 'boot-1' },
+          terminalOutcome: { exitCode: 0, signal: null, lifecycleState: 'completed', statusMutationDeferred: false }
         })
       );
     });
 
     await expect(client?.retrieve('main/card', 'request/one')).resolves.toMatchObject({ status: 'completed' });
     expect(requests[0]?.url).toBe('/cards/main%2Fcard/runtime/actions/request%2Fone');
+  });
+
+  it('refuses to infer terminal completion from a spawned launch without cleanup proof', async () => {
+    await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          status: 'completed',
+          execution: EXECUTION,
+          retrievedOutcome: { disposition: 'spawned', processBootId: 'boot-1' }
+        })
+      );
+    });
+
+    await expect(client?.retrieve('main-672', 'request-1')).resolves.toMatchObject({
+      status: 'uncertain',
+      reason: 'invalid-response'
+    });
   });
 
   it('distinguishes authentication rejection, server unavailability, and invalid responses', async () => {

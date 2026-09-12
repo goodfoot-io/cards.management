@@ -98,10 +98,8 @@ export interface DepsRecorders {
   watcherSpawns: Array<{ manifest: SessionSyncManifest; extensionPath?: string }>;
   /** Session registrations (sessionId, worktreeDir, transcriptPath). */
   registrations: Array<{ sessionId: string; worktreeDir: string; transcriptPath: string }>;
-  /** Number of reconciliation sweeps that ran. */
-  reconciliations: number;
   /** Acknowledged shutdown requests. */
-  shutdownAcks: Array<{ socketPath: string; requestId: string }>;
+  shutdownAcks: Array<{ transport: 'runtime'; requestId: string }>;
   /** Cleared shutdown request ids. */
   clearedRequests: string[];
   /** Session ids whose artifact cleanup ran. */
@@ -130,7 +128,7 @@ export function makeDeps(
   const manifests: SessionSyncManifest[] = [];
   const watcherSpawns: Array<{ manifest: SessionSyncManifest; extensionPath?: string }> = [];
   const registrations: Array<{ sessionId: string; worktreeDir: string; transcriptPath: string }> = [];
-  const shutdownAcks: Array<{ socketPath: string; requestId: string }> = [];
+  const shutdownAcks: Array<{ transport: 'runtime'; requestId: string }> = [];
   const clearedRequests: string[] = [];
   const cleanedSessions: string[] = [];
   const cleanedRegistrations: string[] = [];
@@ -138,7 +136,6 @@ export function makeDeps(
     manifests,
     watcherSpawns,
     registrations,
-    reconciliations: 0,
     shutdownAcks,
     clearedRequests,
     cleanedSessions,
@@ -147,6 +144,10 @@ export function makeDeps(
   };
 
   const deps: AntigravityHandlerDeps = {
+    workAuthority: {
+      admit: async () => ({ workRevision: 1 }),
+      observeRevision: async () => 1
+    },
     io: defaultAntigravityIo,
     cardsConfigDir: () => join(root, 'cards-home'),
     loadActionInput: () => makeActionInput(root),
@@ -173,15 +174,12 @@ export function makeDeps(
     unmergedCommitCount: () => 0,
     readCardMeta: (cardRepoPath) => defaults.readCardMeta(cardRepoPath),
     readPendingShutdownRequest: () => undefined,
-    sendShutdownReady: async (socketPath, message) => {
-      shutdownAcks.push({ socketPath, requestId: message.requestId });
+    deliverShutdownReadiness: async (_sessionId, request) => {
+      shutdownAcks.push({ transport: 'runtime', requestId: request.requestId });
     },
     clearPendingShutdownRequest: (sessionId, requestId) => {
       clearedRequests.push(requestId);
       defaults.clearPendingShutdownRequest(sessionId, requestId);
-    },
-    runReconciliationSweep: async () => {
-      recorders.reconciliations += 1;
     },
     isAgentProcessTreeDrained: async () => true,
     mergeRunbookPath: () => join(root, 'skills', 'card', 'references', 'merge.md'),

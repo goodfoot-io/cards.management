@@ -10,18 +10,14 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import {
-  clearPendingShutdownRequest,
-  extractActionInput,
-  readPendingShutdownRequest,
-  sendShutdownReady
-} from '@cards.management/sdk/config';
+import { extractActionInput, readPendingShutdownRequest } from '@cards.management/sdk/config';
 import {
   hasSessionExitWhenDoneNudgeFired,
   markSessionExitWhenDoneNudgeFired
 } from '@cards.management/sessions/card-repo';
 import { stopHook, stopOutput } from '@goodfoot/agent-hooks/codex';
 import { isSessionIdle } from '../../shared/session-idle.js';
+import { attemptShutdownDrain } from '../../shared/shutdown-drain.js';
 
 /**
  * Resolve against the compiled hook so installed plugins never depend on cwd.
@@ -58,27 +54,7 @@ export default stopHook({}, async (input, { logger }) => {
   }
 
   if (pendingRequest) {
-    let idle: boolean;
-    try {
-      idle = await isSessionIdle(input.session_id, { strict: true });
-    } catch (error) {
-      logger.warn('stop-exit-when-done: strict idle authority failed', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return undefined;
-    }
-    if (!idle) return undefined;
-    try {
-      await sendShutdownReady(pendingRequest.socketPath, {
-        type: 'shutdownReady',
-        requestId: pendingRequest.requestId
-      });
-      clearPendingShutdownRequest(input.session_id, pendingRequest.requestId);
-    } catch (error) {
-      logger.warn('stop-exit-when-done: failed to acknowledge shutdown readiness', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+    await attemptShutdownDrain(input.session_id, logger, 'stop-exit-when-done');
     return undefined;
   }
 

@@ -15,7 +15,8 @@ import type {
   LaunchOutcome,
   OriginalCallerRequestId,
   ReplayedLaunchAdmission,
-  RetrievedAdmission
+  RetrievedAdmission,
+  RuntimePayload
 } from '../../protocol/types/index.js';
 import { executionIdentitySchema, producerRoleSchema, RUNTIME_MESSAGE_PAYLOADS } from '../../protocol/types/index.js';
 import type { RuntimeDiscovery } from './types.js';
@@ -100,44 +101,107 @@ const launchResponseSchema = z.discriminatedUnion('disposition', [
     })
     .strict()
 ]);
-const retrievalResponseSchema = z.discriminatedUnion('status', [
-  z
-    .object({
-      status: z.literal('accepted'),
-      execution: executionIdentitySchema,
-      spawnPhase: z.enum(['not-attempted', 'attempted', 'confirmed'])
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal('pending'),
-      execution: executionIdentitySchema,
-      retrievedOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.launchOutcome'].nullable()
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal('completed'),
-      execution: executionIdentitySchema,
-      retrievedOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.launchOutcome']
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal('rejected'),
-      reason: rejectionReasonSchema,
-      execution: executionIdentitySchema.nullable()
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal('uncertain'),
-      reason: uncertaintyReasonSchema,
-      execution: executionIdentitySchema.nullable()
-    })
-    .strict(),
-  z.object({ status: z.literal('not-found') }).strict()
+const retrievalResponseSchema = z
+  .discriminatedUnion('status', [
+    z
+      .object({
+        status: z.literal('accepted'),
+        execution: executionIdentitySchema,
+        spawnPhase: z.enum(['not-attempted', 'attempted', 'confirmed'])
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal('pending'),
+        execution: executionIdentitySchema,
+        retrievedOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.launchOutcome'].nullable()
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal('completed'),
+        execution: executionIdentitySchema,
+        retrievedOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.launchOutcome'],
+        terminalOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.cleanupComplete'].optional()
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal('rejected'),
+        reason: rejectionReasonSchema,
+        execution: executionIdentitySchema.nullable()
+      })
+      .strict(),
+    z
+      .object({
+        status: z.literal('uncertain'),
+        reason: uncertaintyReasonSchema,
+        execution: executionIdentitySchema.nullable()
+      })
+      .strict(),
+    z.object({ status: z.literal('not-found') }).strict()
+  ])
+  .superRefine((response, context) => {
+    if (
+      response.status === 'completed' &&
+      response.retrievedOutcome.disposition === 'spawned' &&
+      response.terminalOutcome === undefined
+    ) {
+      context.addIssue({ code: 'custom', message: 'A spawned execution requires custodied cleanup proof' });
+    }
+  });
+
+/** Credential-free admission response for ordinary Cards API clients. */
+export const publicActionLaunchResponseSchema = z.discriminatedUnion('disposition', [
+  admittedSchema.omit({ credentials: true }),
+  launchResponseSchema.options[1],
+  launchResponseSchema.options[2],
+  launchResponseSchema.options[3]
 ]);
+
+/** Shared validation of durable outcome retrieval; this shape contains no role credentials. */
+export const publicActionRetrievalResponseSchema = retrievalResponseSchema;
+
+/** Ordinary API launch result: execution identity is public, role credentials never are. */
+export type PublicActionLaunchResult =
+  | Exclude<RuntimeActionLaunchResult, { readonly status: 'accepted' }>
+  | {
+      readonly status: 'accepted';
+      readonly requestId: string;
+      readonly messageId: string;
+      readonly execution: BoundExecution;
+    };
+
+/**
+ * Normalizes durable launch state without confusing a spawned process with terminal completion.
+ * Credentials are deliberately excluded; protected callers retain their admitted envelope separately.
+ * @param response - Schema-validated public or protected launch response.
+ * @param identity - Persisted original request and message IDs.
+ * @param identity.requestId - Original admission identity.
+ * @param identity.messageId - Original launch-message identity.
+ * @returns Canonical credential-free launch state shared by both HTTP clients.
+ */
+export function normalizeActionLaunchResponse(
+  response: z.infer<typeof publicActionLaunchResponseSchema>,
+  identity: { readonly requestId: string; readonly messageId: string }
+): PublicActionLaunchResult {
+  const { requestId, messageId } = identity;
+  const ids = { requestId, messageId };
+  if ('execution' in response && response.execution !== null && response.execution.launchRequestId !== requestId)
+    return { status: 'uncertain', ...ids, reason: 'invalid-response' };
+  if (response.disposition === 'rejected') return { status: 'rejected', ...ids, reason: response.reason };
+  if (response.disposition === 'unavailable') return { status: 'uncertain', ...ids, reason: response.reason };
+  if (response.disposition === 'replayed' && response.retrievedOutcome?.disposition === 'uncertain')
+    return { status: 'uncertain', ...ids, reason: 'spawn-attempt-unconfirmed' };
+  if (
+    response.disposition === 'replayed' &&
+    response.retrievedOutcome !== null &&
+    response.retrievedOutcome.disposition !== 'spawned'
+  ) {
+    return { status: 'completed', ...ids, execution: response.execution, outcome: response.retrievedOutcome };
+  }
+  return { status: 'accepted', ...ids, execution: response.execution };
+}
 
 /** Caller-owned immutable launch request sent to the durable runtime action route. */
 export interface RuntimeActionLaunchRequest {
@@ -204,6 +268,7 @@ export type RuntimeActionRetrievalResult =
       readonly requestId: OriginalCallerRequestId;
       readonly execution: BoundExecution;
       readonly outcome: LaunchOutcome;
+      readonly terminalOutcome?: RuntimePayload<'execution.cleanupComplete'>;
     }
   | {
       readonly status: 'rejected';
@@ -315,32 +380,16 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
         };
       }
       const response = parsed.data as ClientLaunchAdmission;
-      if (response.disposition === 'rejected') {
-        return {
-          status: 'rejected',
-          requestId: request.requestId,
-          messageId: request.messageId,
-          reason: response.reason
-        };
-      }
-      if (response.disposition === 'unavailable') {
-        return {
-          status: 'uncertain',
-          requestId: request.requestId,
-          messageId: request.messageId,
-          reason: response.reason
-        };
-      }
-      if (response.disposition === 'replayed' && response.retrievedOutcome !== null) {
-        return {
-          status: 'completed',
-          requestId: request.requestId,
-          messageId: request.messageId,
-          execution: response.execution,
-          outcome: response.retrievedOutcome
-        };
-      }
-      return { status: 'accepted', requestId: request.requestId, messageId: request.messageId, admission: response };
+      const normalized = normalizeActionLaunchResponse(response, request);
+      if (normalized.status !== 'accepted') return normalized;
+      if (response.disposition === 'admitted' || response.disposition === 'replayed')
+        return { status: 'accepted', requestId: request.requestId, messageId: request.messageId, admission: response };
+      return {
+        status: 'uncertain',
+        requestId: request.requestId,
+        messageId: request.messageId,
+        reason: 'invalid-response'
+      };
     },
     async retrieve(cardId, requestId): Promise<RuntimeActionRetrievalResult> {
       const value = await transport(
@@ -358,7 +407,13 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
       if (response.status === 'rejected') return { status: 'rejected', requestId, reason: response.reason };
       if (response.status === 'uncertain') return { status: 'uncertain', requestId, reason: response.reason };
       if (response.status === 'completed') {
-        return { status: 'completed', requestId, execution: response.execution, outcome: response.retrievedOutcome };
+        return {
+          status: 'completed',
+          requestId,
+          execution: response.execution,
+          outcome: response.retrievedOutcome,
+          ...(response.terminalOutcome === undefined ? {} : { terminalOutcome: response.terminalOutcome })
+        };
       }
       return { status: 'accepted', requestId, admission: response };
     }

@@ -6,9 +6,8 @@
  * of stdin, parse one JSON document, reserve stdout for the hook response)
  * while implementing the Antigravity host contract's failure policy: a
  * {@link HandlerFailure} becomes a conversation-scoped failure marker on
- * disk — retried under the `unknown-conversation` placeholder when that write
- * alone fails, because the store is the one channel `agy` does not sever — a
- * stderr diagnostic, and a non-zero exit, never a guessed output document.
+ * disk, a stderr diagnostic, and a non-zero exit — never a guessed output
+ * document.
  *
  * @summary Stdin/stdout driver for the Antigravity runtime handler bundles
  * @module internal/transport
@@ -65,18 +64,6 @@ function stderrLine(line: string): void {
 }
 
 /**
- * The clause appended to a failure whose marker reached no reader.
- *
- * `agy` severs the hook's stderr and exit status, so the store is the only
- * channel a hook failure has: when neither marker name could be written the
- * failure is unreportable, and the diagnostic says so instead of letting the
- * write fail silently. The reader of this clause is the contributor route
- * (`agy --log-file`), not the launcher.
- */
-const NOT_DURABLE_CLAUSE =
-  'the failure marker could not be written under either name — this failure is not visible to the launcher';
-
-/**
  * Writes the conversation-scoped failure marker for one handler failure.
  *
  * When the session identity cannot be resolved the marker lands under the
@@ -84,24 +71,13 @@ const NOT_DURABLE_CLAUSE =
  * under the `unknown-conversation` placeholder — a failure the launcher
  * cannot find is a failure that hangs until its bounded wait expires.
  *
- * A conversation-scoped write that fails is retried once under that
- * placeholder name: the store is the only channel a hook failure reaches a
- * launcher through, so a failed write must not leave the failure unrecorded
- * while the session directory itself is still writable. The retry is
- * attempted only when the conversation id is known — with none, the
- * placeholder is where the first attempt already wrote — and it cannot shadow
- * the primary, which at that point does not exist. Both readers take the
- * sorted-first `.failure` of the session directory, and a conversation id
- * sorts before the placeholder, so the retry is read exactly when the
- * conversation-scoped marker is absent.
- *
  * @param io - Filesystem seam.
  * @param cardsConfigDir - Cards global configuration directory.
  * @param sessionId - Cards session id, or `null` when unresolvable.
  * @param conversationId - Conversation id, or `null` when the input carried none.
  * @param stage - Contract stage the failure occurred at.
  * @param reason - Human-readable failure reason.
- * @returns `true` when the failure was recorded under either name.
+ * @returns `true` when the marker was written.
  */
 export function writeFailureMarker(
   io: AntigravityIo,
@@ -111,28 +87,14 @@ export function writeFailureMarker(
   stage: HandlerFailureStage,
   reason: string
 ): boolean {
-  const payload = { stage, reason };
   try {
-    writeMarker(
-      io,
-      markerPath(cardsConfigDir, sessionId, conversationId, 'failure' satisfies RuntimeMarkerKind),
-      payload
-    );
+    writeMarker(io, markerPath(cardsConfigDir, sessionId, conversationId, 'failure' satisfies RuntimeMarkerKind), {
+      stage,
+      reason
+    });
     return true;
   } catch (error) {
     stderrLine(`could not write the failure marker: ${error instanceof Error ? error.message : String(error)}`);
-  }
-
-  if (conversationId === null) {
-    return false;
-  }
-  try {
-    writeMarker(io, markerPath(cardsConfigDir, sessionId, null, 'failure' satisfies RuntimeMarkerKind), payload);
-    return true;
-  } catch (error) {
-    stderrLine(
-      `could not write the placeholder failure marker either: ${error instanceof Error ? error.message : String(error)}`
-    );
     return false;
   }
 }
@@ -169,10 +131,9 @@ export async function dispatchAntigravityHook(
     const reason = error instanceof Error ? error.message : String(error);
     const markerConversationId = error instanceof HandlerFailure ? error.conversationId : conversationId;
     const sessionId = deps.resolveSessionId();
-    const recorded = writeFailureMarker(deps.io, deps.cardsConfigDir(), sessionId, markerConversationId, stage, reason);
-    const reported = recorded ? reason : `${reason} (${NOT_DURABLE_CLAUSE})`;
-    stderrLine(`failure at ${stage}: ${reported}`);
-    throw new HandlerFailure(stage, reported, markerConversationId);
+    writeFailureMarker(deps.io, deps.cardsConfigDir(), sessionId, markerConversationId, stage, reason);
+    stderrLine(`failure at ${stage}: ${reason}`);
+    throw new HandlerFailure(stage, reason, markerConversationId);
   }
 }
 
@@ -207,10 +168,9 @@ export async function runAntigravityHook(
   } catch (error) {
     const reason = `could not read the hook input: ${error instanceof Error ? error.message : String(error)}`;
     const sessionId = deps.resolveSessionId();
-    const recorded = writeFailureMarker(deps.io, deps.cardsConfigDir(), sessionId, null, 'input', reason);
-    const reported = recorded ? reason : `${reason} (${NOT_DURABLE_CLAUSE})`;
-    stderrLine(`input error: ${reported}`);
-    throw new HandlerFailure('input', reported, null);
+    writeFailureMarker(deps.io, deps.cardsConfigDir(), sessionId, null, 'input', reason);
+    stderrLine(`input error: ${reason}`);
+    throw new HandlerFailure('input', reason, null);
   }
 
   const result = await dispatchAntigravityHook(raw, handler, deps);

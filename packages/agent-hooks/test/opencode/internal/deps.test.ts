@@ -81,6 +81,9 @@ async function runProbe(pluginDir: string): Promise<ProbeResult> {
     format: 'esm',
     platform: 'node',
     target: 'esnext',
+    banner: {
+      js: "import { createRequire as __createRequire } from 'node:module'; const require = __createRequire(import.meta.url);"
+    },
     external: ['vscode'],
     sourcemap: false,
     legalComments: 'none',

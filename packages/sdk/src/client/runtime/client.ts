@@ -47,17 +47,6 @@ import type {
  */
 
 /**
- * What this client can do on behalf of its execution. Fixed for now: capability negotiation
- * is the agent adapter's concern, and announcing a capability the adapter lacks is worse
- * than announcing none.
- */
-const DECLARED_CAPABILITIES = {
-  switchToInteractive: false,
-  agentShutdown: false,
-  strictDrainBarrier: false
-} as const;
-
-/**
  * A view of the outbox holding only records this client does not speak for.
  *
  * Startup reconciliation and the resume barrier both want to settle a pending record, and
@@ -355,7 +344,16 @@ class RuntimeClientImpl implements RuntimeClient {
     }
 
     await this.retire(message);
-    return { status: 'accepted', messageId: message.messageId };
+    const payload = accepted.payload as {
+      workAdmission?:
+        | { status: 'admitted'; workRevision: number }
+        | { status: 'rejected'; reason: 'drainBarrierHeld'; barrierHolderId: string };
+    };
+    return {
+      status: 'accepted',
+      messageId: message.messageId,
+      ...(payload.workAdmission ? { workAdmission: payload.workAdmission } : {})
+    };
   }
 
   private async retire<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<void> {
@@ -498,7 +496,7 @@ class RuntimeClientImpl implements RuntimeClient {
         : { executionId, launchRequestId: this.options.credential.requestId };
     const base = {
       revision: 0,
-      capabilities: DECLARED_CAPABILITIES,
+      capabilities: this.options.capabilities,
       lifecycleState: 'running',
       workRevision: 0
     } as const;
@@ -660,7 +658,9 @@ class RuntimeClientImpl implements RuntimeClient {
   private deliverInbound(socket: WebSocket, envelope: RuntimeEnvelope<RuntimeInboundMessageType>): void {
     if (socket !== this.socket || this.deliveredMessageIds.has(envelope.messageId)) return;
     this.deliveredMessageIds.add(envelope.messageId);
-    void Promise.resolve(this.options.onMessage(envelope)).catch(() => undefined);
+    void Promise.resolve(this.options.onMessage(envelope)).catch(() => {
+      this.deliveredMessageIds.delete(envelope.messageId);
+    });
   }
 
   private flushInbound(socket: WebSocket): void {

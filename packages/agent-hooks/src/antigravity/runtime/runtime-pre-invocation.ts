@@ -2,10 +2,9 @@
  * `PreInvocation` hook entry — emitted as `bin/runtime-pre-invocation.mjs`.
  *
  * Runs the Antigravity session-start sequence over the shared runtime
- * behaviors: input validation, reconciliation, action-env extraction, card
- * context readiness, session registration, and stream-sync-watcher setup.
- * The Assistant path also records the conversation-scoped ready marker; an
- * action session's success is its exit status.
+ * behaviors: input validation, action-env extraction, card
+ * context readiness, session registration, and stream-sync-watcher setup,
+ * terminating in the conversation-scoped ready marker.
  *
  * @summary PreInvocation entry for the Antigravity runtime plugin
  * @module runtime/runtime-pre-invocation

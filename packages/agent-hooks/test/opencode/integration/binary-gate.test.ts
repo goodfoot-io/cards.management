@@ -155,12 +155,10 @@ describe.skipIf(binary === null)('real-binary gate (installed opencode v1.18.x)'
     expect(result.anchorText).not.toContain('Nudging');
   }, 180000);
 
-  it('runtime bundle: session-start engages when launched with a Cards action env', () => {
+  it('runtime bundle: a lone CARD_ID stays inert without the complete Cards action envelope', () => {
     const result = runBundle(bundles.runtime, 'reply with ok', { CARD_ID: 'ope-age-sup-1' });
     expect(result.status).toBe(0);
-    // With `CARD_ID` present the guard passes; the remaining action envelope is
-    // incomplete in this harness, so the handler idles with its named message.
-    expect(result.anchorText).toContain('OpenCode session is not a Cards action');
+    expect(result.anchorText).toBe('');
   }, 180000);
 
   it('cards bundle: prompt nudge hook fires on a card-term mention', () => {

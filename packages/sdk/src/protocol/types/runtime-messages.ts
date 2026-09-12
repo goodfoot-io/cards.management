@@ -71,6 +71,9 @@ export const capabilitiesSchema = z
   })
   .strict();
 
+/** Exact runtime commands and safety semantics implemented by one producer adapter. */
+export type RuntimeCapabilities = z.infer<typeof capabilitiesSchema>;
+
 /**
  * Snapshot revision carried by every reconciled-snapshot message. Acceptance
  * compares the envelope's ownership generation first and this revision second.
@@ -139,7 +142,9 @@ export const launchRequestPayloadSchema = z
     selectedAgent: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
     effort: z.string().min(1).optional(),
-    variableGroupIds: z.array(z.string().min(1)).optional()
+    variableGroupIds: z.array(z.string().min(1)).optional(),
+    /** Serialized continuation admitted with an interactive handoff successor. */
+    continuation: z.string().min(1).optional()
   })
   .strict();
 
@@ -153,14 +158,11 @@ export const cancelPayloadSchema = z
   .strict();
 
 /**
- * Payload of `execution.interactiveHandoff`. The successor identity is
- * preallocated by the server and persisted with the continuation before
- * readiness is acknowledged, so a crash mid-handoff resolves to one successor
- * rather than none or two.
+ * Payload of `execution.interactiveHandoff`. The authority deterministically
+ * admits the successor from this correlated, durable continuation.
  */
 export const interactiveHandoffPayloadSchema = z
   .object({
-    successorExecutionId: z.string().min(1),
     continuation: inlineOrReferencedSchema
   })
   .strict();
@@ -227,6 +229,9 @@ export const shutdownReadinessPayloadSchema = z
     observedIdleAt: z.string().datetime()
   })
   .strict();
+
+/** Requests server-owned admission of a new turn or owned child task. */
+export const workAdmissionPayloadSchema = z.object({ cause: z.enum(['turn', 'childTask']) }).strict();
 
 // --- Durable result payloads ---
 
@@ -384,7 +389,19 @@ export const resumeAckPayloadSchema = z
 export const acceptedPayloadSchema = z
   .object({
     acknowledgedMessageId: z.string().min(1),
-    acknowledgedAt: z.string().datetime()
+    acknowledgedAt: z.string().datetime(),
+    workAdmission: z
+      .discriminatedUnion('status', [
+        z.object({ status: z.literal('admitted'), workRevision: workRevisionSchema }).strict(),
+        z
+          .object({
+            status: z.literal('rejected'),
+            reason: z.literal('drainBarrierHeld'),
+            barrierHolderId: z.string().min(1)
+          })
+          .strict()
+      ])
+      .optional()
   })
   .strict();
 
@@ -423,6 +440,7 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.agentShutdownCommand': agentShutdownCommandPayloadSchema,
   'execution.executeRequest': executeRequestPayloadSchema,
   'execution.shutdownReadiness': shutdownReadinessPayloadSchema,
+  'execution.workAdmission': workAdmissionPayloadSchema,
   'execution.launchAdmission': launchAdmissionPayloadSchema,
   'execution.launchOutcome': launchOutcomePayloadSchema,
   'execution.agentTermination': agentTerminationPayloadSchema,

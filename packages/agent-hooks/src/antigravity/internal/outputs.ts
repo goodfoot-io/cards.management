@@ -31,6 +31,19 @@ export interface PostInvocationOutput {
   injectSteps?: EphemeralStep[];
 }
 
+/** Decision returned synchronously before a matched tool executes. */
+export type PreToolUseOutput = { readonly decision: 'allow' } | { readonly decision: 'deny'; readonly reason: string };
+
+/**
+ * Builds the host's deny-capable `PreToolUse` response.
+ *
+ * @param decision - Allow after admission, or deny with a reason.
+ * @returns Exact host decision document.
+ */
+export function preToolUseOutput(decision: PreToolUseOutput): PreToolUseOutput {
+  return decision;
+}
+
 /**
  * Builds the `PreInvocation` stdout payload.
  *
@@ -61,11 +74,9 @@ export function postInvocationOutput(options: { injectSteps?: EphemeralStep[] } 
 /**
  * Builds the `Stop` stdout payload.
  *
- * Cleanup is reported through the exit status alone: the pinned empty object
- * the host contract expects, with the handler's own failure marker as the
- * only durable evidence of a contract violation. The returned object
- * intentionally has no `continue`/`decision` keys — a Stop handler never asks
- * the host for another model turn.
+ * Cleanup is reported through the drain-ready marker and exit status. The
+ * returned object intentionally has no `continue`/`decision` keys — a Stop
+ * handler never asks the host for another model turn.
  *
  * @returns The empty JSON object the host contract pins for success.
  */

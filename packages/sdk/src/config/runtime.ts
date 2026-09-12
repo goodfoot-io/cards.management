@@ -17,8 +17,8 @@
  * 3. Connect to the authenticated durable runtime (fail-closed)
  * 4. Build ActionContext with logger, cwd, and durable command callbacks
  * 5. Invoke the command with input and context
- * 6. On success: clean up socket and exit with code 0
- * 7. On error: log error, write to stderr, clean up and exit with code 1
+ * 6. On success: close the authenticated runtime connection and exit with code 0
+ * 7. On error: log error, write to stderr, close the connection, and exit with code 1
  *
  *
  * @summary Runtime orchestration for compiled Cards action handlers
@@ -259,7 +259,9 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       let agentShutdownProcessed = false;
       let runtimeClient: RuntimeClient;
       const loaded = loadRuntimeCredential('agent-handler');
-      const sendDurable = async <T extends 'execution.commandCustody' | 'execution.agentTermination'>(
+      const sendDurable = async <
+        T extends 'execution.commandCustody' | 'execution.agentTermination' | 'execution.interactiveHandoff'
+      >(
         type: T,
         payload: RuntimePayload<T>,
         causationId: string
@@ -285,6 +287,16 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
         },
         onSwitchToInteractive: (callback) => {
           switchToInteractiveCallback = callback;
+          void runtimeClient?.send({
+            type: 'runtime.capabilities',
+            payload: {
+              revision: 1,
+              capabilities: { switchToInteractive: true, agentShutdown: true, strictDrainBarrier: true }
+            },
+            messageId: `${loaded.execution.executionId}:agent-handler:switch-capability`,
+            requestId: loaded.credential.requestId,
+            execution: loaded.execution
+          });
         },
         onAgentShutdown: (callback) => {
           agentShutdownCallback = callback;
@@ -293,6 +305,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
 
       runtimeClient = createRuntimeClientFromCredentialFile({
         role: 'agent-handler',
+        capabilities: { switchToInteractive: false, agentShutdown: true, strictDrainBarrier: true },
         outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
         discover: async () => {
           const info = await discoverApiInfo();
@@ -328,7 +341,11 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
           if (cmd.type === 'execution.cancelCommand') {
             handleCancelCommand(cancelCallback);
           } else if (cmd.type === 'execution.switchToInteractiveCommand') {
-            handleSwitchToInteractiveCommand(switchToInteractiveCallback);
+            await handleSwitchToInteractiveCommand(
+              switchToInteractiveCallback,
+              cmd as RuntimeEnvelope<'execution.switchToInteractiveCommand'>,
+              sendDurable
+            );
           }
         }
       });
@@ -356,7 +373,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
 }
 
 // ============================================================================
-// Socket Command Handlers
+// Authenticated Runtime Command Handlers
 // ============================================================================
 
 /**
@@ -420,28 +437,36 @@ function handleCancelCommand(callback: (() => void | Promise<void>) | undefined)
 /**
  * Handles an authenticated durable switch-to-interactive command.
  *
- * If no callback was registered, the command is ignored (no-op). Otherwise,
- * the callback is invoked before the process exits with the handoff code.
+ * If no callback was registered, the command is ignored. Otherwise, the
+ * callback's continuation is durably accepted before the process exits.
  *
  * @param callback - The registered switchToInteractive callback, if any
+ * @param command - Correlated switch command whose identity fences the handoff.
+ * @param sendDurable - Authenticated sender for the continuation result.
  * @internal
  */
-function handleSwitchToInteractiveCommand(callback: (() => unknown | Promise<unknown>) | undefined): void {
+async function handleSwitchToInteractiveCommand(
+  callback: (() => unknown | Promise<unknown>) | undefined,
+  command: RuntimeEnvelope<'execution.switchToInteractiveCommand'>,
+  sendDurable: <T extends 'execution.commandCustody' | 'execution.interactiveHandoff'>(
+    type: T,
+    payload: RuntimePayload<T>,
+    causationId: string
+  ) => Promise<boolean>
+): Promise<void> {
   if (!callback) {
     return;
   }
 
   try {
     // Contain synchronous callback failures inside the lifecycle handler.
-    toPromise(callback()).then(
-      () => {
-        cleanupAndExit(EXIT_CODES.SWITCH_TO_INTERACTIVE);
-      },
-      (error) => {
-        logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
-        cleanupAndExit(EXIT_CODES.ERROR);
-      }
+    const continuation = await toPromise(callback());
+    const accepted = await sendDurable(
+      'execution.interactiveHandoff',
+      { continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
+      command.messageId
     );
+    cleanupAndExit(accepted ? EXIT_CODES.SWITCH_TO_INTERACTIVE : EXIT_CODES.ERROR);
   } catch (error) {
     logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
     cleanupAndExit(EXIT_CODES.ERROR);

@@ -4,11 +4,7 @@
  * @summary Tests for the Claude Stop shutdown-drain readiness hook
  */
 
-import {
-  clearPendingShutdownRequest,
-  readPendingShutdownRequest,
-  sendShutdownReady
-} from '@cards.management/sdk/config';
+import { clearPendingShutdownRequest, readPendingShutdownRequest } from '@cards.management/sdk/config';
 import { Logger } from '@goodfoot/agent-hooks/claude-code';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import hook from '../../../src/claude/runtime/stop-shutdown-drain.js';
@@ -19,15 +15,37 @@ vi.mock('@cards.management/sdk/config', async (importOriginal) => {
   return {
     ...actual,
     clearPendingShutdownRequest: vi.fn(),
-    readPendingShutdownRequest: vi.fn(),
-    sendShutdownReady: vi.fn()
+    readPendingShutdownRequest: vi.fn()
   };
 });
 vi.mock('../../../src/shared/session-idle.js', () => ({ isSessionIdle: vi.fn() }));
 
 const mockClearPendingShutdownRequest = vi.mocked(clearPendingShutdownRequest);
 const mockReadPendingShutdownRequest = vi.mocked(readPendingShutdownRequest);
-const mockSendShutdownReady = vi.mocked(sendShutdownReady);
+const runtimeSend = vi.fn(async (message: { type: string }) =>
+  message.type === 'execution.workAdmission'
+    ? {
+        status: 'accepted' as const,
+        messageId: 'work',
+        workAdmission: { status: 'admitted' as const, workRevision: 4 }
+      }
+    : { status: 'accepted' as const, messageId: 'readiness' }
+);
+vi.mock('@cards.management/sdk/client/discovery', () => ({
+  discoverApiInfo: vi.fn(async () => ({ host: '127.0.0.1', port: 1, accessToken: 'token' }))
+}));
+vi.mock('@cards.management/sdk/client/runtime/bootstrap', () => ({
+  loadRuntimeCredential: vi.fn(() => ({ execution: { executionId: 'exec-1', launchRequestId: 'launch-1' } })),
+  createRuntimeClientFromCredentialFile: vi.fn(() => ({
+    connect: async () => ({ status: 'connected', synchronization: { workRevision: 7 } }),
+    send: runtimeSend,
+    close: async () => undefined
+  }))
+}));
+vi.mock('@cards.management/sdk/client/runtime/outbox-store', () => ({
+  createFileClientOutbox: vi.fn(() => ({})),
+  resolveOutboxRoot: vi.fn(() => '/tmp/outbox')
+}));
 const mockIsSessionIdle = vi.mocked(isSessionIdle);
 const logger = new Logger();
 
@@ -53,7 +71,8 @@ const input = { session_id: 'session-456' } as Parameters<typeof hook>[0];
 const pendingRequest = {
   version: 1 as const,
   requestId: 'shutdown-request-opaque-456',
-  socketPath: '/tmp/cards-action-456.sock'
+  messageId: 'shutdown-message-456',
+  outcome: 'success' as const
 };
 
 describe('Claude Stop shutdown-drain hook', () => {
@@ -83,7 +102,6 @@ describe('Claude Stop shutdown-drain hook', () => {
         process.env[key] = value;
       }
       mockReadPendingShutdownRequest.mockReturnValue(undefined);
-      mockSendShutdownReady.mockResolvedValue(undefined);
       mockIsSessionIdle.mockResolvedValue(true);
     });
 
@@ -119,10 +137,7 @@ describe('Claude Stop shutdown-drain hook', () => {
         expect(await hook(input, { logger })).toBeNull();
 
         expect(mockIsSessionIdle).toHaveBeenCalledWith(input.session_id, { strict: true });
-        expect(mockSendShutdownReady).toHaveBeenCalledWith(pendingRequest.socketPath, {
-          type: 'shutdownReady',
-          requestId: pendingRequest.requestId
-        });
+        expect(runtimeSend).toHaveBeenCalledWith(expect.objectContaining({ type: 'execution.shutdownReadiness' }));
         expect(mockClearPendingShutdownRequest).toHaveBeenCalledWith(input.session_id, pendingRequest.requestId);
       });
 
@@ -131,7 +146,7 @@ describe('Claude Stop shutdown-drain hook', () => {
 
         expect(await hook(input, { logger })).toBeNull();
 
-        expect(mockSendShutdownReady).not.toHaveBeenCalled();
+        expect(runtimeSend).not.toHaveBeenCalled();
         expect(mockClearPendingShutdownRequest).not.toHaveBeenCalled();
       });
 
@@ -139,12 +154,12 @@ describe('Claude Stop shutdown-drain hook', () => {
         mockIsSessionIdle.mockRejectedValue(new Error('process-tree query failed'));
 
         expect(await hook(input, { logger })).toBeNull();
-        expect(mockSendShutdownReady).not.toHaveBeenCalled();
+        expect(runtimeSend).not.toHaveBeenCalled();
       });
 
-      it('leaves the request pending when the readiness socket write fails', async () => {
+      it('leaves the request pending when runtime readiness is rejected', async () => {
         mockIsSessionIdle.mockResolvedValue(true);
-        mockSendShutdownReady.mockRejectedValue(new Error('ECONNREFUSED'));
+        runtimeSend.mockRejectedValueOnce(new Error('connection lost'));
 
         expect(await hook(input, { logger })).toBeNull();
         expect(mockClearPendingShutdownRequest).not.toHaveBeenCalled();

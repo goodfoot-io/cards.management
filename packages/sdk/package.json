@@ -7,10 +7,13 @@
   },
   "exports": {
     ".": "./src/index.ts",
+    "./cards-config": "./src/cards-config.ts",
     "./protocol": "./src/protocol/index.ts",
     "./client": "./src/client/index.ts",
     "./client/runtime": "./src/client/runtime/index.ts",
+    "./client/runtime/bootstrap": "./src/client/runtime/bootstrap.ts",
     "./client/runtime/outbox": "./src/client/runtime/outbox/index.ts",
+    "./client/runtime/outbox-store": "./src/client/runtime/outbox/store.ts",
     "./client/runtime/durable-results": "./src/client/runtime/durable-results/index.ts",
     "./client/discovery": "./src/client/api-discovery.ts",
     "./config": "./src/config/index.ts",

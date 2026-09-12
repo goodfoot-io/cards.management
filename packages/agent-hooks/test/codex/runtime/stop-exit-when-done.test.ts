@@ -8,8 +8,7 @@ import path from 'node:path';
 import {
   clearPendingShutdownRequest,
   extractActionInput,
-  readPendingShutdownRequest,
-  sendShutdownReady
+  readPendingShutdownRequest
 } from '@cards.management/sdk/config';
 import {
   hasSessionExitWhenDoneNudgeFired,
@@ -19,23 +18,24 @@ import { Logger } from '@goodfoot/agent-hooks/codex';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import hook from '../../../src/codex/runtime/stop-exit-when-done.js';
 import { isSessionIdle } from '../../../src/shared/session-idle.js';
+import { attemptShutdownDrain } from '../../../src/shared/shutdown-drain.js';
 
 vi.mock('@cards.management/sdk/config', () => ({
   extractActionInput: vi.fn(),
   clearPendingShutdownRequest: vi.fn(),
-  readPendingShutdownRequest: vi.fn(),
-  sendShutdownReady: vi.fn()
+  readPendingShutdownRequest: vi.fn()
 }));
 vi.mock('@cards.management/sessions/card-repo', () => ({
   hasSessionExitWhenDoneNudgeFired: vi.fn(),
   markSessionExitWhenDoneNudgeFired: vi.fn()
 }));
 vi.mock('../../../src/shared/session-idle.js', () => ({ isSessionIdle: vi.fn() }));
+vi.mock('../../../src/shared/shutdown-drain.js', () => ({ attemptShutdownDrain: vi.fn() }));
 
 const mockExtractActionInput = vi.mocked(extractActionInput);
 const mockClearPendingShutdownRequest = vi.mocked(clearPendingShutdownRequest);
 const mockReadPendingShutdownRequest = vi.mocked(readPendingShutdownRequest);
-const mockSendShutdownReady = vi.mocked(sendShutdownReady);
+const mockAttemptShutdownDrain = vi.mocked(attemptShutdownDrain);
 const mockHasNudged = vi.mocked(hasSessionExitWhenDoneNudgeFired);
 const mockMarkNudged = vi.mocked(markSessionExitWhenDoneNudgeFired);
 const mockIsSessionIdle = vi.mocked(isSessionIdle);
@@ -60,7 +60,16 @@ describe('Codex Stop exit-when-done hook', () => {
   beforeEach(() => {
     mockExtractActionInput.mockReturnValue(actionInput);
     mockReadPendingShutdownRequest.mockReturnValue(undefined);
-    mockSendShutdownReady.mockResolvedValue(undefined);
+    mockAttemptShutdownDrain.mockImplementation(async (sessionId) => {
+      try {
+        if (await isSessionIdle(sessionId, { strict: true })) {
+          const pending = readPendingShutdownRequest(sessionId);
+          if (pending) clearPendingShutdownRequest(sessionId, pending.requestId);
+        }
+      } catch {
+        /* fail closed like the shared implementation */
+      }
+    });
     mockHasNudged.mockReturnValue(false);
     mockMarkNudged.mockReturnValue(undefined);
     mockIsSessionIdle.mockReturnValue(true);
@@ -130,7 +139,8 @@ describe('Codex Stop exit-when-done hook', () => {
     const pendingRequest = {
       version: 1 as const,
       requestId: 'shutdown-request-opaque-453',
-      socketPath: '/tmp/cards-action-453.sock'
+      messageId: 'shutdown-message-453',
+      outcome: 'success' as const
     };
 
     beforeEach(() => {
@@ -141,15 +151,12 @@ describe('Codex Stop exit-when-done hook', () => {
       mockIsSessionIdle.mockReturnValueOnce(false).mockReturnValueOnce(true);
 
       expect(await hook(input, { logger })).toBeUndefined();
-      expect(mockSendShutdownReady).not.toHaveBeenCalled();
+      expect(mockClearPendingShutdownRequest).not.toHaveBeenCalled();
 
       await hook(input, { logger });
 
       expect(mockReadPendingShutdownRequest).toHaveBeenCalledWith(input.session_id);
-      expect(mockSendShutdownReady).toHaveBeenCalledWith(pendingRequest.socketPath, {
-        type: 'shutdownReady',
-        requestId: pendingRequest.requestId
-      });
+      expect(mockAttemptShutdownDrain).toHaveBeenCalledWith(input.session_id, logger, 'stop-exit-when-done');
       expect(mockClearPendingShutdownRequest).toHaveBeenCalledWith(input.session_id, pendingRequest.requestId);
     });
 
@@ -159,7 +166,7 @@ describe('Codex Stop exit-when-done hook', () => {
       });
 
       await expect(hook(input, { logger })).resolves.toBeUndefined();
-      expect(mockSendShutdownReady).not.toHaveBeenCalled();
+      expect(mockClearPendingShutdownRequest).not.toHaveBeenCalled();
     });
 
     it('does not acknowledge while the strict idle authority reports background work', async () => {
@@ -167,7 +174,7 @@ describe('Codex Stop exit-when-done hook', () => {
 
       expect(await hook(input, { logger })).toBeUndefined();
       expect(mockReadPendingShutdownRequest).toHaveBeenCalledWith(input.session_id);
-      expect(mockSendShutdownReady).not.toHaveBeenCalled();
+      expect(mockClearPendingShutdownRequest).not.toHaveBeenCalled();
     });
   });
 

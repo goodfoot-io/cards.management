@@ -10,6 +10,7 @@ import type {
   PresentedCredential,
   ProducerIdentity,
   RegistrationRefusalReason,
+  RuntimeCapabilities,
   RuntimeEnvelope,
   RuntimeMessageType,
   RuntimePayload,
@@ -87,6 +88,8 @@ export interface RuntimeClientOptions {
   readonly credential: PresentedCredential;
   readonly outbox: ClientOutbox;
   readonly authorities: ReconciliationAuthorities;
+  /** Exact behavior implemented by this concrete producer adapter. */
+  readonly capabilities: RuntimeCapabilities;
   readonly discover: RuntimeDiscovery;
   /** Receives commands only after registration and synchronization complete. */
   readonly onMessage: RuntimeInboundHandler;
@@ -166,7 +169,13 @@ export type SendUncertaintyReason = AdmissionUncertaintyReason | 'deadline-expir
  * termination, is what a success exit code reports.
  */
 export type SendOutcome =
-  | { readonly status: 'accepted'; readonly messageId: string }
+  | {
+      readonly status: 'accepted';
+      readonly messageId: string;
+      readonly workAdmission?:
+        | { readonly status: 'admitted'; readonly workRevision: number }
+        | { readonly status: 'rejected'; readonly reason: 'drainBarrierHeld'; readonly barrierHolderId: string };
+    }
   | { readonly status: 'completed'; readonly messageId: string; readonly payload: unknown }
   | { readonly status: 'rejected'; readonly messageId: string; readonly reason: SendRejectionReason }
   | {

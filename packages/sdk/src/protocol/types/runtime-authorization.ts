@@ -34,7 +34,7 @@ export type MessageDirection = 'client-to-server' | 'server-to-client';
  * - `pre-admission` — names a caller request ID with no execution yet.
  * - `none` — card-scoped only; the envelope's execution reference must be null.
  */
-export type ExecutionRequirement = 'admitted' | 'pre-admission' | 'none';
+export type ExecutionRequirement = 'admitted' | 'pre-admission' | 'none' | 'authenticated-subject';
 
 /** The authorization and delivery rules for one message type. */
 export interface MessageContract {
@@ -59,7 +59,12 @@ export interface MessageContract {
 }
 
 /** Roles that run inside an execution and speak for it. */
-const EXECUTION_PRODUCERS: readonly ProducerRole[] = ['runtime-wrapper', 'agent-handler', 'extension-dispatcher'];
+const EXECUTION_PRODUCERS: readonly ProducerRole[] = [
+  'runtime-wrapper',
+  'agent-handler',
+  'agent-hook',
+  'extension-dispatcher'
+];
 
 /**
  * The authorization and delivery rules for every message type. Every key of the
@@ -71,8 +76,8 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     type: 'runtime.register',
     direction: 'client-to-server',
     deliveryClass: 'reconciled-snapshot',
-    allowedRoles: EXECUTION_PRODUCERS,
-    executionRequirement: 'admitted',
+    allowedRoles: [...EXECUTION_PRODUCERS, 'watcher'],
+    executionRequirement: 'authenticated-subject',
     requiresRequestId: false,
     requiresCausationId: false,
     requiresOwnershipCurrent: true,
@@ -82,8 +87,8 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     type: 'runtime.resume',
     direction: 'client-to-server',
     deliveryClass: 'reconciled-snapshot',
-    allowedRoles: EXECUTION_PRODUCERS,
-    executionRequirement: 'admitted',
+    allowedRoles: [...EXECUTION_PRODUCERS, 'watcher'],
+    executionRequirement: 'authenticated-subject',
     requiresRequestId: false,
     requiresCausationId: false,
     requiresOwnershipCurrent: true,
@@ -116,7 +121,7 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     direction: 'server-to-client',
     deliveryClass: 'reconciled-snapshot',
     allowedRoles: ['server'],
-    executionRequirement: 'admitted',
+    executionRequirement: 'authenticated-subject',
     requiresRequestId: false,
     requiresCausationId: true,
     requiresOwnershipCurrent: true,
@@ -141,7 +146,7 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     // `acceptedMessageIds`, so it does reconcile by the class's own rules.
     deliveryClass: 'reconciled-snapshot',
     allowedRoles: ['server'],
-    executionRequirement: 'admitted',
+    executionRequirement: 'authenticated-subject',
     requiresRequestId: false,
     requiresCausationId: true,
     requiresOwnershipCurrent: true,
@@ -163,7 +168,7 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     direction: 'client-to-server',
     deliveryClass: 'durable-result',
     allowedRoles: ['runtime-wrapper', 'agent-handler', 'watcher'],
-    executionRequirement: 'admitted',
+    executionRequirement: 'authenticated-subject',
     requiresRequestId: true,
     requiresCausationId: true,
     requiresOwnershipCurrent: true,
@@ -284,6 +289,17 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     direction: 'client-to-server',
     deliveryClass: 'revocable-readiness',
     allowedRoles: ['agent-hook', 'agent-handler'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: false,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
+  'execution.workAdmission': {
+    type: 'execution.workAdmission',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-intent',
+    allowedRoles: ['agent-hook'],
     executionRequirement: 'admitted',
     requiresRequestId: true,
     requiresCausationId: false,
@@ -464,7 +480,9 @@ export function authorizeMessage(envelope: RuntimeEnvelope, context: Authorizati
   }
 
   const execution = envelope.execution;
-  if (contract.executionRequirement === 'none') {
+  if (contract.executionRequirement === 'authenticated-subject') {
+    // Registration is bound against the authenticated subject by the server session.
+  } else if (contract.executionRequirement === 'none') {
     if (execution !== null) {
       return { authorized: false, reason: 'execution-reference-not-permitted' };
     }
