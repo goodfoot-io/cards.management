@@ -170,11 +170,13 @@ describe.skipIf(binary === null)('staged launch config — real-binary witness (
     let anchorText = existsSync(anchorPath) ? readFileSync(anchorPath, 'utf8') : '';
     expect(anchorText).not.toContain('OpenCode session');
 
-    // With `CARD_ID` present the guard passes and the handler engages.
+    // `CARD_ID` classifies this as a Cards action. Without the required
+    // protected credential, durable work admission prevents later lifecycle
+    // handlers from presenting it as an inert non-action session.
     rmSync(anchorPath, { force: true });
     const actionRun = spawnWith({ CARD_ID: 'ope-age-sup-1' });
     expect(actionRun.status).toBe(0);
     anchorText = existsSync(anchorPath) ? readFileSync(anchorPath, 'utf8') : '';
-    expect(anchorText).toContain('OpenCode session is not a Cards action');
+    expect(anchorText).not.toContain('OpenCode session is not a Cards action');
   }, 180000);
 });

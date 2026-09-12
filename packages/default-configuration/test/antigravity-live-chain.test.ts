@@ -99,6 +99,13 @@ describe('Antigravity live transcript chain', () => {
     const defaults = defaultAntigravityHandlerDeps();
     const deps = {
       ...defaults,
+      // This composition begins after durable admission; authenticate that
+      // boundary through the handler seam so the test can exercise the later
+      // manifest, watcher, and renderer chain without a synthetic credential.
+      workAuthority: {
+        admit: async () => ({ workRevision: 1 }),
+        observeRevision: async () => 1
+      },
       cardsConfigDir: () => cardsHome,
       loadActionInput: () => actionInput,
       resolveSessionId: () => SESSION_ID,

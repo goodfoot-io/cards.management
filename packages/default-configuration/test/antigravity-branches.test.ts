@@ -561,6 +561,13 @@ describe('launch action — antigravity branch', () => {
       // hook fails closed on rather than guesses past.
       const deps = {
         ...defaultAntigravityHandlerDeps(),
+        // Admission is now the first protected boundary. Satisfy it through
+        // the public dependency seam so this fixture continues to witness the
+        // intended later action-envelope failure and its marker transport.
+        workAuthority: {
+          admit: async () => ({ workRevision: 1 }),
+          observeRevision: async () => 1
+        },
         cardsConfigDir: () => cardsHome,
         io: {
           ensureDirSync: (dir: string) => realFs.mkdirSync(dir, { recursive: true }),
@@ -697,7 +704,7 @@ describe('launch action — antigravity branch', () => {
     }
   });
 
-  it('fails the action on the placeholder marker the transport re-recorded when the scoped write failed', async () => {
+  it('fails the action on the placeholder marker written for input without a conversation id', async () => {
     const { spawn } = await import('node:child_process');
     const fs = await import('node:fs/promises');
     const realFsp = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
@@ -709,10 +716,9 @@ describe('launch action — antigravity branch', () => {
     const { defaultAntigravityHandlerDeps } = await import('../../agent-hooks/src/antigravity/internal/deps.js');
     const { UNKNOWN_CONVERSATION } = await import('../../agent-hooks/src/antigravity/internal/markers.js');
 
-    // Real store, real transport, real launcher read: only the
-    // conversation-scoped write refuses, so the retry is the one thing that
-    // makes the failure durable — and the launcher's own reader is what
-    // classifies it as a hook failure.
+    // Real store, real transport, real launcher read: malformed host input has
+    // no conversation identity, so the transport deliberately writes the
+    // failure under the placeholder the launcher's reader also checks.
     const cardsHome = await realFsp.mkdtemp(join(tmpdir(), 'agy-hook-placeholder-'));
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
@@ -743,15 +749,17 @@ describe('launch action — antigravity branch', () => {
 
       const deps = {
         ...defaultAntigravityHandlerDeps(),
+        // Credential/admission failure is covered at its own boundary. This
+        // fixture deliberately reaches input parsing so missing conversation
+        // identity selects the placeholder marker address.
+        workAuthority: {
+          admit: async () => ({ workRevision: 1 }),
+          observeRevision: async () => 1
+        },
         cardsConfigDir: () => cardsHome,
         io: {
           ensureDirSync: (dir: string) => realFs.mkdirSync(dir, { recursive: true }),
-          writeTextFileSync: (path: string, data: string) => {
-            if (path.endsWith(`${CONVERSATION_ID}.failure`)) {
-              throw Object.assign(new Error('EISDIR: illegal operation on a directory'), { code: 'EISDIR' });
-            }
-            realFs.writeFileSync(path, data, 'utf8');
-          },
+          writeTextFileSync: (path: string, data: string) => realFs.writeFileSync(path, data, 'utf8'),
           existsSync: (path: string) => realFs.existsSync(path),
           readTextFileSync: (path: string) => realFs.readFileSync(path, 'utf8'),
           removeSync: (path: string) => realFs.rmSync(path, { force: true })
@@ -762,7 +770,6 @@ describe('launch action — antigravity branch', () => {
       await expect(
         dispatchAntigravityHook(
           {
-            conversationId: CONVERSATION_ID,
             workspacePaths: ['/test/workspace'],
             transcriptPath: '/test/transcript',
             artifactDirectoryPath: '/test/artifacts',
@@ -784,16 +791,14 @@ describe('launch action — antigravity branch', () => {
         `${UNKNOWN_CONVERSATION}.failure`
       );
       expect(JSON.parse(await realFsp.readFile(retryPath, 'utf8'))).toEqual({
-        stage: 'action-env',
-        reason: '[action-env] the Cards action environment is missing or malformed'
+        stage: 'input',
+        reason: expect.stringContaining('[input]')
       });
 
-      // Exit status and stderr stay clean, exactly as the host behaves: the
-      // retry is the only channel that reaches the launcher's read.
+      // Exit status and stderr stay clean, exactly as the host behaves; the
+      // placeholder marker is the channel that reaches the launcher's read.
       child.emit('close', 0);
-      await expect(promise).rejects.toThrow(
-        /runtime hook failure \(action-env: \[action-env\] the Cards action environment is missing or malformed\)/
-      );
+      await expect(promise).rejects.toThrow(/runtime hook failure \(input: \[input\]/);
       const { transitionCardStatus } = await import('@cards.management/sdk/bin/process-utils');
       expect(transitionCardStatus).not.toHaveBeenCalled();
     } finally {
