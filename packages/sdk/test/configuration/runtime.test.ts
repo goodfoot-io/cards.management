@@ -2,6 +2,9 @@
  * Authenticated action runtime composition checks.
  * @summary Durable action runtime tests
  */
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCommand, CardsAssistantCommand } from '../../src/config/command-types.js';
 import { CARDS_ENV_VARS } from '../../src/config/env.js';
@@ -46,11 +49,14 @@ import { executeCommand, logger } from '../../src/config/runtime.js';
 describe('executeCommand', () => {
   const originalEnv = { ...process.env };
   let exitSpy: ReturnType<typeof vi.spyOn>;
+  let cardsHome: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
+    cardsHome = await mkdtemp(path.join(tmpdir(), 'cards-agent-handler-'));
     runtime.onMessage = undefined;
     runtime.options = undefined;
     runtime.send.mockClear();
+    runtime.send.mockResolvedValue({ status: 'accepted', messageId: 'accepted' });
     runtime.start.mockClear();
     runtime.stop.mockClear();
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
@@ -66,13 +72,15 @@ describe('executeCommand', () => {
       [CARDS_ENV_VARS.CARD_REPO_PATH]: '/workspace/cards',
       [CARDS_ENV_VARS.CONFIG_PATH]: '/workspace/.cards/config',
       [CARDS_ENV_VARS.EXTENSION_PATH]: '/extension/path',
-      [CARDS_ENV_VARS.MARKETPLACE_PATH]: '/marketplace'
+      [CARDS_ENV_VARS.MARKETPLACE_PATH]: '/marketplace',
+      CARDS_HOME: cardsHome
     });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
     process.env = { ...originalEnv };
+    await rm(cardsHome, { recursive: true, force: true });
   });
 
   it('executes cards-assistant commands without opening an action runtime', async () => {
@@ -126,6 +134,102 @@ describe('executeCommand', () => {
     release();
     await executing;
     expect(runtime.stop).toHaveBeenCalledOnce();
+  });
+
+  it('performs and reports shutdown once when custody ACK is lost and the command is replayed', async () => {
+    runtime.send.mockRejectedValueOnce(new Error('connection closed before ACK'));
+    let release!: () => void;
+    const shutdown = vi.fn(async () => 'graceful' as const);
+    const handler = vi.fn(async (_input, context) => {
+      context.onAgentShutdown(shutdown);
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const command: ActionCommand = Object.assign(handler, {
+      factoryType: 'action' as const,
+      actionName: 'Test Action'
+    });
+    const executing = executeCommand(command);
+    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+    const incoming = {
+      type: 'execution.agentShutdownCommand',
+      messageId: 'lost-custody-command',
+      payload: { shutdownRequestId: 'shutdown-lost', workRevision: 1 }
+    };
+    await runtime.onMessage?.(incoming);
+    await runtime.onMessage?.(incoming);
+    expect(shutdown).toHaveBeenCalledOnce();
+    expect(runtime.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'execution.agentTermination',
+        causationId: 'lost-custody-command'
+      })
+    );
+    release();
+    await executing;
+  });
+
+  it('performs cancellation once despite an uncertain custody ACK and duplicate delivery', async () => {
+    runtime.send.mockRejectedValueOnce(new Error('custody ACK dropped'));
+    let release!: () => void;
+    const cancel = vi.fn(async () => undefined);
+    const handler = vi.fn(async (_input, context) => {
+      context.onCancel(cancel);
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const command: ActionCommand = Object.assign(handler, {
+      factoryType: 'action' as const,
+      actionName: 'Test Action'
+    });
+    const executing = executeCommand(command);
+    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+    const incoming = { type: 'execution.cancelCommand', messageId: 'cancel-lost-ack', payload: {} };
+    await runtime.onMessage?.(incoming);
+    await runtime.onMessage?.(incoming);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
+    release();
+    await executing;
+  });
+
+  it('performs and reports interactive handoff once despite an uncertain custody ACK and replay', async () => {
+    let custodyAttempted = false;
+    runtime.send.mockImplementation(async (message) => {
+      if (message.type === 'execution.commandCustody' && !custodyAttempted) {
+        custodyAttempted = true;
+        throw new Error('custody ACK dropped');
+      }
+      return { status: 'accepted', messageId: 'accepted' };
+    });
+    let release!: () => void;
+    const switchToInteractive = vi.fn(() => ({ sessionId: 'stable-session' }));
+    const handler = vi.fn(async (_input, context) => {
+      context.onSwitchToInteractive(switchToInteractive);
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const command: ActionCommand = Object.assign(handler, {
+      factoryType: 'action' as const,
+      actionName: 'Test Action'
+    });
+    const executing = executeCommand(command);
+    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+    const incoming = { type: 'execution.switchToInteractiveCommand', messageId: 'switch-lost-ack', payload: {} };
+    await runtime.onMessage?.(incoming);
+    await runtime.onMessage?.(incoming);
+    expect(switchToInteractive).toHaveBeenCalledOnce();
+    expect(runtime.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'execution.interactiveHandoff',
+        causationId: 'switch-lost-ack'
+      })
+    );
+    release();
+    await executing;
   });
 
   it('advertises switch only after a handler exists and reports its correlated continuation', async () => {
