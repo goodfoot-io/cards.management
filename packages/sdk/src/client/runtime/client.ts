@@ -372,11 +372,16 @@ class RuntimeClientImpl implements RuntimeClient {
     socket: WebSocket,
     opening: OutboundMessage<'runtime.register'> | OutboundMessage<'runtime.resume'>
   ): Promise<RegistrationOutcome | null> {
-    const opened = await new Promise<boolean>((resolve) => {
-      socket.addEventListener('open', () => resolve(true), { once: true });
-      socket.addEventListener('error', () => resolve(false), { once: true });
-      socket.addEventListener('close', () => resolve(false), { once: true });
-    });
+    const opened =
+      socket.readyState === WebSocket.OPEN
+        ? true
+        : socket.readyState >= WebSocket.CLOSING
+          ? false
+          : await new Promise<boolean>((resolve) => {
+              socket.addEventListener('open', () => resolve(true), { once: true });
+              socket.addEventListener('error', () => resolve(false), { once: true });
+              socket.addEventListener('close', () => resolve(false), { once: true });
+            });
     if (!opened) {
       return null;
     }

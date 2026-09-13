@@ -86,6 +86,20 @@ describe('connecting', () => {
     expect(client.state).toBe('connected');
   });
 
+  it('registers when the socket opens while the durable outbox is still being scanned', async () => {
+    server = await FakeRuntimeServer.start();
+    const outbox = new MemoryOutbox();
+    const scanAll = outbox.scanAll.bind(outbox);
+    outbox.scanAll = vi.fn(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      return scanAll();
+    });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+
+    await expect(client.connect()).resolves.toMatchObject({ status: 'connected' });
+    expect(server.received[0]?.type).toBe('runtime.register');
+  });
+
   it('treats a first connection in the slot as not resumed', async () => {
     server = await FakeRuntimeServer.start({
       registration: { status: 'registered', generation: 1, fencedGeneration: null } as never
