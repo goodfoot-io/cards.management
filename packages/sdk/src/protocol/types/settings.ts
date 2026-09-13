@@ -298,8 +298,8 @@ export interface ActionState {
   /** Last authenticated runtime contact, as a Unix timestamp in milliseconds. */
   runtimeLastContactAt?: number;
 
-  /** Next scheduled reconnect attempt, as a Unix timestamp in milliseconds. */
-  runtimeRetryAt?: number;
+  /** Most recent reconnect attempt observed by the server, as a Unix timestamp in milliseconds. */
+  runtimeAttemptObservedAt?: number;
 
   /** Last authoritative transport rejection, retained while retrying. */
   runtimeRejection?: string;
