@@ -141,7 +141,6 @@ const BASE_OPTIONS = {
 // ---------------------------------------------------------------------------
 
 describe('createWorktreeForCard', () => {
-  let settleResolve!: () => void;
   let earlyResult!: EarlyWorktreeResult;
 
   // The recomposed orchestrator delegates the disk + API phase to the real
@@ -155,10 +154,10 @@ describe('createWorktreeForCard', () => {
     cardsHomeDir = await mkdtemp(join(tmpdir(), 'create-wt-test-'));
     process.env['CARDS_HOME'] = cardsHomeDir;
 
-    const settle = new Promise<unknown>((res) => {
-      settleResolve = res as () => void;
-    }) as Promise<never>;
-    earlyResult = { path: EARLY_PATH, settle: settle as EarlyWorktreeResult['settle'] };
+    earlyResult = {
+      path: EARLY_PATH,
+      settle: Promise.resolve(undefined) as unknown as EarlyWorktreeResult['settle']
+    };
 
     vi.mocked(createWorktree).mockResolvedValue(earlyResult);
     vi.mocked(removeWorktree).mockResolvedValue(undefined);
@@ -242,8 +241,7 @@ describe('createWorktreeForCard', () => {
     expect(client.removeBranchCalls).toEqual([]);
 
     releaseHooksConfig();
-    const result = await creation;
-    await expect(result.settle).rejects.toBe(settlementError);
+    await expect(creation).rejects.toBe(settlementError);
 
     expect(client.removeBranchCalls).toEqual([
       ['main-95', 'cards/main-95/1', { sessionId: 'sess-abc', expectedRevision: 'test-revision' }]
@@ -275,48 +273,52 @@ describe('createWorktreeForCard', () => {
     expect(opts).toEqual({ sessionId: 'sess-abc' });
   });
 
-  it('calls addBranch with the EARLY path before settle is awaited', async () => {
+  it('overlaps addBranch with settlement but waits for settlement before handoff', async () => {
     const addBranchArgs: Parameters<CardsClient['addBranch']>[] = [];
-    let settleAwaited = false;
-
-    const settle = new Promise<never>((res) => {
-      // Resolve only after we mark settle as being waited on
-      setTimeout(() => {
-        settleAwaited = true;
-        res(undefined as never);
-      }, 100);
-    });
+    let resolveSettle!: () => void;
+    const settle = new Promise<void>((resolve) => {
+      resolveSettle = resolve;
+    }) as unknown as EarlyWorktreeResult['settle'];
     vi.mocked(createWorktree).mockResolvedValue({ path: EARLY_PATH, settle });
 
     const client = makeClient({
       addBranch: async (...args) => {
-        // By the time addBranch is called, settle must NOT have been awaited
-        expect(settleAwaited).toBe(false);
         addBranchArgs.push(args as Parameters<CardsClient['addBranch']>);
         return { outcome: 'created', revision: 'test-revision' };
       }
     });
 
-    // The orchestrator must not await settle before calling addBranch
-    await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
-
+    let handedOff = false;
+    const creation = createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS).then((value) => {
+      handedOff = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(addBranchArgs).toHaveLength(1));
+    expect(handedOff).toBe(false);
+    resolveSettle();
+    await creation;
     expect(addBranchArgs).toHaveLength(1);
-    expect(settleAwaited).toBe(false);
   });
 
-  it('returns the EarlyWorktreeResult (path + settle) without awaiting settle', async () => {
+  it('returns the worktree only after settlement succeeds', async () => {
     const client = makeClient();
-
-    const result = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
+    let resolveSettle!: () => void;
+    const settle = new Promise<void>((resolve) => {
+      resolveSettle = resolve;
+    }) as unknown as EarlyWorktreeResult['settle'];
+    vi.mocked(createWorktree).mockResolvedValue({ path: EARLY_PATH, settle });
+    let handedOff = false;
+    const creation = createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS).then((value) => {
+      handedOff = true;
+      return value;
+    });
+    await vi.waitFor(() => expect(client.addBranchCalls).toHaveLength(1));
+    expect(handedOff).toBe(false);
+    resolveSettle();
+    const result = await creation;
 
     expect(result.path).toBe(EARLY_PATH);
-    // settle must be a promise (not undefined); its resolution must be
-    // outstanding — we can check it hasn't resolved synchronously.
     expect(result.settle).toBeInstanceOf(Promise);
-    // settle has NOT been awaited by the orchestrator, so settleResolve is
-    // still callable — trigger it and confirm result.settle resolves.
-    settleResolve();
-    // Confirm settle resolves (doesn't hang or reject) once triggered.
     await result.settle;
   });
 
@@ -327,13 +329,35 @@ describe('createWorktreeForCard', () => {
     });
     const client = makeClient();
 
-    const result = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
-    await expect(result.settle).rejects.toThrow('materialization failed');
+    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow(
+      'materialization failed'
+    );
 
     expect(client.removeBranchCalls).toEqual([
       ['main-95', 'cards/main-95/1', { sessionId: 'sess-abc', expectedRevision: 'test-revision' }]
     ]);
     expect(removeWorktree).toHaveBeenCalledWith(EARLY_PATH);
+  });
+
+  it('preserves Git resources when conditional registration removal fails', async () => {
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      repoRoot: '/repo',
+      createdBranch: 'cards/main-95/1',
+      settle: Promise.reject(new Error('materialization failed')) as EarlyWorktreeResult['settle']
+    });
+    const client = makeClient({
+      removeBranch: async () => {
+        throw new Error('registration revision changed');
+      }
+    });
+
+    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow(
+      /rollback was not attempted.*registration=registration revision changed/
+    );
+
+    expect(cleanupFailedWorktree).not.toHaveBeenCalled();
+    expect(removeWorktree).not.toHaveBeenCalled();
   });
 
   it('retries owned branch cleanup after inner settlement cleanup removed only the worktree', async () => {
@@ -349,8 +373,7 @@ describe('createWorktreeForCard', () => {
     vi.mocked(cleanupFailedWorktree).mockResolvedValue([]);
     const client = makeClient();
 
-    const result = await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
-    await expect(result.settle).rejects.toBe(initiatingError);
+    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toBe(initiatingError);
 
     expect(cleanupFailedWorktree).toHaveBeenCalledWith('/repo', EARLY_PATH, 'cards/main-95/1');
   });

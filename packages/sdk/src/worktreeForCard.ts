@@ -442,8 +442,9 @@ export interface CreateWorktreeForCardOptions {
  * synchronously before `settle` is returned, preserving the A2 guarantee for the
  * creation-time flow (the disk phase is in place before any caller can commit).
  *
- * Returns the same `{ path, settle }` shape so callers choose whether to await
- * settle. Never awaits settle internally — doing so would break the A2 race fix.
+ * Returns the same `{ path, settle }` shape after settlement completes. The
+ * early path remains available internally to outfit, but is not handed to an
+ * external consumer while rollback still owns the right to remove it.
  *
  * @param client - CardsClient used to register the branch record.
  * @param ref - Branch name to create.
@@ -501,16 +502,24 @@ export async function createWorktreeForCard(
     // removing the invocation-owned Git worktree and branch.
     const settle = result.settle.catch(async (settleError: unknown) => {
       const initiatingError = initiatingSettlementFailure(settleError);
-      const cleanupFailures: string[] = [];
       try {
         await client.removeBranch(cardId, ref, {
           sessionId,
           expectedRevision: outfit.registrationRevision
         });
       } catch (error: unknown) {
-        cleanupFailures.push(`registration=${error instanceof Error ? error.message : String(error)}`);
+        // A conditional unregister failure can mean a newer registration now
+        // owns this path. Preserve the Git resources rather than deleting them
+        // beneath that owner. It is also the safest response to an ambiguous
+        // transport failure: retry/reconciliation can inspect intact state.
+        throw new Error(
+          `createWorktreeForCard: settlement failed and rollback was not attempted at ${result.path}: ` +
+            `settle=${initiatingError instanceof Error ? initiatingError.message : String(initiatingError)}; ` +
+            `registration=${error instanceof Error ? error.message : String(error)}`,
+          { cause: initiatingError }
+        );
       }
-      cleanupFailures.push(...(await cleanupCreatedResources()));
+      const cleanupFailures = await cleanupCreatedResources();
       if (cleanupFailures.length > 0) {
         throw new Error(
           `createWorktreeForCard: settlement failed and rollback was incomplete at ${result.path}: ` +
@@ -520,7 +529,13 @@ export async function createWorktreeForCard(
       }
       throw initiatingError;
     });
-    return { path: result.path, settle };
+
+    // Do not publish the worktree path while this invocation can still roll it
+    // back. Awaiting here preserves the early overlap between settlement and
+    // outfit without allowing a launched process to acquire the path first.
+    // Return (rather than await) the guarded handoff promise so a settlement
+    // rejection is not mistaken for an outfit failure by the catch below.
+    return settle.then(() => ({ path: result.path, settle }));
   } catch (outfitError) {
     // Atomicity: the worktree dir + git branch now exist on disk but outfit
     // failed partway (e.g. addBranch rejected), so no fully-registered worktree
