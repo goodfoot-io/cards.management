@@ -339,6 +339,17 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
+  'execution.commandEffectResult': {
+    type: 'execution.commandEffectResult',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-result',
+    allowedRoles: ['agent-handler'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: true,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   'execution.cleanupComplete': {
     type: 'execution.cleanupComplete',
     direction: 'client-to-server',

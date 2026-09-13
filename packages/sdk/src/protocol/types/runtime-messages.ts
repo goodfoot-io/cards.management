@@ -267,6 +267,22 @@ export const agentTerminationPayloadSchema = z
   })
   .strict();
 
+/** Durable, fail-closed report for an agent-handler command whose effect cannot be reconciled after restart. */
+export const commandEffectResultPayloadSchema = z
+  .object({
+    commandMessageId: z.string().min(1),
+    controlRequestId: z.string().min(1),
+    commandType: z.enum([
+      'execution.cancelCommand',
+      'execution.switchToInteractiveCommand',
+      'execution.agentShutdownCommand'
+    ]),
+    disposition: z.literal('in-doubt'),
+    observedAt: z.string().datetime(),
+    reason: z.literal('handler-restarted-during-effect')
+  })
+  .strict();
+
 /**
  * Payload of `execution.cleanupComplete`. `statusMutationDeferred` is true when
  * an offline finisher could not verify fresh execution authority: the terminal
@@ -444,6 +460,7 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.launchAdmission': launchAdmissionPayloadSchema,
   'execution.launchOutcome': launchOutcomePayloadSchema,
   'execution.agentTermination': agentTerminationPayloadSchema,
+  'execution.commandEffectResult': commandEffectResultPayloadSchema,
   'execution.cleanupComplete': cleanupCompletePayloadSchema,
   'watcher.stopRequest': watcherStopPayloadSchema,
   'watcher.stopCommand': watcherStopPayloadSchema,

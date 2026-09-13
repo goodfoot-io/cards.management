@@ -304,6 +304,16 @@ export interface ActionState {
   /** Last authoritative transport rejection, retained while retrying. */
   runtimeRejection?: string;
 
+  /** Durable, execution-scoped diagnostic for a control effect that could not be reconciled safely. */
+  runtimeCommandDiagnostic?: {
+    commandMessageId: string;
+    controlRequestId: string;
+    commandType: 'cancel' | 'switch-to-interactive' | 'agent-shutdown';
+    disposition: 'in-doubt';
+    observedAt: number;
+    reason: 'handler-restarted-during-effect';
+  };
+
   /**
    * When present, indicates this is a synthetic terminal ActionState broadcast
    * for an action that was rejected by the coding-agent gate before dispatch.

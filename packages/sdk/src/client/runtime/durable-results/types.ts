@@ -23,6 +23,7 @@ export type DurableResultMessageType = Extract<
   | 'execution.launchAdmission'
   | 'execution.launchOutcome'
   | 'execution.agentTermination'
+  | 'execution.commandEffectResult'
   | 'execution.cleanupComplete'
   | 'execution.commandCustody'
   | 'watcher.stopResult'

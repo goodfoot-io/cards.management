@@ -90,11 +90,17 @@ type AgentCommandType =
   | 'execution.cancelCommand'
   | 'execution.switchToInteractiveCommand'
   | 'execution.agentShutdownCommand';
-type AgentCommandPhase = 'claimed' | 'effect-started' | 'effect-observed' | 'effect-in-doubt';
+type AgentCommandPhase =
+  | 'claimed'
+  | 'effect-started'
+  | 'effect-observed'
+  | 'effect-in-doubt'
+  | 'effect-in-doubt-reported';
 
 interface AgentCommandProgress {
   commandType: AgentCommandType;
   phase: AgentCommandPhase;
+  observedAt?: string;
 }
 
 /**
@@ -103,12 +109,14 @@ interface AgentCommandProgress {
  * @param messageId - Stable inbound command identity.
  * @param commandType - Received command kind whose effect is being tracked.
  * @param phase - Latest durably observed effect phase.
+ * @param observedAt - Stable first-observation time retained across result replay.
  */
 async function recordAgentCommandPhase(
   executionId: string,
   messageId: string,
   commandType: AgentCommandType,
-  phase: AgentCommandPhase
+  phase: AgentCommandPhase,
+  observedAt?: string
 ): Promise<void> {
   const root = path.join(resolveGlobalCardsConfigDir(), 'runtime', 'agent-handler-commands', executionId);
   await mkdir(root, { recursive: true, mode: 0o700 });
@@ -116,7 +124,7 @@ async function recordAgentCommandPhase(
   const temporary = `${file}.${process.pid}.tmp`;
   const handle = await open(temporary, 'wx', 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify({ executionId, messageId, commandType, phase })}\n`, 'utf8');
+    await handle.writeFile(`${JSON.stringify({ executionId, messageId, commandType, phase, observedAt })}\n`, 'utf8');
     await handle.sync();
   } finally {
     await handle.close();
@@ -152,10 +160,13 @@ async function readAgentCommandProgress(executionId: string, messageId: string):
       value['phase'] !== 'claimed' &&
       value['phase'] !== 'effect-started' &&
       value['phase'] !== 'effect-observed' &&
-      value['phase'] !== 'effect-in-doubt'
+      value['phase'] !== 'effect-in-doubt' &&
+      value['phase'] !== 'effect-in-doubt-reported'
     )
       throw new Error('Agent command journal phase is invalid');
-    return { commandType: value['commandType'], phase: value['phase'] };
+    if (value['observedAt'] !== undefined && typeof value['observedAt'] !== 'string')
+      throw new Error('Agent command journal observation time is invalid');
+    return { commandType: value['commandType'], phase: value['phase'], observedAt: value['observedAt'] };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -340,7 +351,11 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       let runtimeClient: RuntimeClient;
       const loaded = loadRuntimeCredential('agent-handler');
       const sendDurable = async <
-        T extends 'execution.commandCustody' | 'execution.agentTermination' | 'execution.interactiveHandoff'
+        T extends
+          | 'execution.commandCustody'
+          | 'execution.agentTermination'
+          | 'execution.interactiveHandoff'
+          | 'execution.commandEffectResult'
       >(
         type: T,
         payload: RuntimePayload<T>,
@@ -410,18 +425,43 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             const progress = await readAgentCommandProgress(loaded.execution.executionId, cmd.messageId);
             if (progress?.commandType !== undefined && progress.commandType !== commandType)
               throw new Error('Agent command replay changed command type');
-            if (progress?.phase === 'effect-observed' || progress?.phase === 'effect-in-doubt') return;
-            if (progress?.phase === 'effect-started') {
+            if (progress?.phase === 'effect-observed' || progress?.phase === 'effect-in-doubt-reported') return;
+            if (progress?.phase === 'effect-started' || progress?.phase === 'effect-in-doubt') {
               // Callback effects have no transactional recovery protocol. A
               // restart cannot distinguish "crashed before callback" from
               // "callback completed before persistence", so retrying could
               // duplicate a destructive effect. Preserve that uncertainty as
               // an explicit terminal state instead of pretending completion.
+              const observedAt = progress.observedAt ?? new Date().toISOString();
+              if (progress.phase === 'effect-started')
+                await recordAgentCommandPhase(
+                  loaded.execution.executionId,
+                  cmd.messageId,
+                  commandType,
+                  'effect-in-doubt',
+                  observedAt
+                );
+              const controlRequestId = cmd.causationId ?? cmd.requestId;
+              if (controlRequestId === null || controlRequestId === undefined)
+                throw new Error('Agent command reconciliation lacks its control request identity');
+              await sendDurable(
+                'execution.commandEffectResult',
+                {
+                  commandMessageId: cmd.messageId,
+                  controlRequestId,
+                  commandType,
+                  disposition: 'in-doubt',
+                  observedAt,
+                  reason: 'handler-restarted-during-effect'
+                },
+                cmd.messageId
+              );
               await recordAgentCommandPhase(
                 loaded.execution.executionId,
                 cmd.messageId,
                 commandType,
-                'effect-in-doubt'
+                'effect-in-doubt-reported',
+                observedAt
               );
               logger.error(`Agent command effect is in doubt after restart: ${cmd.messageId}`);
               return;

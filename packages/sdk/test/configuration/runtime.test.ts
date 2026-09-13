@@ -10,6 +10,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCommand, CardsAssistantCommand } from '../../src/config/command-types.js';
 import { CARDS_ENV_VARS } from '../../src/config/env.js';
 import { EXIT_CODES } from '../../src/config/exit-codes.js';
+import type { ActionContext, ActionInput } from '../../src/config/inputs.js';
 
 const runtime = vi.hoisted(() => ({
   options: undefined as
@@ -250,16 +251,33 @@ describe('executeCommand', () => {
   });
 
   it.each([
-    ['execution.cancelCommand', { type: 'execution.cancelCommand', messageId: 'restart-cancel', payload: {} }],
+    [
+      'execution.cancelCommand',
+      {
+        type: 'execution.cancelCommand',
+        messageId: 'restart-cancel',
+        requestId: 'execution-request',
+        causationId: 'cancel-request',
+        payload: {}
+      }
+    ],
     [
       'execution.switchToInteractiveCommand',
-      { type: 'execution.switchToInteractiveCommand', messageId: 'restart-switch', payload: {} }
+      {
+        type: 'execution.switchToInteractiveCommand',
+        messageId: 'restart-switch',
+        requestId: 'execution-request',
+        causationId: 'switch-request',
+        payload: {}
+      }
     ],
     [
       'execution.agentShutdownCommand',
       {
         type: 'execution.agentShutdownCommand',
         messageId: 'restart-shutdown',
+        requestId: 'execution-request',
+        causationId: 'shutdown-request',
         payload: { shutdownRequestId: 'shutdown-restart', workRevision: 1 }
       }
     ]
@@ -296,9 +314,77 @@ describe('executeCommand', () => {
     expect(cancel).not.toHaveBeenCalled();
     expect(switchToInteractive).not.toHaveBeenCalled();
     expect(shutdown).not.toHaveBeenCalled();
-    expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt');
+    expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt-reported');
+    expect(runtime.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'execution.commandEffectResult',
+        causationId: incoming.messageId,
+        payload: expect.objectContaining({
+          commandMessageId: incoming.messageId,
+          controlRequestId: incoming.causationId,
+          commandType,
+          disposition: 'in-doubt'
+        })
+      })
+    );
     release();
     await executing;
+  });
+
+  it('replays identical in-doubt evidence after its first custody ACK is lost', async () => {
+    const incoming = {
+      type: 'execution.cancelCommand',
+      messageId: 'restart-ack-loss',
+      requestId: 'execution-request',
+      causationId: 'cancel-request',
+      payload: {}
+    };
+    await mkdir(path.dirname(commandJournalFile(incoming.messageId)), { recursive: true });
+    await writeFile(
+      commandJournalFile(incoming.messageId),
+      `${JSON.stringify({
+        executionId: 'execution-1',
+        messageId: incoming.messageId,
+        commandType: incoming.type,
+        phase: 'effect-started'
+      })}\n`
+    );
+    const cancel = vi.fn(async () => undefined);
+    const run = async () => {
+      let release!: () => void;
+      const handler: ActionCommand = Object.assign(
+        async (_input: ActionInput, context: ActionContext) => {
+          context.onCancel(cancel);
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        },
+        { factoryType: 'action' as const, actionName: 'Test Action' }
+      );
+      const executing = executeCommand(handler);
+      await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+      return { executing, release };
+    };
+
+    runtime.send.mockRejectedValueOnce(new Error('result ACK lost'));
+    const first = await run();
+    await expect(runtime.onMessage?.(incoming)).rejects.toThrow('result ACK lost');
+    expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt');
+    const firstReport = runtime.send.mock.calls.at(-1)?.[0];
+    first.release();
+    await first.executing;
+
+    runtime.onMessage = undefined;
+    runtime.send.mockResolvedValue({ status: 'accepted', messageId: 'accepted' });
+    const second = await run();
+    const replay = runtime.onMessage as ((message: unknown) => Promise<void>) | undefined;
+    if (replay === undefined) throw new Error('runtime replay receiver was not installed');
+    await replay(incoming);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(runtime.send.mock.calls.at(-1)?.[0]).toEqual(firstReport);
+    expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt-reported');
+    second.release();
+    await second.executing;
   });
 
   it('advertises switch only after a handler exists and reports its correlated continuation', async () => {
