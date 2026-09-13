@@ -306,6 +306,47 @@ export async function readResultCustody(
   return record?.executionId === executionId ? record : null;
 }
 
+/**
+ * Lists custody records for one execution; unreadable records make the inspection fail closed.
+ * @param root - Protected durable-result custody root.
+ * @param executionId - Exact execution to inspect.
+ * @returns Every valid custody record belonging to the execution.
+ */
+export async function listResultCustodyForExecution(
+  root: string,
+  executionId: string
+): Promise<readonly DurableResultCustodyRecord[]> {
+  let names: string[];
+  try {
+    names = await fs.readdir(custodyRecordsDir(root));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const records: DurableResultCustodyRecord[] = [];
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue;
+    const parsed = await readCustodyByMessagePath(path.join(custodyRecordsDir(root), name));
+    if (parsed === null) throw new Error(`Unreadable durable result custody record: ${name}`);
+    if (parsed.executionId === executionId) records.push(parsed);
+  }
+  return records;
+}
+
+async function readCustodyByMessagePath(file: string): Promise<DurableResultCustodyRecord | null> {
+  let text: string;
+  try {
+    text = await fs.readFile(file, 'utf-8');
+  } catch {
+    return null;
+  }
+  try {
+    return validateDurableResultCustodyRecord(JSON.parse(text));
+  } catch {
+    return null;
+  }
+}
+
 async function readCustodyByMessage(root: string, messageId: string): Promise<DurableResultCustodyRecord | null> {
   let text: string;
   try {

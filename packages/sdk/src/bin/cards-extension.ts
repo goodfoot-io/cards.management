@@ -17,6 +17,7 @@ import { runExecuteCommand } from './cards-extension/execute-command.js';
 import { runIssue } from './cards-extension/issue.js';
 import { runNotify } from './cards-extension/notify.js';
 import { runPanel } from './cards-extension/panel.js';
+import { runRuntime } from './cards-extension/runtime.js';
 import { runWorkspace } from './cards-extension/workspace.js';
 import { formatErrorForCli } from './process-utils.js';
 
@@ -34,6 +35,7 @@ Subcommands:
   issue                           Open a pre-filled GitHub issue (reads JSON {title, body} from stdin)
   panel <show>                   Show a VS Code panel
   debug <start|stop|state>       Control the VS Code debugger
+  runtime retire <execution-id>  Guardedly retire a proven-dead legacy execution
 
 Options:
   -h, --help                     Show this help text
@@ -87,6 +89,7 @@ export async function main(argv: string[]): Promise<number> {
     if (sub === 'issue') return await runIssue(rest);
     if (sub === 'panel') return await runPanel(rest);
     if (sub === 'debug') return await runDebug(rest);
+    if (sub === 'runtime') return await runRuntime(rest);
 
     console.error(`cards-extension: unknown command "${sub}"`);
     console.error(HELP);

@@ -25,6 +25,7 @@ export {
 export {
   createFileResultCustodian,
   type FileResultCustodianOptions,
+  listResultCustodyForExecution,
   readResultCustody,
   resolveDurableResultRoot,
   takeResultCustody
