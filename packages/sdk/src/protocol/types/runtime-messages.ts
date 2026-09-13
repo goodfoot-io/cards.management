@@ -253,6 +253,18 @@ export const launchOutcomePayloadSchema = z
       })
       .strict()
       .optional(),
+    runtimeOwnerIdentity: z
+      .object({
+        processId: z.number().int().positive(),
+        bootId: z.string().min(1),
+        startedAtToken: z.string().min(1),
+        ownership: z.discriminatedUnion('kind', [
+          z.object({ kind: z.literal('posix-process-group'), groupId: z.number().int().positive() }).strict(),
+          z.object({ kind: z.literal('windows-job'), jobId: z.string().min(1) }).strict()
+        ])
+      })
+      .strict()
+      .optional(),
     message: z.string().max(4096).optional()
   })
   .strict();
