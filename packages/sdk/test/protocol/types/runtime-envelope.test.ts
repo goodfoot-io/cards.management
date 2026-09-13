@@ -136,6 +136,25 @@ describe('parseEnvelope', () => {
     expect(parseEnvelope(frame).payload).toEqual(frame['payload']);
   });
 
+  it('keeps the complete admitted launch contract in an execution request', () => {
+    const frame = validFrame({
+      type: 'execution.executeRequest',
+      producer: { producerId: 'server-1', role: 'server' },
+      payload: {
+        actionId: 'launch',
+        environmentName: 'default',
+        mode: 'interactive',
+        exitWhenDone: false,
+        selectedAgent: 'claude-code-cli',
+        model: 'deepseek-chat',
+        effort: 'high',
+        variableGroupIds: ['deepseek'],
+        continuation: '{"session":"next"}'
+      }
+    });
+    expect(parseEnvelope(frame).payload).toEqual(frame['payload']);
+  });
+
   it('defines interactive switching as a request distinct from the continuation result', () => {
     expect(
       parseEnvelope(

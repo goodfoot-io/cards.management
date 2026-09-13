@@ -274,6 +274,7 @@ export {
 } from './runtime-identity.js';
 // --- Runtime Protocol: Message Catalogue ---
 export {
+  launchRequestPayloadSchema,
   MAX_CONTROL_FRAME_BYTES,
   RUNTIME_MESSAGE_PAYLOADS,
   RUNTIME_MESSAGE_TYPES,

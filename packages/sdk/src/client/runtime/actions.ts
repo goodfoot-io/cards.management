@@ -8,13 +8,11 @@ import { z } from 'zod';
 import type {
   AdmissionRejectionReason,
   AdmissionUncertaintyReason,
-  AdmittedLaunchCredentials,
   BoundExecution,
   ClientLaunchAdmission,
   ImmutableActionParams,
   LaunchOutcome,
   OriginalCallerRequestId,
-  ReplayedLaunchAdmission,
   RetrievedAdmission,
   RuntimePayload
 } from '../../protocol/types/index.js';
@@ -163,14 +161,7 @@ export const publicActionLaunchResponseSchema = z.discriminatedUnion('dispositio
 export const publicActionRetrievalResponseSchema = retrievalResponseSchema;
 
 /** Ordinary API launch result: execution identity is public, role credentials never are. */
-export type PublicActionLaunchResult =
-  | Exclude<RuntimeActionLaunchResult, { readonly status: 'accepted' }>
-  | {
-      readonly status: 'accepted';
-      readonly requestId: string;
-      readonly messageId: string;
-      readonly execution: BoundExecution;
-    };
+export type PublicActionLaunchResult = RuntimeActionLaunchResult;
 
 /**
  * Normalizes durable launch state without confusing a spawned process with terminal completion.
@@ -234,7 +225,7 @@ export type RuntimeActionLaunchResult =
       readonly status: 'accepted';
       readonly requestId: OriginalCallerRequestId;
       readonly messageId: string;
-      readonly admission: AdmittedLaunchCredentials | ReplayedLaunchAdmission;
+      readonly execution: BoundExecution;
     }
   | {
       readonly status: 'completed';
@@ -283,7 +274,7 @@ export type RuntimeActionRetrievalResult =
 
 /** Typed durable action launch and retrieval client. */
 export interface RuntimeActionClient {
-  launch(cardId: string, request: RuntimeActionLaunchRequest): Promise<RuntimeActionLaunchResult>;
+  launch(cardId: string, request: RuntimeActionLaunchRequest): Promise<PublicActionLaunchResult>;
   retrieve(cardId: string, requestId: OriginalCallerRequestId): Promise<RuntimeActionRetrievalResult>;
 }
 
@@ -359,7 +350,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
   };
 
   return {
-    async launch(cardId, request): Promise<RuntimeActionLaunchResult> {
+    async launch(cardId, request): Promise<PublicActionLaunchResult> {
       const value = await transport(`/cards/${encodeURIComponent(cardId)}/runtime/actions`, {
         method: 'POST',
         body: JSON.stringify(request)
@@ -370,7 +361,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
       if (isTransportUncertainty(value)) {
         return { status: 'uncertain', requestId: request.requestId, messageId: request.messageId, reason: value };
       }
-      const parsed = launchResponseSchema.safeParse(value);
+      const parsed = publicActionLaunchResponseSchema.safeParse(value);
       if (!parsed.success) {
         return {
           status: 'uncertain',
@@ -379,17 +370,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
           reason: 'invalid-response'
         };
       }
-      const response = parsed.data as ClientLaunchAdmission;
-      const normalized = normalizeActionLaunchResponse(response, request);
-      if (normalized.status !== 'accepted') return normalized;
-      if (response.disposition === 'admitted' || response.disposition === 'replayed')
-        return { status: 'accepted', requestId: request.requestId, messageId: request.messageId, admission: response };
-      return {
-        status: 'uncertain',
-        requestId: request.requestId,
-        messageId: request.messageId,
-        reason: 'invalid-response'
-      };
+      return normalizeActionLaunchResponse(parsed.data, request);
     },
     async retrieve(cardId, requestId): Promise<RuntimeActionRetrievalResult> {
       const value = await transport(

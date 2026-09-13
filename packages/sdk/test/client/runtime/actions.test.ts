@@ -66,12 +66,26 @@ describe('runtime action HTTP client', () => {
     await listen((request, response) => {
       expect(request.headers.authorization).toBe('Bearer access-token');
       response.writeHead(202, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION, credentials: [] }));
+      response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION }));
     });
 
     await client?.launch('main-672', REQUEST);
 
     expect(requests).toEqual([{ method: 'POST', url: '/cards/main-672/runtime/actions', body: REQUEST }]);
+  });
+
+  it('rejects a public launch response that leaks protected runtime credentials', async () => {
+    await listen((_request, response) => {
+      response.writeHead(202, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({ disposition: 'admitted', execution: EXECUTION, credentials: [{ secret: 'must-not-leak' }] })
+      );
+    });
+
+    await expect(client?.launch('main-672', REQUEST)).resolves.toMatchObject({
+      status: 'uncertain',
+      reason: 'invalid-response'
+    });
   });
 
   it('maps admitted and pending replay responses to accepted while preserving both IDs', async () => {
@@ -218,7 +232,7 @@ describe('runtime action HTTP client', () => {
   it('retries after client reconstruction with exactly the same persisted request and message IDs', async () => {
     await listen((_request, response) => {
       response.writeHead(202, { 'content-type': 'application/json' });
-      response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION, credentials: [] }));
+      response.end(JSON.stringify({ disposition: 'admitted', execution: EXECUTION }));
     });
     const first = client;
     await first?.launch('main-672', REQUEST);
@@ -237,9 +251,7 @@ describe('runtime action HTTP client', () => {
       response.writeHead(request.method === 'POST' ? 202 : 404, { 'content-type': 'application/json' });
       response.end(
         JSON.stringify(
-          request.method === 'POST'
-            ? { disposition: 'admitted', execution: EXECUTION, credentials: [] }
-            : { status: 'not-found' }
+          request.method === 'POST' ? { disposition: 'admitted', execution: EXECUTION } : { status: 'not-found' }
         )
       );
     });

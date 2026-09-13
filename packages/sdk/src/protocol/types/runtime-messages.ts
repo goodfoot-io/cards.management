@@ -193,16 +193,8 @@ export const agentShutdownCommandPayloadSchema = z
   })
   .strict();
 
-/** Payload of `execution.executeRequest`. */
-export const executeRequestPayloadSchema = z
-  .object({
-    actionId: z.string().min(1),
-    environmentName: z.string().min(1),
-    mode: executionModeSchema,
-    exitWhenDone: z.boolean(),
-    selectedAgent: z.string().min(1).optional()
-  })
-  .strict();
+/** Payload of `execution.executeRequest`; identical to the admitted immutable launch parameters. */
+export const executeRequestPayloadSchema = launchRequestPayloadSchema;
 
 /** Payload of `watcher.stopRequest` and `watcher.stopCommand`. */
 export const watcherStopPayloadSchema = z

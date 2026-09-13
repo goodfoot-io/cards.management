@@ -281,6 +281,7 @@ export {
   type LifecycleGuard,
   type LifecycleTransition,
   type LifecycleTrigger,
+  launchRequestPayloadSchema,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ID_LENGTH,
   MAX_OUTSTANDING_MESSAGES,
