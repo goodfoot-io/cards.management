@@ -45,12 +45,11 @@ Run the repository's full validation suite — linting, type checking, and tests
 - "Resolve or block" is the only valid outcome — there is no "proceed despite errors" path
 - Fix infrastructure failures (missing dependencies, path issues) — do not work around them
 - Creating a card is not an alternative to fixing a validation failure — test failures, lint errors, and type errors must be fixed in this branch
-- **If blocked by an issue outside the validation toolchain** (e.g., missing credentials, network outage, unavailable service): Report by adding to existing open cards about the block, or create a new card with "todo" status
+- **Structural obstacle** (unreachable services, missing system tools or credentials, hardware constraints, an unresolved upstream bug on the base branch): Add `blocked` to `tags` in `CARD.meta.json` if not already present. Write the failure output and your diagnosis to `comments/validation-failed.md`. Commit both files and **STOP** — Awaiting user intervention.
 
 Based on validation result:
 - **All validation passes**: Proceed to Step 3: Fast-Forward Merge.
-- **Validation fails and attempts < 3**: Fix errors, re-run validation
-- **Validation fails and attempts >= 3**: Add `blocked` to `tags` in `CARD.meta.json` if not already present. Write failure details to `comments/validation-failed.md` (what failed, what was attempted, what intervention is needed). Commit both files and **STOP** — Awaiting user intervention.
+- **Validation fails**: Fix errors, re-run validation — repeat until it passes; there is no attempt limit
 
 ## 3. Fast-Forward Merge
 
