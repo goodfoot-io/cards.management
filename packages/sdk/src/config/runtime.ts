@@ -444,7 +444,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
               const controlRequestId = cmd.causationId ?? cmd.requestId;
               if (controlRequestId === null || controlRequestId === undefined)
                 throw new Error('Agent command reconciliation lacks its control request identity');
-              await sendDurable(
+              const accepted = await sendDurable(
                 'execution.commandEffectResult',
                 {
                   commandMessageId: cmd.messageId,
@@ -456,6 +456,10 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
                 },
                 cmd.messageId
               );
+              if (!accepted) {
+                logger.warn(`Agent command in-doubt result remains pending delivery: ${cmd.messageId}`);
+                return;
+              }
               await recordAgentCommandPhase(
                 loaded.execution.executionId,
                 cmd.messageId,
@@ -525,6 +529,10 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             }
           })();
           commandEffects.set(cmd.messageId, effect);
+          const releaseEffect = (): void => {
+            if (commandEffects.get(cmd.messageId) === effect) commandEffects.delete(cmd.messageId);
+          };
+          void effect.then(releaseEffect, releaseEffect);
           return effect;
         }
       });

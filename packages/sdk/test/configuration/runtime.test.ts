@@ -331,13 +331,17 @@ describe('executeCommand', () => {
     await executing;
   });
 
-  it('replays identical in-doubt evidence after its first custody ACK is lost', async () => {
+  it.each([
+    ['execution.cancelCommand', 'retry-cancel', {}],
+    ['execution.switchToInteractiveCommand', 'retry-switch', {}],
+    ['execution.agentShutdownCommand', 'retry-shutdown', { shutdownRequestId: 'shutdown-retry', workRevision: 1 }]
+  ] as const)('retries uncertain %s diagnostics live and remains terminal after fresh replay', async (type, id, payload) => {
     const incoming = {
-      type: 'execution.cancelCommand',
-      messageId: 'restart-ack-loss',
+      type,
+      messageId: id,
       requestId: 'execution-request',
-      causationId: 'cancel-request',
-      payload: {}
+      causationId: `${id}-request`,
+      payload
     };
     await mkdir(path.dirname(commandJournalFile(incoming.messageId)), { recursive: true });
     await writeFile(
@@ -350,11 +354,15 @@ describe('executeCommand', () => {
       })}\n`
     );
     const cancel = vi.fn(async () => undefined);
+    const switchToInteractive = vi.fn(() => ({ sessionId: 'must-not-run' }));
+    const shutdown = vi.fn(async () => 'graceful' as const);
     const run = async () => {
       let release!: () => void;
       const handler: ActionCommand = Object.assign(
         async (_input: ActionInput, context: ActionContext) => {
           context.onCancel(cancel);
+          context.onSwitchToInteractive(switchToInteractive);
+          context.onAgentShutdown(shutdown);
           await new Promise<void>((resolve) => {
             release = resolve;
           });
@@ -366,25 +374,116 @@ describe('executeCommand', () => {
       return { executing, release };
     };
 
-    runtime.send.mockRejectedValueOnce(new Error('result ACK lost'));
+    let reportUnavailable = true;
+    runtime.send.mockImplementation(async (message) => {
+      if (message.type === 'execution.commandEffectResult' && reportUnavailable) {
+        reportUnavailable = false;
+        return { status: 'unavailable', messageId: 'not-enqueued' };
+      }
+      return { status: 'accepted', messageId: 'accepted' };
+    });
     const first = await run();
-    await expect(runtime.onMessage?.(incoming)).rejects.toThrow('result ACK lost');
+    await runtime.onMessage?.(incoming);
     expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt');
-    const firstReport = runtime.send.mock.calls.at(-1)?.[0];
+    const reports = () =>
+      runtime.send.mock.calls
+        .map(([message]) => message)
+        .filter(({ type }) => type === 'execution.commandEffectResult');
+    const firstReport = reports().at(-1);
+
+    await runtime.onMessage?.(incoming);
+    expect(reports()).toHaveLength(2);
+    expect(reports().at(-1)).toEqual(firstReport);
+    expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt-reported');
     first.release();
     await first.executing;
 
     runtime.onMessage = undefined;
-    runtime.send.mockResolvedValue({ status: 'accepted', messageId: 'accepted' });
-    const second = await run();
+    const reportCount = reports().length;
+    const fresh = await run();
     const replay = runtime.onMessage as ((message: unknown) => Promise<void>) | undefined;
     if (replay === undefined) throw new Error('runtime replay receiver was not installed');
     await replay(incoming);
     expect(cancel).not.toHaveBeenCalled();
-    expect(runtime.send.mock.calls.at(-1)?.[0]).toEqual(firstReport);
+    expect(switchToInteractive).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(reports()).toHaveLength(reportCount);
     expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt-reported');
-    second.release();
-    await second.executing;
+    fresh.release();
+    await fresh.executing;
+  });
+
+  it.each([
+    ['execution.cancelCommand', 'fresh-cancel', {}],
+    ['execution.switchToInteractiveCommand', 'fresh-switch', {}],
+    ['execution.agentShutdownCommand', 'fresh-shutdown', { shutdownRequestId: 'shutdown-fresh', workRevision: 1 }]
+  ] as const)('lets a fresh handler retry an uncertain %s diagnostic', async (type, id, payload) => {
+    const incoming = {
+      type,
+      messageId: id,
+      requestId: 'execution-request',
+      causationId: `${id}-request`,
+      payload
+    };
+    await mkdir(path.dirname(commandJournalFile(id)), { recursive: true });
+    await writeFile(
+      commandJournalFile(id),
+      `${JSON.stringify({ executionId: 'execution-1', messageId: id, commandType: type, phase: 'effect-started' })}\n`
+    );
+    const callbacks = {
+      cancel: vi.fn(async () => undefined),
+      switch: vi.fn(() => ({ sessionId: 'must-not-run' })),
+      shutdown: vi.fn(async () => 'graceful' as const)
+    };
+    const run = async () => {
+      let release!: () => void;
+      const handler: ActionCommand = Object.assign(
+        async (_input: ActionInput, context: ActionContext) => {
+          context.onCancel(callbacks.cancel);
+          context.onSwitchToInteractive(callbacks.switch);
+          context.onAgentShutdown(callbacks.shutdown);
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+        },
+        { factoryType: 'action' as const, actionName: 'Test Action' }
+      );
+      const executing = executeCommand(handler);
+      await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+      return { executing, release };
+    };
+    let unavailable = true;
+    runtime.send.mockImplementation(async (message) => {
+      if (message.type === 'execution.commandEffectResult' && unavailable) {
+        unavailable = false;
+        return { status: 'unavailable', messageId: 'not-enqueued' };
+      }
+      return { status: 'accepted', messageId: 'accepted' };
+    });
+    const reports = () =>
+      runtime.send.mock.calls
+        .map(([message]) => message)
+        .filter(({ type }) => type === 'execution.commandEffectResult');
+    const first = await run();
+    await runtime.onMessage?.(incoming);
+    expect(await readCommandPhase(id)).toBe('effect-in-doubt');
+    const originalReport = reports()[0];
+    first.release();
+    await first.executing;
+
+    runtime.onMessage = undefined;
+    const fresh = await run();
+    const replay = runtime.onMessage as ((message: unknown) => Promise<void>) | undefined;
+    if (replay === undefined) throw new Error('fresh runtime replay receiver was not installed');
+    await replay(incoming);
+    expect(reports()).toHaveLength(2);
+    expect(reports()[1]).toEqual(originalReport);
+    expect(await readCommandPhase(id)).toBe('effect-in-doubt-reported');
+    expect(callbacks.cancel).not.toHaveBeenCalled();
+    expect(callbacks.switch).not.toHaveBeenCalled();
+    expect(callbacks.shutdown).not.toHaveBeenCalled();
+    fresh.release();
+    await fresh.executing;
   });
 
   it('advertises switch only after a handler exists and reports its correlated continuation', async () => {
