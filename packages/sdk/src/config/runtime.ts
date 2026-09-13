@@ -86,17 +86,28 @@ export const logger = new Logger({ subsystem: 'cards-default-configuration-hooks
  */
 type AnyCommand = ActionCommand | CardsAssistantCommand;
 
-type AgentCommandPhase = 'effect-started' | 'effect-observed';
+type AgentCommandType =
+  | 'execution.cancelCommand'
+  | 'execution.switchToInteractiveCommand'
+  | 'execution.agentShutdownCommand';
+type AgentCommandPhase = 'claimed' | 'effect-started' | 'effect-observed' | 'effect-in-doubt';
+
+interface AgentCommandProgress {
+  commandType: AgentCommandType;
+  phase: AgentCommandPhase;
+}
 
 /**
  * Writes owner-only local evidence that fences duplicate agent command effects.
  * @param executionId - Stable execution scope.
  * @param messageId - Stable inbound command identity.
+ * @param commandType - Received command kind whose effect is being tracked.
  * @param phase - Latest durably observed effect phase.
  */
 async function recordAgentCommandPhase(
   executionId: string,
   messageId: string,
+  commandType: AgentCommandType,
   phase: AgentCommandPhase
 ): Promise<void> {
   const root = path.join(resolveGlobalCardsConfigDir(), 'runtime', 'agent-handler-commands', executionId);
@@ -105,7 +116,7 @@ async function recordAgentCommandPhase(
   const temporary = `${file}.${process.pid}.tmp`;
   const handle = await open(temporary, 'wx', 0o600);
   try {
-    await handle.writeFile(`${JSON.stringify({ executionId, messageId, phase })}\n`, 'utf8');
+    await handle.writeFile(`${JSON.stringify({ executionId, messageId, commandType, phase })}\n`, 'utf8');
     await handle.sync();
   } finally {
     await handle.close();
@@ -119,7 +130,7 @@ async function recordAgentCommandPhase(
  * @param messageId - Stable inbound command identity.
  * @returns The recorded phase, or null when this command is new.
  */
-async function readAgentCommandPhase(executionId: string, messageId: string): Promise<AgentCommandPhase | null> {
+async function readAgentCommandProgress(executionId: string, messageId: string): Promise<AgentCommandProgress | null> {
   const file = path.join(
     resolveGlobalCardsConfigDir(),
     'runtime',
@@ -131,9 +142,20 @@ async function readAgentCommandPhase(executionId: string, messageId: string): Pr
     const value = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
     if (value['executionId'] !== executionId || value['messageId'] !== messageId)
       throw new Error('Agent command journal identity mismatch');
-    if (value['phase'] !== 'effect-started' && value['phase'] !== 'effect-observed')
+    if (
+      value['commandType'] !== 'execution.cancelCommand' &&
+      value['commandType'] !== 'execution.switchToInteractiveCommand' &&
+      value['commandType'] !== 'execution.agentShutdownCommand'
+    )
+      throw new Error('Agent command journal type is invalid');
+    if (
+      value['phase'] !== 'claimed' &&
+      value['phase'] !== 'effect-started' &&
+      value['phase'] !== 'effect-observed' &&
+      value['phase'] !== 'effect-in-doubt'
+    )
       throw new Error('Agent command journal phase is invalid');
-    return value['phase'];
+    return { commandType: value['commandType'], phase: value['phase'] };
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -380,13 +402,32 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             cmd.type !== 'execution.agentShutdownCommand'
           )
             return;
+          const commandType: AgentCommandType = cmd.type;
           const existingEffect = commandEffects.get(cmd.messageId);
           if (existingEffect) return existingEffect;
 
           const effect = (async (): Promise<void> => {
-            const phase = await readAgentCommandPhase(loaded.execution.executionId, cmd.messageId);
-            if (phase !== null) return;
-            await recordAgentCommandPhase(loaded.execution.executionId, cmd.messageId, 'effect-started');
+            const progress = await readAgentCommandProgress(loaded.execution.executionId, cmd.messageId);
+            if (progress?.commandType !== undefined && progress.commandType !== commandType)
+              throw new Error('Agent command replay changed command type');
+            if (progress?.phase === 'effect-observed' || progress?.phase === 'effect-in-doubt') return;
+            if (progress?.phase === 'effect-started') {
+              // Callback effects have no transactional recovery protocol. A
+              // restart cannot distinguish "crashed before callback" from
+              // "callback completed before persistence", so retrying could
+              // duplicate a destructive effect. Preserve that uncertainty as
+              // an explicit terminal state instead of pretending completion.
+              await recordAgentCommandPhase(
+                loaded.execution.executionId,
+                cmd.messageId,
+                commandType,
+                'effect-in-doubt'
+              );
+              logger.error(`Agent command effect is in doubt after restart: ${cmd.messageId}`);
+              return;
+            }
+            if (progress === null)
+              await recordAgentCommandPhase(loaded.execution.executionId, cmd.messageId, commandType, 'claimed');
 
             // `send` durably forms this obligation in the client outbox before it
             // waits for an ACK. ACK uncertainty must not suppress an effect the
@@ -397,6 +438,8 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
               logger.warn(`Command custody ACK uncertain: ${getErrorMessage(error)}`);
             }
 
+            await recordAgentCommandPhase(loaded.execution.executionId, cmd.messageId, commandType, 'effect-started');
+
             if (cmd.type === 'execution.agentShutdownCommand') {
               if (agentShutdownProcessed) return;
               agentShutdownProcessed = true;
@@ -405,22 +448,41 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
                 cmd as RuntimeEnvelope<'execution.agentShutdownCommand'>,
                 sendDurable
               );
-              await recordAgentCommandPhase(loaded.execution.executionId, cmd.messageId, 'effect-observed');
+              await recordAgentCommandPhase(
+                loaded.execution.executionId,
+                cmd.messageId,
+                commandType,
+                'effect-observed'
+              );
               return;
             }
 
             commandProcessed = true;
 
             if (cmd.type === 'execution.cancelCommand') {
-              await handleCancelCommand(cancelCallback);
+              await handleCancelCommand(cancelCallback, async () => {
+                await recordAgentCommandPhase(
+                  loaded.execution.executionId,
+                  cmd.messageId,
+                  commandType,
+                  'effect-observed'
+                );
+              });
             } else if (cmd.type === 'execution.switchToInteractiveCommand') {
               await handleSwitchToInteractiveCommand(
                 switchToInteractiveCallback,
                 cmd as RuntimeEnvelope<'execution.switchToInteractiveCommand'>,
-                sendDurable
+                sendDurable,
+                async () => {
+                  await recordAgentCommandPhase(
+                    loaded.execution.executionId,
+                    cmd.messageId,
+                    commandType,
+                    'effect-observed'
+                  );
+                }
               );
             }
-            await recordAgentCommandPhase(loaded.execution.executionId, cmd.messageId, 'effect-observed');
           })();
           commandEffects.set(cmd.messageId, effect);
           return effect;
@@ -486,10 +548,15 @@ function toPromise<T>(result: T | Promise<T>): Promise<T> {
  * is to wind down promptly, not to escalate cleanup failures.
  *
  * @param callback - The registered cancel callback, if any
+ * @param recordObserved - Persists terminal evidence before process termination.
  * @internal
  */
-async function handleCancelCommand(callback: (() => void | Promise<void>) | undefined): Promise<void> {
+async function handleCancelCommand(
+  callback: (() => void | Promise<void>) | undefined,
+  recordObserved: () => Promise<void>
+): Promise<void> {
   if (!callback) {
+    await recordObserved();
     process.kill(process.pid, 'SIGTERM');
     return;
   }
@@ -500,6 +567,7 @@ async function handleCancelCommand(callback: (() => void | Promise<void>) | unde
   } catch (error) {
     logger.error(`onCancel callback error: ${getErrorMessage(error)}`);
   }
+  await recordObserved();
   cleanupAndExit(EXIT_CODES.SUCCESS);
 }
 
@@ -512,6 +580,7 @@ async function handleCancelCommand(callback: (() => void | Promise<void>) | unde
  * @param callback - The registered switchToInteractive callback, if any
  * @param command - Correlated switch command whose identity fences the handoff.
  * @param sendDurable - Authenticated sender for the continuation result.
+ * @param recordObserved - Persists terminal evidence before process termination.
  * @internal
  */
 async function handleSwitchToInteractiveCommand(
@@ -521,9 +590,11 @@ async function handleSwitchToInteractiveCommand(
     type: T,
     payload: RuntimePayload<T>,
     causationId: string
-  ) => Promise<boolean>
+  ) => Promise<boolean>,
+  recordObserved: () => Promise<void>
 ): Promise<void> {
   if (!callback) {
+    await recordObserved();
     return;
   }
 
@@ -535,9 +606,11 @@ async function handleSwitchToInteractiveCommand(
       { continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
       command.messageId
     );
+    await recordObserved();
     cleanupAndExit(accepted ? EXIT_CODES.SWITCH_TO_INTERACTIVE : EXIT_CODES.ERROR);
   } catch (error) {
     logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
+    await recordObserved();
     cleanupAndExit(EXIT_CODES.ERROR);
   }
 }

@@ -2,7 +2,8 @@
  * Authenticated action runtime composition checks.
  * @summary Durable action runtime tests
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -50,6 +51,20 @@ describe('executeCommand', () => {
   const originalEnv = { ...process.env };
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let cardsHome: string;
+
+  function commandJournalFile(messageId: string): string {
+    return path.join(
+      cardsHome,
+      'runtime',
+      'agent-handler-commands',
+      'execution-1',
+      `${createHash('sha256').update(messageId).digest('hex')}.json`
+    );
+  }
+
+  async function readCommandPhase(messageId: string): Promise<string> {
+    return (JSON.parse(await readFile(commandJournalFile(messageId), 'utf8')) as { phase: string }).phase;
+  }
 
   beforeEach(async () => {
     cardsHome = await mkdtemp(path.join(tmpdir(), 'cards-agent-handler-'));
@@ -191,6 +206,7 @@ describe('executeCommand', () => {
     await runtime.onMessage?.(incoming);
     expect(cancel).toHaveBeenCalledOnce();
     expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SUCCESS);
+    expect(await readCommandPhase('cancel-lost-ack')).toBe('effect-observed');
     release();
     await executing;
   });
@@ -228,6 +244,59 @@ describe('executeCommand', () => {
         causationId: 'switch-lost-ack'
       })
     );
+    expect(await readCommandPhase('switch-lost-ack')).toBe('effect-observed');
+    release();
+    await executing;
+  });
+
+  it.each([
+    ['execution.cancelCommand', { type: 'execution.cancelCommand', messageId: 'restart-cancel', payload: {} }],
+    [
+      'execution.switchToInteractiveCommand',
+      { type: 'execution.switchToInteractiveCommand', messageId: 'restart-switch', payload: {} }
+    ],
+    [
+      'execution.agentShutdownCommand',
+      {
+        type: 'execution.agentShutdownCommand',
+        messageId: 'restart-shutdown',
+        payload: { shutdownRequestId: 'shutdown-restart', workRevision: 1 }
+      }
+    ]
+  ] as const)('reconciles interrupted %s effects as explicitly in doubt after restart', async (commandType, incoming) => {
+    await mkdir(path.dirname(commandJournalFile(incoming.messageId)), { recursive: true });
+    await writeFile(
+      commandJournalFile(incoming.messageId),
+      `${JSON.stringify({
+        executionId: 'execution-1',
+        messageId: incoming.messageId,
+        commandType,
+        phase: 'effect-started'
+      })}\n`
+    );
+    let release!: () => void;
+    const cancel = vi.fn(async () => undefined);
+    const switchToInteractive = vi.fn(() => ({ sessionId: 'duplicate' }));
+    const shutdown = vi.fn(async () => 'graceful' as const);
+    const handler = vi.fn(async (_input, context) => {
+      context.onCancel(cancel);
+      context.onSwitchToInteractive(switchToInteractive);
+      context.onAgentShutdown(shutdown);
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    });
+    const command: ActionCommand = Object.assign(handler, {
+      factoryType: 'action' as const,
+      actionName: 'Test Action'
+    });
+    const executing = executeCommand(command);
+    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
+    await runtime.onMessage?.(incoming);
+    expect(cancel).not.toHaveBeenCalled();
+    expect(switchToInteractive).not.toHaveBeenCalled();
+    expect(shutdown).not.toHaveBeenCalled();
+    expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt');
     release();
     await executing;
   });
