@@ -39,6 +39,22 @@ const DEFAULT_OPENCODE_CONFIG_DIR = join(homedir(), '.config', 'opencode');
 const CARDS_OPENCODE_STAGING_DIR = join(homedir(), '.cards', 'opencode');
 const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
 
+vi.mock('../src/lib/opencode-termination.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/opencode-termination.js')>();
+  const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
+  return {
+    ...actual,
+    createOpencodeTerminationController: (
+      child: Parameters<typeof actual.createOpencodeTerminationController>[0],
+      options: Parameters<typeof actual.createOpencodeTerminationController>[1]
+    ) =>
+      actual.createOpencodeTerminationController(child, {
+        ...options,
+        authority: createSyntheticProcessTreeAuthority()
+      })
+  };
+});
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so spawn('opencode', ...) assertions hold on

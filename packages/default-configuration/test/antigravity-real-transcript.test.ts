@@ -32,6 +32,22 @@ import { flushMicrotasks } from '@cards.management/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AntigravitySessionFailureError } from '../src/lib/antigravity-session.js';
 
+vi.mock('../src/lib/antigravity-termination.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/antigravity-termination.js')>();
+  const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
+  return {
+    ...actual,
+    createAntigravityTerminationController: (
+      child: Parameters<typeof actual.createAntigravityTerminationController>[0],
+      options: Parameters<typeof actual.createAntigravityTerminationController>[1]
+    ) =>
+      actual.createAntigravityTerminationController(child, {
+        ...options,
+        authority: createSyntheticProcessTreeAuthority()
+      })
+  };
+});
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so spawn('agy', ...) assertions hold on

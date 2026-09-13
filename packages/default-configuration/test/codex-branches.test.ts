@@ -66,6 +66,19 @@ const TEST_CODEX_PLUGIN_VERSIONS = {
   runtime: 'runtime-test-version'
 } as const;
 
+vi.mock('../src/lib/codex-termination.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/codex-termination.js')>();
+  const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
+  return {
+    ...actual,
+    createCodexTerminationController: (
+      child: Parameters<typeof actual.createCodexTerminationController>[0],
+      options: Parameters<typeof actual.createCodexTerminationController>[1]
+    ) =>
+      actual.createCodexTerminationController(child, { ...options, authority: createSyntheticProcessTreeAuthority() })
+  };
+});
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so existing spawn('claude'/'codex', ...)

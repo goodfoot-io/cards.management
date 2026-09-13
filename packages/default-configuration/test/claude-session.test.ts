@@ -15,6 +15,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * @summary Tests for shared claude-session utilities
  */
 
+vi.mock('../src/lib/claude-termination.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/claude-termination.js')>();
+  const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
+  return {
+    ...actual,
+    createClaudeTerminationController: (
+      child: Parameters<typeof actual.createClaudeTerminationController>[0],
+      options: Parameters<typeof actual.createClaudeTerminationController>[1]
+    ) =>
+      actual.createClaudeTerminationController(child, { ...options, authority: createSyntheticProcessTreeAuthority() })
+  };
+});
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so existing spawn('claude'/'codex', ...)
