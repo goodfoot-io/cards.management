@@ -768,6 +768,41 @@ describe('createWorktree worktree path policy integration', () => {
     await removeWorktree(wPath);
   });
 
+  it('leaves settlement rollback to an explicit outer owner', async () => {
+    commitGitignore(repoDir, 'dist/\n');
+    await fs.mkdir(path.join(repoDir, 'dist'), { recursive: true });
+    await fs.writeFile(path.join(repoDir, 'dist', 'bundle.js'), 'console.log(1);\n');
+    await fs.mkdir(path.join(repoDir, '.worktreeinclude'));
+
+    const created = await createWorktree('feature/outer-cleanup-owner', {
+      cwd: repoDir,
+      cleanupOnSettleFailure: false
+    });
+    await expect(created.settle).rejects.toBeInstanceOf(WorktreeIncludeError);
+
+    // The primitive reports the failure without tearing down a path that a
+    // concurrent outer operation may still be using.
+    await expect(fs.access(created.path)).resolves.toBeUndefined();
+    expect(listWorktrees(repoDir)).toContain(created.path);
+    expect(
+      execFileSync('git', ['branch', '--list', 'feature/outer-cleanup-owner'], {
+        cwd: repoDir,
+        encoding: 'utf8'
+      }).trim()
+    ).toMatch(/feature\/outer-cleanup-owner$/);
+
+    const failures = await cleanupFailedWorktree(repoDir, created.path, created.createdBranch);
+    expect(failures).toEqual([]);
+    await expect(fs.access(created.path)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(listWorktrees(repoDir)).not.toContain(created.path);
+    expect(
+      execFileSync('git', ['branch', '--list', 'feature/outer-cleanup-owner'], {
+        cwd: repoDir,
+        encoding: 'utf8'
+      }).trim()
+    ).toBe('');
+  });
+
   it.skipIf(process.platform === 'win32')(
     'surfaces the initiating settle error and residual created branch when branch cleanup fails',
     async () => {

@@ -457,7 +457,11 @@ export async function createWorktreeForCard(
 ): Promise<EarlyWorktreeResult> {
   const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId, registrationIntent } = options;
 
-  const result = await createWorktree(ref, { cwd });
+  // Settlement and outfit deliberately overlap on the early path. Keep cleanup
+  // here, above both operations, so settlement cannot remove the worktree while
+  // outfit is still configuring it. Standalone createWorktree callers retain
+  // the primitive's default fail-closed cleanup behavior.
+  const result = await createWorktree(ref, { cwd, cleanupOnSettleFailure: false });
   const cleanupCreatedResources = async (): Promise<string[]> => {
     if (!result.repoRoot) {
       // Legacy/test implementations without ownership metadata can still

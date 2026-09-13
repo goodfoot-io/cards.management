@@ -79,6 +79,7 @@ import {
   cleanupFailedWorktree,
   clearCardBoundFile,
   createWorktree,
+  gitConfigWithRetry,
   removeWorktree,
   writeCardBoundFile
 } from '../src/worktree.js';
@@ -186,19 +187,69 @@ describe('createWorktreeForCard', () => {
     await rm(cardsHomeDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
-  it('calls createWorktree as a pure primitive (cwd only, no card options)', async () => {
+  it('assigns settlement cleanup ownership to the card-bound orchestrator', async () => {
     const client = makeClient();
     await createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
 
     expect(createWorktree).toHaveBeenCalledOnce();
-    expect(createWorktree).toHaveBeenCalledWith('cards/main-95/1', { cwd: undefined });
+    expect(createWorktree).toHaveBeenCalledWith('cards/main-95/1', {
+      cwd: undefined,
+      cleanupOnSettleFailure: false
+    });
   });
 
   it('forwards cwd when provided', async () => {
     const client = makeClient();
     await createWorktreeForCard(client, 'cards/main-95/1', { ...BASE_OPTIONS, cwd: '/repo' });
 
-    expect(createWorktree).toHaveBeenCalledWith('cards/main-95/1', { cwd: '/repo' });
+    expect(createWorktree).toHaveBeenCalledWith('cards/main-95/1', {
+      cwd: '/repo',
+      cleanupOnSettleFailure: false
+    });
+  });
+
+  it('does not roll back a failed settlement beneath an in-flight outfit', async () => {
+    const settlementError = new Error('materialization failed');
+    let releaseHooksConfig!: () => void;
+    const hooksConfigBlocked = new Promise<void>((resolve) => {
+      releaseHooksConfig = resolve;
+    });
+    let hooksConfigStarted!: () => void;
+    const hooksConfigEntered = new Promise<void>((resolve) => {
+      hooksConfigStarted = resolve;
+    });
+
+    vi.mocked(createWorktree).mockResolvedValue({
+      path: EARLY_PATH,
+      repoRoot: '/repo',
+      createdBranch: 'cards/main-95/1',
+      settle: Promise.reject(settlementError) as EarlyWorktreeResult['settle']
+    });
+    vi.mocked(gitConfigWithRetry).mockImplementation(async (args) => {
+      if (args.includes('--worktree')) {
+        hooksConfigStarted();
+        await hooksConfigBlocked;
+      }
+    });
+    const client = makeClient();
+
+    const creation = createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
+    await hooksConfigEntered;
+
+    // Settlement has already rejected, but outfit still owns the path.
+    await Promise.resolve();
+    expect(cleanupFailedWorktree).not.toHaveBeenCalled();
+    expect(client.removeBranchCalls).toEqual([]);
+
+    releaseHooksConfig();
+    const result = await creation;
+    await expect(result.settle).rejects.toBe(settlementError);
+
+    expect(client.removeBranchCalls).toEqual([
+      ['main-95', 'cards/main-95/1', { sessionId: 'sess-abc', expectedRevision: 'test-revision' }]
+    ]);
+    expect(cleanupFailedWorktree).toHaveBeenCalledOnce();
+    expect(cleanupFailedWorktree).toHaveBeenCalledWith('/repo', EARLY_PATH, 'cards/main-95/1');
   });
 
   it('calls addBranch with the early path, ref, parentBranch, and sessionId', async () => {

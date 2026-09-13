@@ -346,6 +346,15 @@ async function pathsEqual(a: string, b: string): Promise<boolean> {
 export interface CreateWorktreeOptions {
   /** Working directory used when locating git roots. Defaults to `process.cwd()`. */
   cwd?: string;
+  /**
+   * Whether this primitive owns rollback after asynchronous settlement fails.
+   * Card-bound creation disables this because its outer orchestrator must first
+   * quiesce the concurrent outfit operation, then roll back the registration,
+   * worktree, and invocation-owned branch as one unit.
+   *
+   * @default true
+   */
+  cleanupOnSettleFailure?: boolean;
 }
 
 export interface CreateWorktreeResult {
@@ -655,6 +664,9 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
       // evaluated. Cleanup failures are composed with the initiating failure so
       // callers see the exact residual resource instead of retrying into a
       // misleading no-op after the worktree directory disappeared.
+      if (options?.cleanupOnSettleFailure === false) {
+        throw error;
+      }
       const cleanupFailures = await cleanupFailedWorktree(repoRoot, worktreeDir, createdBranch ? ref : undefined);
       if (cleanupFailures.length > 0) {
         throw new WorktreeSettlementCleanupError(error, cleanupFailures);
