@@ -73,7 +73,6 @@ describe('config types', () => {
         description: 'Launch the app',
         icon: 'rocket',
         supportsBackgroundMode: true,
-        allowConcurrent: false,
         timeout: 30000,
         id: 'custom-id'
       } as ActionCommand<'Launch'>;
@@ -81,7 +80,6 @@ describe('config types', () => {
       expect(command.description).toBe('Launch the app');
       expect(command.icon).toBe('rocket');
       expect(command.supportsBackgroundMode).toBe(true);
-      expect(command.allowConcurrent).toBe(false);
       expect(command.timeout).toBe(30000);
       expect(command.id).toBe('custom-id');
     });

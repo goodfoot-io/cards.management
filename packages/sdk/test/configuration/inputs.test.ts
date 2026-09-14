@@ -40,6 +40,8 @@ describe('inputs', () => {
       const input: ActionInput = {
         cardId: 'card-123',
         actionName: 'Test Action',
+        executionId: 'execution-1',
+        worktreeDirective: { kind: 'reuse' },
         environment: 'default',
         executionMode: 'interactive',
         exitWhenDone: false,
@@ -57,6 +59,8 @@ describe('inputs', () => {
       const input: ActionInput = {
         cardId: 'card-123',
         actionName: 'Test Action',
+        executionId: 'execution-1',
+        worktreeDirective: { kind: 'reuse' },
         environment: 'default',
         executionMode: 'background',
         exitWhenDone: false,
@@ -74,6 +78,8 @@ describe('inputs', () => {
       const inputWithAgent: ActionInput = {
         cardId: 'card-123',
         actionName: 'Test Action',
+        executionId: 'execution-1',
+        worktreeDirective: { kind: 'reuse' },
         environment: 'default',
         executionMode: 'interactive',
         exitWhenDone: false,
@@ -88,6 +94,8 @@ describe('inputs', () => {
       const inputWithoutAgent: ActionInput = {
         cardId: 'card-123',
         actionName: 'Test Action',
+        executionId: 'execution-1',
+        worktreeDirective: { kind: 'reuse' },
         environment: 'default',
         executionMode: 'interactive',
         exitWhenDone: false,

@@ -76,14 +76,6 @@ export interface ActionConfig {
   supportsBackgroundMode?: boolean;
 
   /**
-   * Whether multiple instances can run simultaneously on the same card.
-   *
-   * When false (default), starting the action while it's running will be
-   * blocked. Set to true for idempotent actions that can safely overlap.
-   */
-  allowConcurrent?: boolean;
-
-  /**
    * Maximum execution time in milliseconds.
    *
    * If the action exceeds this timeout, the runtime will terminate it.
@@ -173,7 +165,6 @@ export type ActionHandler = (input: ActionInput, context: ActionContext) => void
  *     description: 'Deploy to production',
  *     icon: './icons/deploy.svg',
  *     supportsBackgroundMode: true,
- *     allowConcurrent: false,
  *     timeout: 60000
  *   },
  *   async (input, context) => {
@@ -197,7 +188,6 @@ export function defineAction<T extends ActionConfig>(
   fn.description = config.description;
   fn.icon = config.icon;
   fn.supportsBackgroundMode = config.supportsBackgroundMode;
-  fn.allowConcurrent = config.allowConcurrent;
   fn.timeout = config.timeout;
   fn.sourcePath = config.sourcePath;
 

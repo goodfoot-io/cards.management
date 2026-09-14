@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 /**
  * Faithful reproduction of the sibling-action cleanup coupling bug.
@@ -32,6 +32,42 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
  * @summary Reproduction: closing one action's terminal must not end a sibling.
  */
 
+vi.mock('@cards.management/sdk/client/discovery', () => ({
+  createCardsClient: async () => ({
+    getBranches: async () => ({
+      branches: fsSyncNs
+        .readdirSync(path.join(cardRepo, 'branches'))
+        .map((file) => JSON.parse(fsSyncNs.readFileSync(path.join(cardRepo, 'branches', file), 'utf8')))
+    }),
+    updateBranchOwner: async (
+      _card: string,
+      name: string,
+      request: { expectedRevision: string; replacementOwner: string }
+    ) => {
+      const file = path.join(cardRepo, 'branches', `${encodeURIComponent(name)}.json`);
+      const record = JSON.parse(fsSyncNs.readFileSync(file, 'utf8'));
+      if (record.revision !== request.expectedRevision || record.activeExecutionOwner)
+        return { outcome: 'owner_conflict' };
+      record.activeExecutionOwner = request.replacementOwner;
+      record.revision += '-claimed';
+      fsSyncNs.writeFileSync(file, JSON.stringify(record));
+      return { outcome: 'applied', revision: record.revision };
+    },
+    removeBranch: async (
+      _card: string,
+      name: string,
+      request: { expectedRevision: string; expectedCleanupOwner: string }
+    ) => {
+      const file = path.join(cardRepo, 'branches', `${encodeURIComponent(name)}.json`);
+      const record = JSON.parse(fsSyncNs.readFileSync(file, 'utf8'));
+      if (record.revision !== request.expectedRevision || record.activeExecutionOwner !== request.expectedCleanupOwner)
+        return { outcome: 'preserved' };
+      fsSyncNs.unlinkSync(file);
+      return { outcome: 'removed' };
+    }
+  })
+}));
+
 let wsRepo: string;
 let cardRepo: string;
 let sibling: ChildProcess | undefined;
@@ -51,6 +87,8 @@ function createMockLogger(): ActionContext['logger'] {
 
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
+    executionId: 'test-execution',
+    worktreeDirective: { kind: 'reuse' },
     cardId: 'test',
     actionName: 'Launch',
     environment: 'default',
@@ -98,7 +136,13 @@ beforeEach(() => {
     fsSyncNs.writeFileSync(
       path.join(branchesDir, `${encodeURIComponent(name)}.json`),
       JSON.stringify(
-        { name, worktree: fsSyncNs.realpathSync(worktree), parentBranch: 'main', addedAt: '2026-01-01T00:00:00Z' },
+        {
+          name,
+          revision: 'initial',
+          worktree: fsSyncNs.realpathSync(worktree),
+          parentBranch: 'main',
+          addedAt: '2026-01-01T00:00:00Z'
+        },
         null,
         2
       )

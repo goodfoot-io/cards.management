@@ -99,6 +99,8 @@ import {
 function makeClient(overrides?: {
   addBranch?: CardsClient['addBranch'];
   removeBranch?: CardsClient['removeBranch'];
+  updateBranchOwner?: CardsClient['updateBranchOwner'];
+  getBranches?: CardsClient['getBranches'];
 }): CardsClient & {
   addBranchCalls: Parameters<CardsClient['addBranch']>[];
   removeBranchCalls: Parameters<CardsClient['removeBranch']>[];
@@ -107,6 +109,10 @@ function makeClient(overrides?: {
   const removeBranchCalls: Parameters<CardsClient['removeBranch']>[] = [];
 
   return {
+    getBranches:
+      overrides?.getBranches ?? (async () => ({ branches: [{ name: 'cards/main-95/1', revision: 'test-revision' }] })),
+    updateBranchOwner:
+      overrides?.updateBranchOwner ?? (async () => ({ outcome: 'applied', revision: 'cleanup-revision' })),
     addBranch:
       overrides?.addBranch ??
       (async (...args) => {
@@ -243,9 +249,8 @@ describe('createWorktreeForCard', () => {
     releaseHooksConfig();
     await expect(creation).rejects.toBe(settlementError);
 
-    expect(client.removeBranchCalls).toEqual([
-      ['main-95', 'cards/main-95/1', { sessionId: 'sess-abc', expectedRevision: 'test-revision' }]
-    ]);
+    expect(client.removeBranchCalls).toEqual([]);
+    expect(client.addBranchCalls).toEqual([]);
     expect(cleanupFailedWorktree).toHaveBeenCalledOnce();
     expect(cleanupFailedWorktree).toHaveBeenCalledWith('/repo', EARLY_PATH, 'cards/main-95/1');
   });
@@ -273,7 +278,7 @@ describe('createWorktreeForCard', () => {
     expect(opts).toEqual({ sessionId: 'sess-abc' });
   });
 
-  it('overlaps addBranch with settlement but waits for settlement before handoff', async () => {
+  it('does not publish a reusable registration until settlement completes', async () => {
     const addBranchArgs: Parameters<CardsClient['addBranch']>[] = [];
     let resolveSettle!: () => void;
     const settle = new Promise<void>((resolve) => {
@@ -293,7 +298,8 @@ describe('createWorktreeForCard', () => {
       handedOff = true;
       return value;
     });
-    await vi.waitFor(() => expect(addBranchArgs).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(addBranchArgs).toHaveLength(0);
     expect(handedOff).toBe(false);
     resolveSettle();
     await creation;
@@ -312,7 +318,8 @@ describe('createWorktreeForCard', () => {
       handedOff = true;
       return value;
     });
-    await vi.waitFor(() => expect(client.addBranchCalls).toHaveLength(1));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(client.addBranchCalls).toHaveLength(0);
     expect(handedOff).toBe(false);
     resolveSettle();
     const result = await creation;
@@ -333,29 +340,19 @@ describe('createWorktreeForCard', () => {
       'materialization failed'
     );
 
-    expect(client.removeBranchCalls).toEqual([
-      ['main-95', 'cards/main-95/1', { sessionId: 'sess-abc', expectedRevision: 'test-revision' }]
-    ]);
+    expect(client.removeBranchCalls).toEqual([]);
+    expect(client.addBranchCalls).toEqual([]);
     expect(removeWorktree).toHaveBeenCalledWith(EARLY_PATH);
   });
 
-  it('preserves Git resources when conditional registration removal fails', async () => {
-    vi.mocked(createWorktree).mockResolvedValue({
-      path: EARLY_PATH,
-      repoRoot: '/repo',
-      createdBranch: 'cards/main-95/1',
-      settle: Promise.reject(new Error('materialization failed')) as EarlyWorktreeResult['settle']
-    });
+  it('preserves Git resources when another registration won the slot', async () => {
+    const conflict = Object.assign(new Error('registration conflict'), { code: 'BRANCH_REGISTRATION_CONFLICT' });
     const client = makeClient({
-      removeBranch: async () => {
-        throw new Error('registration revision changed');
+      addBranch: async () => {
+        throw conflict;
       }
     });
-
-    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow(
-      /rollback was not attempted.*registration=registration revision changed/
-    );
-
+    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toBe(conflict);
     expect(cleanupFailedWorktree).not.toHaveBeenCalled();
     expect(removeWorktree).not.toHaveBeenCalled();
   });
@@ -380,6 +377,7 @@ describe('createWorktreeForCard', () => {
 
   it('drops stale inner residuals when outfit and settlement fail but outer rollback succeeds', async () => {
     const outfitError = new Error('API failure');
+    vi.mocked(writeCardBoundFile).mockRejectedValue(outfitError);
     const settlementError = new Error('materialization failed');
     vi.mocked(createWorktree).mockResolvedValue({
       path: EARLY_PATH,
@@ -471,7 +469,8 @@ describe('createWorktreeForCard', () => {
     });
 
     const creation = createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS);
-    await vi.waitFor(() => expect(addAttempted).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(addAttempted).toBe(false);
     expect(removeWorktree).not.toHaveBeenCalled();
 
     resolveSettle();
@@ -516,7 +515,7 @@ describe('createWorktreeForCard', () => {
         }
       });
 
-      await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow('API failure');
+      await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow('settle blew up');
 
       // Let any microtasks / unhandledRejection callbacks flush.
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -547,6 +546,7 @@ describe('createWorktreeForCard', () => {
 
   it('aggregates settlement and cleanup failures while retaining the outfit failure as cause', async () => {
     const outfitError = new Error('API failure');
+    vi.mocked(writeCardBoundFile).mockRejectedValue(outfitError);
     vi.mocked(createWorktree).mockResolvedValue({
       path: EARLY_PATH,
       settle: Promise.reject(new Error('settlement boom')) as EarlyWorktreeResult['settle']
@@ -599,6 +599,16 @@ describe('removeWorktreeForCard', () => {
     vi.clearAllMocks();
   });
 
+  it('refuses disk teardown when a sibling owns the registration', async () => {
+    const client = makeClient({
+      getBranches: async () =>
+        ({ branches: [{ name: 'cards/main-95/1', revision: 'sibling', activeExecutionOwner: 'execution-b' }] }) as never
+    });
+    await expect(removeWorktreeForCard(client, EARLY_PATH, REMOVE_OPTIONS)).rejects.toThrow('owned');
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(client.removeBranchCalls).toEqual([]);
+  });
+
   it('calls removeWorktree with the worktree path', async () => {
     const client = makeClient();
     await removeWorktreeForCard(client, EARLY_PATH, REMOVE_OPTIONS);
@@ -622,10 +632,14 @@ describe('removeWorktreeForCard', () => {
     const [cardId, name, opts] = removeBranchArgs[0]!;
     expect(cardId).toBe('main-95');
     expect(name).toBe('cards/main-95/1');
-    expect(opts).toEqual({ sessionId: 'sess-xyz' });
+    expect(opts).toEqual({
+      sessionId: 'sess-xyz',
+      expectedRevision: 'cleanup-revision',
+      expectedCleanupOwner: expect.stringMatching(/^cleanup:/)
+    });
   });
 
-  it('releases the binding (removeBranch) BEFORE tearing the worktree down', async () => {
+  it('holds the registration until disk teardown completes', async () => {
     const callOrder: string[] = [];
 
     vi.mocked(removeWorktree).mockImplementation(async () => {
@@ -643,7 +657,7 @@ describe('removeWorktreeForCard', () => {
 
     // Release needs the worktree on disk (rev-parse, hook-path snapshot), so it
     // runs first; teardown follows.
-    expect(callOrder).toEqual(['removeBranch', 'removeWorktree']);
+    expect(callOrder).toEqual(['removeWorktree', 'removeBranch']);
   });
 
   it('propagates the teardown failure untouched (not wrapped) when removeWorktree rejects', async () => {

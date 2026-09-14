@@ -112,6 +112,8 @@ describe('SessionStart Hook', () => {
       ACTION_ENV = {
         CARD_ID: 'card-123',
         ACTION_NAME: 'Launch Claude',
+        CARDS_EXECUTION_ID: 'execution-123',
+        CARDS_WORKTREE_DIRECTIVE: '{"kind":"reuse"}',
         ENVIRONMENT: 'default',
         EXECUTION_MODE: 'background',
         EXIT_WHEN_DONE: 'false',

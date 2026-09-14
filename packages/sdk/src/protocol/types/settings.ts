@@ -89,8 +89,7 @@ export interface Command {
  *   name: 'Start Implementation',
  *   description: 'Launch Claude Code for this card',
  *   command: { command: 'npx claude-code --card $CARD_ID' },
- *   supportsBackgroundMode: true,
- *   allowConcurrent: false
+ *   supportsBackgroundMode: true
  * };
  * ```
  */
@@ -131,13 +130,6 @@ export interface Action {
    * background execution. Defaults to false.
    */
   supportsBackgroundMode?: boolean;
-
-  /**
-   * Whether multiple instances can run on the same card simultaneously.
-   * When false (the default), starting a new instance cancels any
-   * existing running instance of this action.
-   */
-  allowConcurrent?: boolean;
 }
 
 // --- Environment ---
@@ -291,6 +283,15 @@ export interface ActionState {
    * Interactive mode opens a terminal; background mode runs silently.
    */
   mode: 'interactive' | 'background';
+
+  /** Settled worktree owned by this exact execution; absent while allocation is pending. */
+  worktreeAssignment?: {
+    readonly executionId: string;
+    readonly branch: string;
+    readonly worktreePath: string;
+    readonly reason: 'reused' | 'reattached' | 'allocated';
+    readonly ownership: 'active-execution';
+  };
 
   /** Authoritative runtime transport state; absence is never interpreted as terminal. */
   runtimeConnection?: 'connected' | 'reconnecting' | 'disconnected' | 'unknown';

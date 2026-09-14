@@ -26,6 +26,12 @@
  * ```
  */
 export interface ActionInput {
+  /** Server-minted identity of this admitted execution. */
+  executionId: string;
+
+  /** Authority-issued worktree policy for this admission. */
+  worktreeDirective: WorktreeAllocationDirective;
+
   /**
    * Unique identifier for the current card.
    *
@@ -177,6 +183,13 @@ export interface ActionContext {
   cwd: string;
 
   /**
+   * Reports the worktree successfully settled for this execution. The runtime
+   * binds the report to the authenticated execution; handlers cannot nominate
+   * another execution identity.
+   */
+  reportWorktreeAssignment(assignment: WorktreeAssignmentResult): Promise<void>;
+
+  /**
    * Register a callback to be invoked when the action is cancelled.
    *
    * The callback is called when the runtime receives a cancel command
@@ -219,6 +232,23 @@ export interface ActionContext {
   onAgentShutdown(
     callback: () => AgentTerminationResult | undefined | Promise<AgentTerminationResult | undefined>
   ): void;
+}
+
+/** Immutable worktree policy selected while an admitted execution is reserved. */
+export type WorktreeAllocationDirective =
+  | { readonly kind: 'reuse' }
+  | { readonly kind: 'allocate' }
+  | {
+      readonly kind: 'preowned';
+      readonly branch: string;
+      readonly worktreePath: string;
+    };
+
+/** Worktree settlement reported by the admitted action handler. */
+export interface WorktreeAssignmentResult {
+  readonly branch: string;
+  readonly worktreePath: string;
+  readonly reason: 'reused' | 'reattached' | 'allocated';
 }
 
 /** Terminal result reported after an agent-shutdown callback settles. */

@@ -269,6 +269,15 @@ export const launchOutcomePayloadSchema = z
   })
   .strict();
 
+/** Durable worktree settlement reported by the admitted agent handler. */
+export const worktreeAssignmentResultPayloadSchema = z
+  .object({
+    branch: z.string().min(1),
+    worktreePath: z.string().min(1),
+    reason: z.enum(['reused', 'reattached', 'allocated'])
+  })
+  .strict();
+
 /** How an agent's termination actually resolved. */
 export const terminationResultSchema = z.enum(['graceful', 'forced', 'failed']);
 
@@ -475,6 +484,7 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.workAdmission': workAdmissionPayloadSchema,
   'execution.launchAdmission': launchAdmissionPayloadSchema,
   'execution.launchOutcome': launchOutcomePayloadSchema,
+  'execution.worktreeAssignmentResult': worktreeAssignmentResultPayloadSchema,
   'execution.agentTermination': agentTerminationPayloadSchema,
   'execution.commandEffectResult': commandEffectResultPayloadSchema,
   'execution.cleanupComplete': cleanupCompletePayloadSchema,

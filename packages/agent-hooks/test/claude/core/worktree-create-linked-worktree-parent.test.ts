@@ -123,6 +123,7 @@ describe('WorktreeCreate parentBranch derivation from a linked worktree (card-bo
     process.env['CARD_ID'] = 'main-188';
     const worktreePath = path.join(tempRoot, 'new-card-worktree');
     vi.mocked(createWorktreeForCard).mockResolvedValue({
+      registrationRevision: 'test-registration',
       path: worktreePath,
       settle: Promise.resolve({
         branch: 'cards/main-188/1',

@@ -98,16 +98,6 @@ describe('Action', () => {
     expectTypeOf(actionWithBackground.supportsBackgroundMode).toEqualTypeOf<boolean | undefined>();
   });
 
-  it('should allow optional allowConcurrent property', () => {
-    const actionWithConcurrent: Action = {
-      id: 'test-action',
-      name: 'Test Action',
-      command: { command: 'node ./bin/test.js' },
-      allowConcurrent: false
-    };
-    expectTypeOf(actionWithConcurrent.allowConcurrent).toEqualTypeOf<boolean | undefined>();
-  });
-
   it('should allow all properties together', () => {
     const fullAction: Action = {
       id: 'test-action',
@@ -115,8 +105,7 @@ describe('Action', () => {
       description: 'A test action',
       icon: 'rocket',
       command: { command: 'node ./bin/test.js', timeout: 30000 },
-      supportsBackgroundMode: true,
-      allowConcurrent: false
+      supportsBackgroundMode: true
     };
     expectTypeOf(fullAction).toMatchTypeOf<Action>();
   });
@@ -353,8 +342,7 @@ describe('Settings', () => {
               description: 'Launch Claude in a new window',
               icon: 'rocket',
               command: { command: 'node ./bin/launch.js', timeout: 30000 },
-              supportsBackgroundMode: true,
-              allowConcurrent: false
+              supportsBackgroundMode: true
             }
           ]
         }

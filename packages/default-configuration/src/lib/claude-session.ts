@@ -11,6 +11,7 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import * as fsSyncNs from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
@@ -26,7 +27,7 @@ import { BRANCHES_DIR } from '@cards.management/sdk/protocol';
 export { resolveClaudeConfigDir, updateMarketplaceRegistration };
 
 import type { CreateWorktreeResult } from '@cards.management/sdk/worktree';
-import { checkWorktreeExists, findGitRoots } from '@cards.management/sdk/worktree';
+import { checkWorktreeExists, cleanupFailedWorktree, findGitRoots } from '@cards.management/sdk/worktree';
 import { createWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 import { createClaudeTerminationController } from './claude-termination.js';
 import { spawnAgentCli } from './spawn-cli.js';
@@ -269,18 +270,126 @@ async function worktreeExistsOnDisk(worktreePath: string): Promise<boolean> {
 }
 
 /**
- * Finds or creates a worktree for the card.
+ * Machine code the Cards API reports for a lost card-repository ref
+ * compare-and-swap (`ConcurrentCardWriteError` in the hybrid store).
  *
- * Tries to reuse an existing branch whose worktree is still on disk. When no
- * valid branch exists, creates a new one and registers it with the API.
- *
- * @param input - Action input containing cardId and workspace paths.
- * @param client - Cards API client for branch CRUD.
- * @param baseBranch - Current branch in the workspace (used as parent).
- * @param logger - Logger for diagnostic output.
- * @param sessionId - Claude Code session ID forwarded to the API so the card repo post-commit hook can attribute the commit.
- * @returns Worktree path, branch name, and parent branch name.
+ * Every branch mutation commits through `git update-ref refs/heads/main $new
+ * $parent`, which refuses the update when another writer advanced the ref
+ * first. Two launches admitted close together on one card each commit to that
+ * card repo — `addBranch` inside `createWorktreeForCard`, then the ownership
+ * claim — so losing this race is the expected outcome of the card's headline
+ * scenario, not a caller error. The allocator treats it as retryable rather
+ * than surfacing a failed launch.
  */
+const CARD_WRITE_CONFLICT_CODE = 'CONCURRENT_CARD_WRITE';
+
+/**
+ * How many consecutive card-write conflicts a single ownership claim absorbs
+ * before failing closed. Each retry re-reads the branch record and re-issues
+ * the claim, so the budget only has to cover the writers that can legitimately
+ * interleave with one claim — a handful of simultaneous launches on one card,
+ * plus cleanup and post-commit attribution.
+ */
+const CARD_WRITE_CONFLICT_RETRIES = 4;
+
+/**
+ * How many slot allocations one resolver invocation may abandon to card-write
+ * contention before failing the launch instead of advancing again. Every
+ * attempt creates and then rolls back a real worktree, so an unbounded advance
+ * under sustained contention is a disk and CPU amplifier; the cap is far above
+ * the worst case the plan models (five synchronized contenders).
+ */
+const SLOT_ALLOCATION_WRITE_CONFLICTS = 8;
+
+/**
+ * Reports whether an error carries a given machine-readable `code`.
+ *
+ * The Cards client surfaces server error codes as `ApiError.code`; the SDK's
+ * own worktree helpers throw errors carrying their own `code` (for example
+ * `BRANCH_REGISTRATION_CONFLICT`). Both shapes are detected identically so a
+ * single catch site can classify every retryable contention outcome.
+ *
+ * @param error - Thrown value to inspect.
+ * @param code - Machine-readable code to match.
+ * @returns True when the value exposes that exact code.
+ */
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error !== null && typeof error === 'object' && 'code' in error && error.code === code;
+}
+
+/**
+ * Reports whether an error is a lost card-repository ref compare-and-swap.
+ *
+ * @param error - Thrown value to inspect.
+ * @returns True for a card-write conflict.
+ */
+function isCardWriteConflict(error: unknown): boolean {
+  return hasErrorCode(error, CARD_WRITE_CONFLICT_CODE);
+}
+
+/**
+ * Releases a numbered slot this invocation registered but could not claim.
+ *
+ * A claim that fails after registration would otherwise abandon the checkout:
+ * the worktree and its branch record exist, belong to no execution, and are
+ * invisible to the reuse path (which only offers unowned branches it can
+ * still claim). Repeated contention accumulates those slots, so the allocation
+ * loop releases the one it just registered before advancing.
+ *
+ * Fail-closed ordering mirrors {@link createWorktreeForCard}'s rollback: the
+ * store unregisters the exact revision this invocation created *first*, and
+ * the Git worktree and branch are removed only when that conditional
+ * unregister reported `removed`. A `preserved` outcome — or any unregister
+ * failure — means a newer registration may own this path, so its Git resources
+ * are left intact rather than deleted beneath that owner.
+ *
+ * @param client - Cards API client used for the conditional unregister.
+ * @param cardId - Card the slot belongs to.
+ * @param repoRoot - Primary repository root that owns the worktree.
+ * @param branchName - Branch this invocation registered for the slot.
+ * @param worktreePath - Absolute worktree path this invocation created.
+ * @param expectedRevision - Revision returned by the registration this invocation made.
+ * @param sessionId - Coding-agent session ID forwarded for commit attribution.
+ * @param logger - Logger for diagnostic output.
+ */
+async function releaseUnclaimedSlot(
+  client: CardsClient,
+  cardId: string,
+  repoRoot: string,
+  branchName: string,
+  worktreePath: string,
+  expectedRevision: string,
+  sessionId: string | undefined,
+  logger: ActionContext['logger']
+): Promise<void> {
+  const cleanupOwner = `cleanup:${randomUUID()}`;
+  const claim = await client.updateBranchOwner(
+    cardId,
+    branchName,
+    {
+      expectedRevision,
+      expectedOwner: { kind: 'none' },
+      replacementOwner: cleanupOwner
+    },
+    sessionId ? { sessionId } : undefined
+  );
+  if (claim.outcome !== 'applied' || !claim.revision) {
+    logger.info('Preserved unclaimed worktree — registration changed', { branch: branchName });
+    return;
+  }
+  const failures = await cleanupFailedWorktree(repoRoot, worktreePath, branchName);
+  if (failures.length > 0) {
+    throw new Error(`Unclaimed worktree cleanup incomplete: ${failures.join('; ')}`);
+  }
+  const removal = await client.removeBranch(cardId, branchName, {
+    expectedRevision: claim.revision,
+    expectedCleanupOwner: cleanupOwner,
+    ...(sessionId ? { sessionId } : {})
+  });
+  if (removal.outcome !== 'removed') throw new Error(`Cleanup claim changed for ${branchName}`);
+  logger.info('Released unclaimed worktree slot', { branch: branchName, worktree: worktreePath });
+}
+
 /**
  * Finds or creates a worktree for the card.
  *
@@ -306,24 +415,136 @@ export async function resolveOrCreateWorktree(
   worktreePath: string;
   branchName: string;
   parentBranch: string;
+  reason: 'reused' | 'reattached' | 'allocated';
+  /** Settlement is completed before ownership is exposed, so this is normally absent. */
   settle?: Promise<CreateWorktreeResult>;
 }> {
+  if (
+    typeof input.executionId !== 'string' ||
+    !input.executionId.trim() ||
+    !input.worktreeDirective ||
+    !['reuse', 'allocate', 'preowned'].includes(input.worktreeDirective.kind)
+  ) {
+    throw new Error('Worktree allocation requires an admitted execution and authority directive');
+  }
   const { branches } = await client.getBranches(input.cardId, { workspacePath: input.repoRoot });
 
+  /**
+   * Re-reads one branch record from the durable store, bypassing the snapshot.
+   *
+   * @param branchName - Branch to look up.
+   * @returns The branch's current record, or `undefined` if the store no longer lists it.
+   */
+  const readBranch = async (branchName: string) =>
+    (await client.getBranches(input.cardId, { workspacePath: input.repoRoot })).branches.find(
+      (branch) => branch.name === branchName
+    );
+
+  const claim = async (branchName: string, revision: string, currentOwner?: string): Promise<boolean> => {
+    if (currentOwner !== undefined && currentOwner !== input.executionId) return false;
+    let expectedRevision = revision;
+    let expectedOwner = currentOwner;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const outcome = await client.updateBranchOwner(
+          input.cardId,
+          branchName,
+          {
+            expectedRevision,
+            expectedOwner:
+              expectedOwner === undefined ? { kind: 'none' } : { kind: 'execution', executionId: expectedOwner },
+            replacementOwner: input.executionId
+          },
+          sessionId ? { sessionId } : undefined
+        );
+        if (outcome.outcome === 'revision_conflict' || outcome.outcome === 'owner_conflict') return false;
+        if (outcome.outcome !== 'applied' && outcome.outcome !== 'idempotent') {
+          throw new Error(`Worktree ownership claim failed closed for ${branchName}: ${outcome.outcome}`);
+        }
+        return true;
+      } catch (error) {
+        // Ref contention can be retried only while the slot is still free or
+        // already ours. Reading a sibling owner is a refusal, never permission
+        // to turn allocation into an ownership transfer.
+        if (!isCardWriteConflict(error) || attempt >= CARD_WRITE_CONFLICT_RETRIES) throw error;
+        const current = await readBranch(branchName);
+        if (current === undefined) return false;
+        logger.info('Retrying worktree ownership claim after a card write conflict', {
+          branch: branchName,
+          attempt: attempt + 1
+        });
+        expectedRevision = current.revision;
+        if (current.activeExecutionOwner !== undefined && current.activeExecutionOwner !== input.executionId)
+          return false;
+        expectedOwner = current.activeExecutionOwner;
+      }
+    }
+  };
+
   // Step 1: Try to reuse an existing branch with a valid worktree on disk
-  for (const branch of branches) {
+  const directive = input.worktreeDirective;
+  const preownedBranch =
+    directive?.kind === 'preowned'
+      ? branches.find(
+          (branch) =>
+            branch.name === directive.branch &&
+            branch.worktree === directive.worktreePath &&
+            branch.activeExecutionOwner === input.executionId
+        )
+      : undefined;
+  if (directive?.kind === 'preowned' && preownedBranch === undefined) {
+    throw new Error(`Pre-owned worktree assignment is not owned by execution ${input.executionId}`);
+  }
+  const reusableBranches = (
+    preownedBranch !== undefined
+      ? [preownedBranch]
+      : branches.filter((branch) => branch.activeExecutionOwner === undefined)
+  ).sort((a, b) => {
+    const prefix = `cards/${input.cardId}/`;
+    const aSlot = Number.parseInt(a.name.slice(prefix.length), 10);
+    const bSlot = Number.parseInt(b.name.slice(prefix.length), 10);
+    return (
+      (Number.isNaN(aSlot) ? Number.MAX_SAFE_INTEGER : aSlot) -
+        (Number.isNaN(bSlot) ? Number.MAX_SAFE_INTEGER : bSlot) || a.name.localeCompare(b.name)
+    );
+  });
+  if (preownedBranch !== undefined) {
+    if (!preownedBranch.exists || preownedBranch.worktree === undefined)
+      throw new Error(`Pre-owned worktree assignment is unavailable for execution ${input.executionId}`);
+    if (!(await worktreeExistsOnDisk(preownedBranch.worktree)))
+      throw new Error(`Pre-owned worktree checkout is missing for execution ${input.executionId}`);
+    logger.info('Using authority-transferred worktree', {
+      branch: preownedBranch.name,
+      worktree: preownedBranch.worktree
+    });
+    return {
+      worktreePath: preownedBranch.worktree,
+      branchName: preownedBranch.name,
+      parentBranch: preownedBranch.parentBranch,
+      reason: 'reused'
+    };
+  }
+  for (const branch of directive?.kind !== 'allocate' ? reusableBranches : []) {
     if (!branch.exists || !branch.worktree) continue;
     if (!(await worktreeExistsOnDisk(branch.worktree))) continue;
 
+    if (!(await claim(branch.name, branch.revision, branch.activeExecutionOwner))) continue;
     logger.info('Reusing existing worktree', { branch: branch.name, worktree: branch.worktree });
-    return { worktreePath: branch.worktree, branchName: branch.name, parentBranch: branch.parentBranch };
+    return {
+      worktreePath: branch.worktree,
+      branchName: branch.name,
+      parentBranch: branch.parentBranch,
+      reason: 'reused'
+    };
   }
 
   // Step 2: Try to create a worktree for an existing branch whose worktree
   // is missing from disk (e.g. cleaned up by a previous session crash).
-  for (const branch of branches) {
+  for (const branch of directive?.kind !== 'allocate' ? reusableBranches : []) {
     if (!branch.exists) continue;
     if (!branch.name.startsWith(`cards/${input.cardId}/`)) continue;
+    if (branch.worktree && (await worktreeExistsOnDisk(branch.worktree))) continue;
+    if (!(await claim(branch.name, branch.revision, branch.activeExecutionOwner))) continue;
 
     logger.info('Reattaching worktree for existing branch', { branch: branch.name });
     const { path: worktreePath, settle } = await createWorktreeForCard(client, branch.name, {
@@ -335,7 +556,8 @@ export async function resolveOrCreateWorktree(
       registrationIntent: 'upsert'
     });
 
-    return { worktreePath, branchName: branch.name, parentBranch: branch.parentBranch, settle };
+    await settle;
+    return { worktreePath, branchName: branch.name, parentBranch: branch.parentBranch, reason: 'reattached' };
   }
 
   // Step 3: No valid existing branch — create new one.
@@ -356,27 +578,96 @@ export async function resolveOrCreateWorktree(
     .map((b) => parseInt(b.name.slice(prefix.length), 10))
     .filter((n) => !Number.isNaN(n));
   let nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+  let writeConflicts = 0;
 
   const { repoRoot } = await findGitRoots(input.repoRoot);
-  while (await checkWorktreeExists(repoRoot, resolveWorktreeDir(repoRoot, `${prefix}${nextNumber}`))) {
-    logger.warn('Worktree already exists in git but not in API, skipping', {
-      branch: `${prefix}${nextNumber}`
-    });
-    nextNumber++;
+  for (;;) {
+    const branchName = `${prefix}${nextNumber}`;
+    if (await checkWorktreeExists(repoRoot, resolveWorktreeDir(repoRoot, branchName))) {
+      logger.warn('Worktree already exists in git but not in API, skipping', { branch: branchName });
+      nextNumber++;
+      continue;
+    }
+
+    try {
+      const {
+        path: worktreePath,
+        settle,
+        registrationRevision
+      } = await createWorktreeForCard(client, branchName, {
+        cwd: input.repoRoot,
+        cardId: input.cardId,
+        compiledScriptPaths: compiledHookScriptPaths(input.extensionPath),
+        parentBranch: baseBranch,
+        sessionId,
+        registrationIntent: 'create'
+      });
+
+      await settle;
+      let claimed: boolean;
+      try {
+        claimed = await claim(branchName, registrationRevision);
+      } catch (error) {
+        // The claim threw after this invocation registered the slot, so the
+        // settlement path inside createWorktreeForCard never rolled it back.
+        // Release the registration this invocation created before surfacing
+        // the failure, or the checkout is abandoned unowned.
+        await releaseUnclaimedSlot(
+          client,
+          input.cardId,
+          repoRoot,
+          branchName,
+          worktreePath,
+          registrationRevision,
+          sessionId,
+          logger
+        );
+        throw error;
+      }
+      if (!claimed) {
+        await releaseUnclaimedSlot(
+          client,
+          input.cardId,
+          repoRoot,
+          branchName,
+          worktreePath,
+          registrationRevision,
+          sessionId,
+          logger
+        );
+        logger.info('Concurrent allocator claimed registered candidate; advancing', { branch: branchName });
+        nextNumber++;
+        continue;
+      }
+
+      logger.info('Created new worktree', { branch: branchName, worktree: worktreePath });
+      return { worktreePath, branchName, parentBranch: baseBranch, reason: 'allocated' };
+    } catch (error) {
+      const registrationConflict = hasErrorCode(error, 'BRANCH_REGISTRATION_CONFLICT');
+      const worktreeCollision =
+        error instanceof Error && error.message.startsWith('Error: Worktree already exists at ');
+      // Two launches admitted close together on one card both commit to that
+      // card repo, and the loser of the ref compare-and-swap is expected to
+      // retry rather than fail the launch. Advance to the next slot exactly as
+      // for an occupied Git slot, bounded because every attempt creates and
+      // rolls back a real worktree.
+      const cardWriteConflict = isCardWriteConflict(error);
+      if (cardWriteConflict) {
+        writeConflicts++;
+        if (writeConflicts > SLOT_ALLOCATION_WRITE_CONFLICTS) throw error;
+      }
+      if (!registrationConflict && !worktreeCollision && !cardWriteConflict) {
+        throw error;
+      }
+      logger.info(
+        cardWriteConflict
+          ? 'Card repository write contention — advancing to the next slot'
+          : 'Concurrent allocator claimed candidate slot; advancing',
+        { branch: branchName, ...(cardWriteConflict ? { writeConflicts } : {}) }
+      );
+      nextNumber++;
+    }
   }
-
-  const branchName = `${prefix}${nextNumber}`;
-  const { path: worktreePath, settle } = await createWorktreeForCard(client, branchName, {
-    cwd: input.repoRoot,
-    cardId: input.cardId,
-    compiledScriptPaths: compiledHookScriptPaths(input.extensionPath),
-    parentBranch: baseBranch,
-    sessionId,
-    registrationIntent: 'create'
-  });
-
-  logger.info('Created new worktree', { branch: branchName, worktree: worktreePath });
-  return { worktreePath, branchName, parentBranch: baseBranch, settle };
 }
 
 /**
@@ -412,7 +703,7 @@ async function findProcessesInDirectory(dirPath: string, logger: ActionContext['
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const pid = parseInt(entry, 10);
-    if (pid === process.pid) continue;
+    if (!Number.isSafeInteger(pid) || pid <= 1 || pid === process.pid) continue;
 
     try {
       const cwdLink = await fs.readlink(`/proc/${pid}/cwd`);
@@ -491,6 +782,7 @@ async function tryCleanupStep(
     await step();
   } catch (error) {
     logger.warn(label, { branch: branchName, error: errorMessage(error) });
+    throw error;
   }
 }
 
@@ -511,6 +803,8 @@ export interface CleanupOptions {
  * A single parsed entry from the card repository's `branches/` directory.
  */
 export interface BranchEntry {
+  /** Execution currently owning this checkout; claimed entries are never reclaimed. */
+  activeExecutionOwner?: string;
   /** Absolute path to the worktree backing this branch, if one was created. */
   worktree?: string;
   /** The branch this entry was created from; cleanup checks merge status against it. */
@@ -583,14 +877,88 @@ export interface BranchCleanupOutcome {
 }
 
 /**
+ * Durable ownership of one branch, read from the Cards store at the moment a
+ * reclamation decision is about to be made.
+ *
+ * `free` is the only state that permits destruction. `owned` and `unreadable`
+ * both protect the checkout: cleanup never guesses that an unproven branch is
+ * available.
+ */
+type BranchOwnership =
+  | { state: 'free'; revision: string }
+  | { state: 'owned'; owner: string }
+  | { state: 'unreadable'; detail: string };
+
+/**
+ * Reads the durable active-execution claim for one branch, fresh, at the point
+ * of decision.
+ *
+ * A sweep must never decide from a snapshot taken before it started: a claim
+ * that lands while an earlier branch is being checked would otherwise be
+ * invisible, and a claimed-but-not-yet-spawned checkout — one with no process
+ * in it at all — would be classified as free.
+ *
+ * Every failure mode resolves to `unreadable`, which callers treat exactly like
+ * `owned`: a listing that could not be read, and a branch the store does not
+ * know about at all, are both evidence we cannot disprove ownership.
+ *
+ * @param client - Cards API client used for the durable read.
+ * @param cardId - Card the branch belongs to.
+ * @param repoRoot - Workspace root qualifying the branch listing.
+ * @param branchName - Branch whose ownership is being resolved.
+ * @param logger - Logger for diagnostic output.
+ * @returns The branch's durable ownership state.
+ */
+async function readBranchOwnership(
+  client: CardsClient,
+  cardId: string,
+  repoRoot: string,
+  branchName: string,
+  logger: ActionContext['logger']
+): Promise<BranchOwnership> {
+  let record: Awaited<ReturnType<CardsClient['getBranches']>>['branches'][number] | undefined;
+  try {
+    const { branches } = await client.getBranches(cardId, { workspacePath: repoRoot });
+    record = branches.find((branch) => branch.name === branchName);
+  } catch (error) {
+    logger.warn('Cannot read durable branch ownership — treating the branch as claimed', {
+      branch: branchName,
+      error: errorMessage(error)
+    });
+    return { state: 'unreadable', detail: 'branch-listing-failed' };
+  }
+  if (record === undefined) {
+    return { state: 'unreadable', detail: 'ownership-ambiguous' };
+  }
+  if (record.activeExecutionOwner !== undefined) {
+    return { state: 'owned', owner: record.activeExecutionOwner };
+  }
+  return { state: 'free', revision: record.revision };
+}
+
+/**
  * Removes branches that are fully merged into their parent branch.
  *
  * For each merged branch the worktree directory is removed, the local branch
- * ref is deleted, and the branch record is removed from the API. Worktree
- * removal failures are logged and do not block branch deletion. However, the
- * API record is only removed after confirming the git branch was deleted —
- * removing the record while the branch still exists would cause subsequent
- * sessions to lose track of it and create duplicates.
+ * ref is deleted, and the branch record is conditionally unregistered through
+ * the store. Worktree removal failures are logged and do not block branch
+ * deletion. However, the branch record is only removed after confirming the
+ * git branch was deleted — removing the record while the branch still exists
+ * would cause subsequent sessions to lose track of it and create duplicates.
+ *
+ * Reclamation is decided by durable instance ownership, never by a process
+ * scan. Immediately before any destructive step, the branch's active-execution
+ * claim is re-read from the store — not taken from the snapshot the sweep
+ * started with — so a claim that lands mid-sweep still protects the checkout.
+ * A claimed, missing, or unreadable record is skipped: a process scan that
+ * happens to find nothing cannot authorize destruction, and neither can the
+ * absence of a claim we failed to read. The process scan is retained as a
+ * conservative veto and for diagnostics, but it only ever prevents cleanup.
+ *
+ * The record is then removed with the store's conditional path, naming the
+ * exact revision the ownership read returned. A newer registration — a claim
+ * that landed after the read — leaves the record `preserved` rather than
+ * deleting it from beneath its new owner.
  *
  * Each branch is checked against its own `parentBranch` (the branch it was
  * created from), not the workspace's current HEAD. This ensures branches are
@@ -602,7 +970,10 @@ export interface BranchCleanupOutcome {
  * calls) when the card is active. The same fail-closed skip applies when the
  * status is unreadable (missing/corrupt/mid-write `CARD.meta.json`, or a
  * non-string status) — reported with reason `status-unreadable` — since we
- * cannot prove the card is safe to touch.
+ * cannot prove the card is safe to touch. It applies again when the Cards API
+ * cannot be discovered at all: without a durable read there is no way to prove
+ * any branch is free, so the whole sweep is skipped rather than reclaiming on
+ * the strength of an unreadable store.
  *
  * A single branch's failure never aborts the sweep: per-branch faults (a
  * self-referential `parentBranch`, or any git/read error mid-branch) are
@@ -618,7 +989,7 @@ export interface BranchCleanupOutcome {
  * @param cardRepoPath - Absolute path to the card's git repository.
  * @param logger - Logger for diagnostic output.
  * @param sessionId - Claude Code session ID set as CARDS_SESSION_ID in the git subprocess environment so the card repo post-commit hook can attribute the commit.
- * @param options - Optional configuration (backoffMaxMs for the liveness gate).
+ * @param options - Optional configuration (backoffMaxMs bounds the conservative in-use veto).
  * @returns Per-branch cleanup outcomes, or a single sweep-wide skip outcome.
  */
 export async function cleanupMergedBranches(
@@ -639,6 +1010,18 @@ export async function cleanupMergedBranches(
   if (cardStatus === null) {
     logger.warn('Skipping branch cleanup — card status unreadable', { cardId: input.cardId });
     return [{ cardId: input.cardId, branch: '(all)', action: 'skipped', reason: 'status-unreadable' }];
+  }
+
+  // Durable ownership is the reclamation authority, so an undiscoverable store
+  // is an unreadable authority — not permission to reclaim. Fail closed for the
+  // whole card rather than per branch, so an outage costs one failed discovery
+  // instead of one failed read per branch.
+  const client = await createCardsClient();
+  if (client === null) {
+    logger.warn('Skipping branch cleanup — durable ownership is unreadable (Cards API discovery failed)', {
+      cardId: input.cardId
+    });
+    return [{ cardId: input.cardId, branch: '(all)', action: 'skipped', reason: 'ownership-unreadable' }];
   }
 
   const outcomes: BranchCleanupOutcome[] = [];
@@ -664,6 +1047,14 @@ export async function cleanupMergedBranches(
     // behind one card's later error). Contain every per-branch fault here, record
     // it as an 'error' outcome, and move on to the next branch.
     try {
+      // Fast path only: this reads the snapshot taken when the sweep started,
+      // so it can spare a claimed branch the git probes below, but it can never
+      // authorize a reclamation. A claim landing after the snapshot is caught by
+      // the fresh ownership read taken at the point of decision.
+      if (branchData.activeExecutionOwner !== undefined) {
+        outcomes.push({ cardId: input.cardId, branch: branchName, action: 'skipped', reason: 'in-use' });
+        continue;
+      }
       // Check if branch exists in git
       let branchExists = false;
       try {
@@ -722,11 +1113,42 @@ export async function cleanupMergedBranches(
       // Branch is merged — but the per-card sweep must never reclaim a worktree
       // that another action on this card is still using. A sibling action's
       // branch sitting at zero commits beyond its parent is trivially an ancestor
-      // of that parent, so "merged" alone is too weak a signal to act on. Gate on
-      // actual liveness: if a process is currently rooted in the worktree, the
-      // owning action is still running — skip the entire reclamation rather than
-      // SIGKILL the agent and delete its worktree out from under it.
+      // of that parent, so "merged" alone is too weak a signal to act on.
+      //
+      // The reclamation authority is durable instance ownership, read here —
+      // at the point of decision, after the preliminary merge checks and not
+      // from the snapshot this sweep started with — so a claim that landed
+      // while an earlier branch was being checked still protects this
+      // checkout. A claimed, absent, or unreadable record is skipped: we can
+      // only act on ownership we have positively proven absent.
+      const ownership = await readBranchOwnership(client, input.cardId, input.repoRoot, branchName, logger);
+      if (ownership.state !== 'free') {
+        logger.info('Skipping branch cleanup — durable ownership is not proven absent', {
+          branch: branchName,
+          ownership: ownership.state,
+          ...(ownership.state === 'owned' ? { owner: ownership.owner } : { detail: ownership.detail })
+        });
+        outcomes.push({
+          cardId: input.cardId,
+          branch: branchName,
+          action: 'skipped',
+          reason: ownership.state === 'owned' ? 'in-use' : 'ownership-unreadable'
+        });
+        continue;
+      }
+      // The revision that proved ownership absent. Every destructive step below
+      // is conditional on the record still carrying it; the liveness backoff can
+      // run for up to an hour, so the check is refreshed again after that wait.
+      let decisionRevision = ownership.revision;
+
       if (branchData.worktree) {
+        // The process scan is retained as a conservative veto and as
+        // diagnostics — never as the authorization to reclaim. Ownership has
+        // already been proven absent above, so a process found here is either
+        // an action that crashed before releasing its claim or work unrelated
+        // to any instance; either way, cleanup waits rather than SIGKILLing an
+        // agent and deleting its worktree out from under it. Finding *nothing*
+        // proves nothing, which is why it cannot authorize reclamation.
         let liveProcesses = await findProcessesInDirectory(branchData.worktree, logger);
         if (liveProcesses.length > 0) {
           const BACKOFF_START_MS = 1000;
@@ -772,6 +1194,51 @@ export async function cleanupMergedBranches(
           });
         }
 
+        // Re-read ownership now that the liveness wait is over — this is the
+        // point of decision for the destructive steps that follow, and the wait
+        // above is exactly the window in which a sibling action could have
+        // claimed the slot. FindProcesses-based liveness is only ever a veto:
+        // finding no process proves nothing and cannot authorize removal, so
+        // the claim read here remains the sole authority.
+        const confirmed = await readBranchOwnership(client, input.cardId, input.repoRoot, branchName, logger);
+        if (confirmed.state !== 'free') {
+          logger.info('Skipping worktree reclamation — durable ownership is not proven absent', {
+            branch: branchName,
+            worktree: branchData.worktree,
+            ownership: confirmed.state,
+            ...(confirmed.state === 'owned' ? { owner: confirmed.owner } : { detail: confirmed.detail })
+          });
+          outcomes.push({
+            cardId: input.cardId,
+            branch: branchName,
+            action: 'skipped',
+            reason: confirmed.state === 'owned' ? 'in-use' : 'ownership-unreadable'
+          });
+          continue;
+        }
+        decisionRevision = confirmed.revision;
+      }
+
+      // Hold exclusive durable ownership through every destructive step. A crash
+      // leaves the claim in place for explicit recovery, never a free checkout.
+      const cleanupOwner = `cleanup:${randomUUID()}`;
+      const claim = await client.updateBranchOwner(
+        input.cardId,
+        branchName,
+        {
+          expectedRevision: decisionRevision,
+          expectedOwner: { kind: 'none' },
+          replacementOwner: cleanupOwner
+        },
+        sessionId ? { sessionId } : undefined
+      );
+      if (claim.outcome !== 'applied' || !claim.revision) {
+        outcomes.push({ cardId: input.cardId, branch: branchName, action: 'skipped', reason: 'in-use' });
+        continue;
+      }
+      decisionRevision = claim.revision;
+
+      if (branchData.worktree) {
         t0 = performance.now();
         await tryCleanupStep(
           () => killProcessesInDirectory(branchData.worktree!, logger),
@@ -806,47 +1273,40 @@ export async function cleanupMergedBranches(
       });
 
       if (branchDeleted) {
-        // Remove the branch's per-entry file from branches/ and commit
+        // Remove the record through the store's own conditional path rather
+        // than editing branches/ and committing it directly. A direct commit
+        // bypasses the revision CAS entirely: a claim that landed between the
+        // ownership read and this point would be deleted along with the record
+        // it protects. Naming the revision we read makes that race a no-op —
+        // the store preserves a record it can no longer prove is the one we
+        // inspected, and the sweep reports it as preserved instead of guessing.
         t0 = performance.now();
-        await tryCleanupStep(
-          async () => {
-            const entryRel = path.join(BRANCHES_DIR, `${encodeURIComponent(branchName)}.json`);
-            await fs.rm(path.join(cardRepoPath, entryRel), { force: true });
-
-            const gitEnv: Record<string, string> = {};
-            if (sessionId) {
-              gitEnv['CARDS_SESSION_ID'] = sessionId;
-            }
-            await execFileAsync('git', ['rm', '--quiet', '--ignore-unmatch', '--', entryRel], {
-              cwd: cardRepoPath,
-              env: { ...process.env, ...gitEnv }
-            });
-            // Re-count remaining entry files for the commit message.
-            let branchCount = 0;
-            try {
-              branchCount = (await fs.readdir(path.join(cardRepoPath, BRANCHES_DIR))).filter((f) =>
-                f.endsWith('.json')
-              ).length;
-            } catch (error) {
-              if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-            }
-            await execFileAsync(
-              'git',
-              ['commit', '-m', `Removed branch "${branchName}" (now tracking ${branchCount}).`],
-              { cwd: cardRepoPath, env: { ...process.env, ...gitEnv } }
-            );
-          },
-          'Failed to remove branch from card repo',
-          branchName,
-          logger
-        );
+        try {
+          const removal = await client.removeBranch(input.cardId, branchName, {
+            expectedRevision: decisionRevision,
+            expectedCleanupOwner: cleanupOwner,
+            ...(sessionId ? { sessionId } : {})
+          });
+          if (removal.outcome === 'removed') {
+            logger.info('Cleaned up merged branch', { branch: branchName });
+            outcomes.push({ cardId: input.cardId, branch: branchName, action: 'cleaned', reason: 'merged' });
+          } else {
+            logger.info('Preserved branch record — a newer registration owns it', { branch: branchName });
+            outcomes.push({ cardId: input.cardId, branch: branchName, action: 'skipped', reason: 'preserved' });
+          }
+        } catch (error) {
+          logger.warn('Failed to remove branch record', { branch: branchName, error: errorMessage(error) });
+          outcomes.push({
+            cardId: input.cardId,
+            branch: branchName,
+            action: 'error',
+            reason: 'branch-record-removal-failed'
+          });
+        }
         logger.debug('Card repo branch removal completed', {
           branch: branchName,
           elapsedMs: Math.round(performance.now() - t0)
         });
-
-        logger.info('Cleaned up merged branch', { branch: branchName });
-        outcomes.push({ cardId: input.cardId, branch: branchName, action: 'cleaned', reason: 'merged' });
       } else {
         logger.info('Skipped branch record removal — git branch still exists', { branch: branchName });
         outcomes.push({ cardId: input.cardId, branch: branchName, action: 'error', reason: 'branch-delete-failed' });
@@ -953,8 +1413,9 @@ export async function spawnClaudeSession(
 
   const worktreeResult = await resolveOrCreateWorktree(input, client, baseBranch, context.logger, sessionId);
 
-  const { worktreePath: cwd, branchName, parentBranch, settle } = worktreeResult;
-  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
+  const { worktreePath: cwd, branchName, parentBranch, reason, settle } = worktreeResult;
+  await context.reportWorktreeAssignment({ branch: branchName, worktreePath: cwd, reason });
+  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch, reason });
 
   const marketplacePath = resolveMarketplacePath();
   await updateMarketplaceRegistration(marketplacePath, context.logger);

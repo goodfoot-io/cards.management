@@ -60,6 +60,8 @@ function actionInput(overrides: Partial<ActionInput> = {}): ActionInput {
   return {
     cardId: 'main-453',
     actionName: 'Launch Cards',
+    executionId: 'execution-453',
+    worktreeDirective: { kind: 'reuse' },
     environment: 'default',
     executionMode: 'interactive',
     exitWhenDone: false,
@@ -192,7 +194,11 @@ describe('runtime session-start plugin', () => {
 
   it('entry exports the live factory when spawned by a Cards action', async () => {
     const previous = process.env['CARD_ID'];
+    const previousExecutionId = process.env['CARDS_EXECUTION_ID'];
+    const previousDirective = process.env['CARDS_WORKTREE_DIRECTIVE'];
     process.env['CARD_ID'] = 'ope-age-sup-1';
+    process.env['CARDS_EXECUTION_ID'] = 'execution-453';
+    process.env['CARDS_WORKTREE_DIRECTIVE'] = '{"kind":"reuse"}';
     try {
       vi.resetModules();
       const entry = await import('../../../src/opencode/runtime/session-start.js');
@@ -201,6 +207,10 @@ describe('runtime session-start plugin', () => {
     } finally {
       if (previous === undefined) delete process.env['CARD_ID'];
       else process.env['CARD_ID'] = previous;
+      if (previousExecutionId === undefined) delete process.env['CARDS_EXECUTION_ID'];
+      else process.env['CARDS_EXECUTION_ID'] = previousExecutionId;
+      if (previousDirective === undefined) delete process.env['CARDS_WORKTREE_DIRECTIVE'];
+      else process.env['CARDS_WORKTREE_DIRECTIVE'] = previousDirective;
       vi.resetModules();
     }
   });

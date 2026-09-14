@@ -117,6 +117,8 @@ async function setupDefaultMocks(): Promise<void> {
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
       return Promise.resolve(new Response(JSON.stringify({}), { status: 201 }));
     }
+    if (opts?.method === 'PATCH')
+      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
   });
 
@@ -150,7 +152,7 @@ async function setupDefaultMocks(): Promise<void> {
       cardId: opts.cardId,
       compiledScriptPaths: opts.compiledScriptPaths
     };
-    return createWorktree(ref, forwardedOptions);
+    return createWorktree(ref, forwardedOptions).then((result) => ({ ...result, registrationRevision: 'revision-a' }));
   });
 }
 
@@ -177,6 +179,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
     onCancel: vi.fn(),
     onAgentShutdown: vi.fn(),
     onSwitchToInteractive: vi.fn()
@@ -224,6 +227,8 @@ function createMockStderr(): {
 
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
+    executionId: 'execution-test',
+    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Launch',
     environment: 'default',
@@ -264,7 +269,15 @@ async function configureExecFile(handlers: Record<string, { stdout: string; stde
 }
 
 function configureBranchesResponse(
-  branches: Array<{ name: string; worktree?: string; parentBranch: string; addedAt: string; exists?: boolean }>
+  branches: Array<{
+    name: string;
+    worktree?: string;
+    parentBranch: string;
+    addedAt: string;
+    revision?: string;
+    activeExecutionOwner?: string;
+    exists?: boolean;
+  }>
 ): void {
   globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
@@ -277,6 +290,9 @@ function configureBranchesResponse(
     }
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'DELETE') {
       return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'PATCH') {
+      return Promise.resolve(new Response(JSON.stringify({ outcome: 'idempotent', revision: 'revision-b' })));
     }
     return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
   });
@@ -478,6 +494,76 @@ describe('claude-session shared utilities', () => {
       expect(createWorktree).not.toHaveBeenCalled();
     });
 
+    it('reattaches only the branch pre-owned by the exact successor execution', async () => {
+      const { resolveOrCreateWorktree } = await import('../src/lib/claude-session.js');
+      const { CardsClient } = await import('@cards.management/sdk/client');
+      const { access } = await import('node:fs/promises');
+      configureBranchesResponse([
+        {
+          name: 'cards/card-123/1',
+          worktree: '/test/workspace/.worktrees/cards/card-123/1',
+          parentBranch: 'main',
+          addedAt: '2025-01-01T00:00:00Z',
+          revision: 'revision-a',
+          activeExecutionOwner: 'execution-a',
+          exists: true
+        },
+        {
+          name: 'cards/card-123/2',
+          worktree: '/test/workspace/.worktrees/cards/card-123/2',
+          parentBranch: 'main',
+          addedAt: '2025-01-02T00:00:00Z',
+          revision: 'revision-b',
+          activeExecutionOwner: 'execution-b',
+          exists: true
+        }
+      ]);
+      vi.mocked(access).mockResolvedValue(undefined);
+
+      const result = await resolveOrCreateWorktree(
+        baseInput({
+          executionId: 'execution-b',
+          worktreeDirective: {
+            kind: 'preowned',
+            branch: 'cards/card-123/2',
+            worktreePath: '/test/workspace/.worktrees/cards/card-123/2'
+          }
+        }),
+        new CardsClient({ baseUrl: 'http://localhost:3000', accessToken: 'test-token' }),
+        'main',
+        createMockLogger()
+      );
+
+      expect(result).toMatchObject({ branchName: 'cards/card-123/2', reason: 'reused' });
+      expect(vi.mocked(fetch).mock.calls.some(([, options]) => options?.method === 'PATCH')).toBe(false);
+    });
+
+    it('does not convert a claim retry into a transfer from the sibling that won', async () => {
+      const { resolveOrCreateWorktree } = await import('../src/lib/claude-session.js');
+      const { CardsClient } = await import('@cards.management/sdk/client');
+      const client = new CardsClient({ baseUrl: 'http://localhost:3000', accessToken: 'test-token' });
+      const branch = {
+        name: 'cards/card-123/1',
+        revision: 'free',
+        worktree: '/test/slot1',
+        parentBranch: 'main',
+        exists: true
+      };
+      vi.spyOn(client, 'getBranches')
+        .mockResolvedValueOnce({ branches: [branch] } as never)
+        .mockResolvedValue({
+          branches: [{ ...branch, revision: 'sibling', activeExecutionOwner: 'execution-sibling' }]
+        } as never);
+      const update = vi
+        .spyOn(client, 'updateBranchOwner')
+        .mockRejectedValueOnce(Object.assign(new Error('contended'), { code: 'CONCURRENT_CARD_WRITE' }))
+        .mockResolvedValue({ outcome: 'applied', revision: 'ours' });
+      const result = await resolveOrCreateWorktree(baseInput(), client, 'main', createMockLogger());
+      expect(result.branchName).toBe('cards/card-123/2');
+      expect(update.mock.calls.filter((call) => call[1] === branch.name)).toHaveLength(1);
+      expect(update.mock.calls.every((call) => call[2].expectedOwner.kind === 'none')).toBe(true);
+    });
+
     it('creates new worktree when no branches exist', async () => {
       const { resolveOrCreateWorktree } = await import('../src/lib/claude-session.js');
       const { CardsClient } = await import('@cards.management/sdk/client');
@@ -496,6 +582,54 @@ describe('claude-session shared utilities', () => {
       expect(result.worktreePath).toBe('/test/workspace/.worktrees/cards/card-123/1');
       expect(result.branchName).toBe('cards/card-123/1');
       expect(result.parentBranch).toBe('main');
+    });
+
+    it('advances through five synchronized contenders until every earlier slot has an owner', async () => {
+      const { resolveOrCreateWorktree } = await import('../src/lib/claude-session.js');
+      const { CardsClient } = await import('@cards.management/sdk/client');
+      const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
+      const conflict = Object.assign(new Error('slot claimed'), { code: 'BRANCH_REGISTRATION_CONFLICT' });
+      let releaseFirst!: () => void;
+      const firstAttempt = new Promise<void>((resolve) => {
+        releaseFirst = resolve;
+      });
+      vi.mocked(createWorktreeForCard)
+        .mockImplementationOnce(async () => {
+          await firstAttempt;
+          throw conflict;
+        })
+        .mockRejectedValueOnce(conflict)
+        .mockRejectedValueOnce(conflict)
+        .mockRejectedValueOnce(conflict)
+        .mockResolvedValueOnce({
+          path: '/test/workspace/.worktrees/cards/card-123/5',
+          settle: Promise.resolve({
+            branch: 'cards/card-123/5',
+            worktree: '/test/workspace/.worktrees/cards/card-123/5',
+            baseSha: 'abc123',
+            copiedFromInclude: 0,
+            reroutedSymlinks: 0
+          })
+        });
+      configureBranchesResponse([]);
+
+      const pending = resolveOrCreateWorktree(
+        baseInput(),
+        new CardsClient({ baseUrl: 'http://localhost:3000', accessToken: 'test-token' }),
+        'main',
+        createMockLogger()
+      );
+      await Promise.resolve();
+      releaseFirst();
+
+      await expect(pending).resolves.toMatchObject({ branchName: 'cards/card-123/5', reason: 'allocated' });
+      expect(vi.mocked(createWorktreeForCard).mock.calls.map((call) => call[1])).toEqual([
+        'cards/card-123/1',
+        'cards/card-123/2',
+        'cards/card-123/3',
+        'cards/card-123/4',
+        'cards/card-123/5'
+      ]);
     });
 
     it('skips occupied git slots when API and git are out of sync', async () => {
@@ -576,9 +710,81 @@ describe('claude-session shared utilities', () => {
   });
 
   describe('cleanupMergedBranches', () => {
+    /**
+     * Installs a `globalThis.fetch` stub standing in for the Cards branch store.
+     *
+     * Cleanup decides reclamation from durable ownership read through
+     * `getBranches`, and removes a branch record through the store's
+     * conditional `DELETE` — so a sweep run against the default empty-branch
+     * mock would classify every record as ownership-ambiguous and skip. This
+     * serves both endpoints against an in-memory record map whose `revision`
+     * rotates whenever a delete succeeds, mirroring the real store's CAS.
+     *
+     * @param records - Branch records keyed by branch name. `revision` is the
+     *   opaque token the store would return for the current registration;
+     *   `activeExecutionOwner` marks the branch claimed by a live execution.
+     * @returns Handle exposing the observed `DELETE` calls and the mutable
+     *   record map, so tests can assert both what was requested and what survived.
+     */
+    function configureBranchStore(records: Record<string, { revision: string; activeExecutionOwner?: string }>): {
+      deletes: string[];
+      records: Record<string, { revision: string; activeExecutionOwner?: string }>;
+    } {
+      const deletes: string[] = [];
+      globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+        const method = opts?.method ?? 'GET';
+        if (typeof url === 'string' && url.includes('/branches')) {
+          if (method === 'GET') {
+            return Promise.resolve(
+              new Response(
+                JSON.stringify({
+                  branches: Object.entries(records).map(([name, record]) => ({ name, ...record })),
+                  commits: [],
+                  defaultBranch: 'main'
+                }),
+                { status: 200 }
+              )
+            );
+          }
+          if (method === 'PATCH') {
+            const name = decodeURIComponent(new URL(url).pathname.split('/branches/')[1]!.replace(/\/owner$/, ''));
+            const request = JSON.parse(String(opts?.body));
+            const current = records[name];
+            if (
+              !current ||
+              current.revision !== request.expectedRevision ||
+              current.activeExecutionOwner !== undefined
+            ) {
+              return Promise.resolve(new Response(JSON.stringify({ outcome: 'owner_conflict' })));
+            }
+            current.activeExecutionOwner = request.replacementOwner;
+            current.revision = `${current.revision}-claimed`;
+            return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: current.revision })));
+          }
+          if (method === 'DELETE') {
+            const parsed = new URL(url);
+            const name = decodeURIComponent(parsed.pathname.split('/branches/')[1] ?? '');
+            const expectedRevision = parsed.searchParams.get('expectedRevision') ?? '';
+            deletes.push(`${name}@${expectedRevision}`);
+            const current = records[name];
+            if (current === undefined || current.revision !== expectedRevision) {
+              return Promise.resolve(new Response(JSON.stringify({ outcome: 'preserved' }), { status: 200 }));
+            }
+            delete records[name];
+            return Promise.resolve(new Response(JSON.stringify({ outcome: 'removed' }), { status: 200 }));
+          }
+        }
+        return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
+      });
+      return { deletes, records };
+    }
+
     async function configureBranchesFile(
-      branches: Record<string, { worktree?: string; parentBranch: string; addedAt: string }>
-    ): Promise<void> {
+      branches: Record<
+        string,
+        { worktree?: string; parentBranch: string; addedAt: string; activeExecutionOwner?: string }
+      >
+    ): Promise<{ deletes: string[]; records: Record<string, { revision: string; activeExecutionOwner?: string }> }> {
       const { readFile, readdir, rm } = await import('node:fs/promises');
       const entryFiles = Object.keys(branches).map((name) => `${encodeURIComponent(name)}.json`);
 
@@ -605,6 +811,22 @@ describe('claude-session shared utilities', () => {
       });
 
       vi.mocked(rm).mockResolvedValue(undefined);
+
+      // Reachable store with one free (unclaimed) registration per on-disk
+      // record, so a sweep can positively prove ownership absent. A test
+      // needing a claimed or unreadable branch calls `configureBranchStore`
+      // afterwards, which replaces this stub wholesale.
+      return configureBranchStore(
+        Object.fromEntries(
+          Object.entries(branches).map(([name, data], index) => [
+            name,
+            {
+              revision: `rev-${index + 1}`,
+              ...(data.activeExecutionOwner !== undefined ? { activeExecutionOwner: data.activeExecutionOwner } : {})
+            }
+          ])
+        )
+      );
     }
 
     describe('readBranchEntries', () => {
@@ -793,6 +1015,8 @@ describe('claude-session shared utilities', () => {
         return {} as ReturnType<typeof execFile>;
       });
 
+      configureBranchStore({ 'cards/card-123/1': { revision: 'rev-1' } });
+
       const outcomes = await cleanupMergedBranches(baseInput(), '/test/repo', logger);
 
       expect(outcomes).toEqual([
@@ -880,7 +1104,7 @@ describe('claude-session shared utilities', () => {
       const { execFile } = await import('node:child_process');
       const { rm } = await import('node:fs/promises');
 
-      await configureBranchesFile({
+      const { deletes } = await configureBranchesFile({
         'cards/card-123/1': {
           worktree: '/test/workspace/.worktrees/cards/card-123/1',
           parentBranch: 'main',
@@ -924,15 +1148,15 @@ describe('claude-session shared utilities', () => {
       );
       expect(branchDeleteCall).toBeDefined();
 
-      // Verify the branch's per-entry file was removed (fs.rm + git rm)
-      expect(vi.mocked(rm)).toHaveBeenCalledWith(
-        expect.stringContaining(`${encodeURIComponent('cards/card-123/1')}.json`),
-        expect.objectContaining({ force: true })
-      );
+      // Verify the record was removed through the store's conditional path —
+      // naming the revision whose freedom was proven — rather than by editing
+      // branches/ and committing directly, which would race the store's CAS.
+      expect(deletes).toEqual([`cards/card-123/1@rev-1-claimed`]);
+      expect(rm).not.toHaveBeenCalled();
       const gitRmCall = execCalls.find(
         (c) => (c[1] as string[])?.[0] === 'rm' && (c[1] as string[])?.includes('--ignore-unmatch')
       );
-      expect(gitRmCall).toBeDefined();
+      expect(gitRmCall).toBeUndefined();
 
       expect(outcomes).toContainEqual(expect.objectContaining({ action: 'cleaned', branch: 'cards/card-123/1' }));
     });
@@ -948,6 +1172,7 @@ describe('claude-session shared utilities', () => {
           addedAt: '2025-01-01T00:00:00Z'
         }
       });
+      configureBranchStore({ 'cards/card-123/1': { revision: 'rev-1' } });
 
       vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
         const cb = args[args.length - 1];
@@ -1056,7 +1281,206 @@ describe('claude-session shared utilities', () => {
       const branchDeleteCall = execCalls.find(
         (c) => (c[1] as string[])?.includes('branch') && (c[1] as string[])?.includes('-d')
       );
-      expect(branchDeleteCall).toBeDefined();
+      expect(branchDeleteCall).toBeUndefined();
+    });
+
+    /**
+     * Durable ownership — not a process scan — decides reclamation.
+     *
+     * These fixtures pin the fail-closed contract: a branch is reclaimed only
+     * when its ownership has been positively proven absent by a read taken at
+     * the point of decision. A claimed branch, an unreadable store, a record
+     * the store no longer lists, and a store that moved on between the read and
+     * the write must all leave every Git resource exactly where it was.
+     */
+    describe('durable ownership authority', () => {
+      /** Merged-branch git responses: the branch exists and is an ancestor of its parent. */
+      async function configureMergedGit(): Promise<void> {
+        const { execFile } = await import('node:child_process');
+        vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
+          const cb = args[args.length - 1];
+          const cmdArgs = args[1] as string[];
+          if (typeof cb === 'function') {
+            if (cmdArgs?.includes('--list')) {
+              cb(null, { stdout: '  cards/card-123/1\n', stderr: '' });
+            } else {
+              cb(null, { stdout: '', stderr: '' });
+            }
+          }
+          return {} as ReturnType<typeof execFile>;
+        });
+      }
+
+      /**
+       * Asserts the sweep left the branch's Git resources untouched.
+       *
+       * @param execFile - The mocked `execFile` whose recorded calls are inspected.
+       */
+      function expectNothingDestructive(execFile: typeof import('node:child_process').execFile): void {
+        const execCalls = vi.mocked(execFile).mock.calls;
+        expect(
+          execCalls.find((c) => (c[1] as string[])?.includes('worktree') && (c[1] as string[])?.includes('remove'))
+        ).toBeUndefined();
+        expect(
+          execCalls.find((c) => (c[1] as string[])?.includes('branch') && (c[1] as string[])?.includes('-d'))
+        ).toBeUndefined();
+      }
+
+      it('skips a branch claimed by another execution even when no process occupies its worktree', async () => {
+        const { cleanupMergedBranches } = await import('../src/lib/claude-session.js');
+        const { execFile } = await import('node:child_process');
+
+        await configureBranchesFile({
+          'cards/card-123/1': {
+            worktree: '/test/workspace/.worktrees/cards/card-123/1',
+            parentBranch: 'main',
+            addedAt: '2025-01-01T00:00:00Z'
+          }
+        });
+        await configureMergedGit();
+        // The store says a sibling execution owns this checkout. Nothing about
+        // the process table can change that answer, so the sweep must skip
+        // before it reaches any destructive step.
+        const { deletes } = configureBranchStore({
+          'cards/card-123/1': { revision: 'rev-1', activeExecutionOwner: 'execution-sibling' }
+        });
+
+        const outcomes = await cleanupMergedBranches(baseInput(), '/test/repo', createMockLogger());
+
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({ branch: 'cards/card-123/1', action: 'skipped', reason: 'in-use' })
+        );
+        expectNothingDestructive(execFile);
+        expect(deletes).toEqual([]);
+      });
+
+      it('performs no destructive effects when a sibling claims after the final ownership read', async () => {
+        const { cleanupMergedBranches } = await import('../src/lib/claude-session.js');
+        const { execFile } = await import('node:child_process');
+        await configureBranchesFile({
+          'cards/card-123/1': {
+            worktree: '/test/workspace/.worktrees/cards/card-123/1',
+            parentBranch: 'main',
+            addedAt: '2025-01-01T00:00:00Z'
+          }
+        });
+        await configureMergedGit();
+        const { records, deletes } = configureBranchStore({ 'cards/card-123/1': { revision: 'rev-1' } });
+        const transport = globalThis.fetch;
+        globalThis.fetch = vi.fn((url, options) => {
+          if (options?.method === 'PATCH')
+            records['cards/card-123/1'] = { revision: 'sibling-revision', activeExecutionOwner: 'sibling' };
+          return transport(url, options);
+        });
+        await cleanupMergedBranches(baseInput(), '/test/repo', createMockLogger());
+        expectNothingDestructive(execFile);
+        expect(deletes).toEqual([]);
+        expect(records['cards/card-123/1']?.activeExecutionOwner).toBe('sibling');
+      });
+
+      it('skips the branch when the store cannot be listed', async () => {
+        const { cleanupMergedBranches } = await import('../src/lib/claude-session.js');
+        const { execFile } = await import('node:child_process');
+
+        await configureBranchesFile({
+          'cards/card-123/1': {
+            worktree: '/test/workspace/.worktrees/cards/card-123/1',
+            parentBranch: 'main',
+            addedAt: '2025-01-01T00:00:00Z'
+          }
+        });
+        await configureMergedGit();
+        globalThis.fetch = vi
+          .fn()
+          .mockResolvedValue(new Response(JSON.stringify({ error: 'unavailable' }), { status: 403 }));
+        const logger = createMockLogger();
+        const warnSpy = vi.spyOn(logger, 'warn');
+
+        const outcomes = await cleanupMergedBranches(baseInput(), '/test/repo', logger);
+
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({ branch: 'cards/card-123/1', action: 'skipped', reason: 'ownership-unreadable' })
+        );
+        expect(warnSpy).toHaveBeenCalledWith(
+          'Cannot read durable branch ownership — treating the branch as claimed',
+          expect.objectContaining({ branch: 'cards/card-123/1' })
+        );
+        expectNothingDestructive(execFile);
+      });
+
+      it('skips the branch when the store no longer lists the record', async () => {
+        const { cleanupMergedBranches } = await import('../src/lib/claude-session.js');
+        const { execFile } = await import('node:child_process');
+
+        await configureBranchesFile({
+          'cards/card-123/1': {
+            worktree: '/test/workspace/.worktrees/cards/card-123/1',
+            parentBranch: 'main',
+            addedAt: '2025-01-01T00:00:00Z'
+          }
+        });
+        await configureMergedGit();
+        // The on-disk record exists but the authoritative store has no matching
+        // registration: ownership is ambiguous, which is not the same as absent.
+        const { deletes } = configureBranchStore({});
+
+        const outcomes = await cleanupMergedBranches(baseInput(), '/test/repo', createMockLogger());
+
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({ branch: 'cards/card-123/1', action: 'skipped', reason: 'ownership-unreadable' })
+        );
+        expectNothingDestructive(execFile);
+        expect(deletes).toEqual([]);
+      });
+
+      it('preserves the record when the store moved on after the ownership read', async () => {
+        const { cleanupMergedBranches } = await import('../src/lib/claude-session.js');
+        const { execFile } = await import('node:child_process');
+
+        await configureBranchesFile({
+          'cards/card-123/1': {
+            worktree: '/test/workspace/.worktrees/cards/card-123/1',
+            parentBranch: 'main',
+            addedAt: '2025-01-01T00:00:00Z'
+          }
+        });
+        await configureMergedGit();
+        // The record frees itself at read time but carries a different revision
+        // by the time the delete lands — the CAS the sweep must not bypass.
+        const { deletes, records } = configureBranchStore({ 'cards/card-123/1': { revision: 'rev-1' } });
+        records['cards/card-123/1'] = { revision: 'rev-2', activeExecutionOwner: 'execution-successor' };
+
+        const outcomes = await cleanupMergedBranches(baseInput(), '/test/repo', createMockLogger());
+
+        expect(deletes).toEqual([]);
+        expectNothingDestructive(execFile);
+        expect(outcomes).toContainEqual(
+          expect.objectContaining({ branch: 'cards/card-123/1', action: 'skipped', reason: 'in-use' })
+        );
+      });
+
+      it('skips the whole sweep when the Cards API cannot be discovered', async () => {
+        const { cleanupMergedBranches } = await import('../src/lib/claude-session.js');
+        const { execFile } = await import('node:child_process');
+        const { readdir } = await import('node:fs/promises');
+
+        // Discovery failure means there is no durable authority to consult, so
+        // no branch can be proven free. Fail closed for the whole card before
+        // reading any record or running any git command.
+        const previous = process.env['API_TEST_MODE'];
+        delete process.env['API_TEST_MODE'];
+        try {
+          const outcomes = await cleanupMergedBranches(baseInput(), '/test/repo', createMockLogger());
+
+          expect(outcomes).toEqual([
+            { cardId: 'card-123', branch: '(all)', action: 'skipped', reason: 'ownership-unreadable' }
+          ]);
+        } finally {
+          if (previous !== undefined) process.env['API_TEST_MODE'] = previous;
+        }
+        expect(vi.mocked(execFile)).not.toHaveBeenCalled();
+        expect(vi.mocked(readdir)).not.toHaveBeenCalled();
+      });
     });
   });
 

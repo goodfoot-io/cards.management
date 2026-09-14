@@ -921,10 +921,13 @@ export async function spawnCodexSession(
   const {
     worktreePath: cwd,
     branchName,
-    parentBranch
+    parentBranch,
+    reason
   } = await resolveOrCreateWorktree(input, client, baseBranch, context.logger);
 
-  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
+  await context.reportWorktreeAssignment({ branch: branchName, worktreePath: cwd, reason });
+
+  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch, reason });
 
   const codexHome = resolveDefaultCodexHome();
   const { bundlePath, pluginPaths, pluginCachePaths } = await populateCodexPluginCache(codexHome, marketplacePath);

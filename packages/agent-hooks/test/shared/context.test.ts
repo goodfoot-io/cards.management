@@ -69,6 +69,8 @@ describe('buildEnvBlock', () => {
   const makeActionInput = (overrides?: Record<string, unknown>) => ({
     cardId: 'card-123',
     actionName: 'Launch',
+    executionId: 'execution-123',
+    worktreeDirective: { kind: 'reuse' } as const,
     environment: 'default',
     executionMode: 'interactive' as const,
     exitWhenDone: false,
@@ -498,6 +500,8 @@ describe('buildAdditionalContext', () => {
   const makeActionInput = (overrides?: Record<string, unknown>) => ({
     cardId: 'card-123',
     actionName: 'Launch',
+    executionId: 'execution-123',
+    worktreeDirective: { kind: 'reuse' } as const,
     environment: 'default',
     executionMode: 'interactive' as const,
     exitWhenDone: false,

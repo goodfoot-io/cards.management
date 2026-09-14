@@ -42,7 +42,6 @@ interface CommandInfo {
   description?: string;
   icon?: string;
   supportsBackgroundMode?: boolean;
-  allowConcurrent?: boolean;
 }
 
 /**
@@ -197,8 +196,7 @@ function extractCommands(config: SettingsConfig): CommandInfo[] {
         timeout: action.timeout,
         description: action.description,
         icon: action.icon,
-        supportsBackgroundMode: action.supportsBackgroundMode,
-        allowConcurrent: action.allowConcurrent
+        supportsBackgroundMode: action.supportsBackgroundMode
       });
     }
 
@@ -463,10 +461,6 @@ function generateSettings(
       if (actionCmd.supportsBackgroundMode !== undefined) {
         action.supportsBackgroundMode = actionCmd.supportsBackgroundMode;
       }
-      if (actionCmd.allowConcurrent !== undefined) {
-        action.allowConcurrent = actionCmd.allowConcurrent;
-      }
-
       actions.push(action);
     }
 

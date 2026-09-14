@@ -51,8 +51,7 @@ export interface Command {
  *   description: 'Launch Claude in a new window',
  *   icon: 'rocket',
  *   command: { command: 'node ./bin/action-Launch Claude.js' },
- *   supportsBackgroundMode: true,
- *   allowConcurrent: false
+ *   supportsBackgroundMode: true
  * };
  * ```
  */
@@ -69,8 +68,6 @@ export interface Action {
   command: Command;
   /** Whether the action can run in background mode */
   supportsBackgroundMode?: boolean;
-  /** Whether multiple instances can run concurrently */
-  allowConcurrent?: boolean;
 }
 
 // ============================================================================

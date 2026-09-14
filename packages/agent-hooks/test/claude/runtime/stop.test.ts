@@ -50,6 +50,8 @@ const SHA_2 = '2'.repeat(40);
 const ACTION_ENV = {
   CARD_ID: 'card-456',
   ACTION_NAME: 'Launch Claude',
+  CARDS_EXECUTION_ID: 'execution-456',
+  CARDS_WORKTREE_DIRECTIVE: '{"kind":"reuse"}',
   ENVIRONMENT: 'staging',
   EXECUTION_MODE: 'interactive',
   EXIT_WHEN_DONE: 'false',

@@ -97,6 +97,8 @@ beforeEach(() => {
   mockHasExitWhenDoneFired.mockReturnValue(false);
   mockExtractActionInput.mockReturnValue({
     cardId: 'card-123',
+    executionId: 'execution-123',
+    worktreeDirective: { kind: 'reuse' },
     actionName: 'Launch Claude',
     environment: 'default',
     executionMode: 'background',
@@ -238,6 +240,8 @@ describe('Notification(idle_prompt) nudge hook', () => {
       mockExecFileSync.mockReturnValue('0\n');
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
+        executionId: 'execution-123',
+        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -263,6 +267,8 @@ describe('Notification(idle_prompt) nudge hook', () => {
     it('does not fire when exitWhenDone is false', async () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
+        executionId: 'execution-123',
+        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -327,6 +333,8 @@ describe('Notification(idle_prompt) nudge hook', () => {
       mockExecFileSync.mockReturnValue('2\n');
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
+        executionId: 'execution-123',
+        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -353,6 +361,8 @@ describe('Notification(idle_prompt) nudge hook', () => {
       writeCardMeta({ tags: [], gates: {} });
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
+        executionId: 'execution-123',
+        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',

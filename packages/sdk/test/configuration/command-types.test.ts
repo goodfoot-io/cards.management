@@ -52,7 +52,6 @@ describe('command-types', () => {
         description?: string;
         icon?: string;
         supportsBackgroundMode?: boolean;
-        allowConcurrent?: boolean;
         timeout?: number;
       }>();
     });

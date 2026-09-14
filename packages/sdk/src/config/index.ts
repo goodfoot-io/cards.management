@@ -72,7 +72,9 @@ export type {
   ActionInput,
   AgentTerminationResult,
   CardsAssistantContext,
-  CardsAssistantInput
+  CardsAssistantInput,
+  WorktreeAllocationDirective,
+  WorktreeAssignmentResult
 } from './inputs.js';
 
 // ============================================================================

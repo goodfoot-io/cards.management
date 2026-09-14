@@ -16,6 +16,8 @@ import type {
   RemoveBranchResponse,
   StreamMeta,
   TimelineItem,
+  UpdateBranchOwnerRequest,
+  UpdateBranchOwnerResponse,
   VariableGroupsResponse
 } from '../protocol/index.js';
 import type {
@@ -815,6 +817,17 @@ export class CardsClient {
     return this.request(() => this.getHttpClient().post<AddBranchResponse>(url, data, { headers }), false);
   }
 
+  async updateBranchOwner(
+    cardId: string,
+    branchName: string,
+    data: UpdateBranchOwnerRequest,
+    options?: { sessionId?: string }
+  ): Promise<UpdateBranchOwnerResponse> {
+    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(branchName)}/owner`);
+    const headers = options?.sessionId ? { 'X-Cards-Session-Id': options.sessionId } : undefined;
+    return this.request(() => this.getHttpClient().patch<UpdateBranchOwnerResponse>(url, data, { headers }), false);
+  }
+
   /**
    * Removes a branch from a card.
    *
@@ -823,15 +836,17 @@ export class CardsClient {
    * @param options - Optional parameters.
    * @param options.sessionId - Claude Code session ID forwarded as `X-Cards-Session-Id` header so the card repo post-commit hook can attribute the commit.
    * @param options.expectedRevision - Delete only the registration with this opaque revision; preserve a newer registration.
+   * @param options.expectedCleanupOwner - Exact cleanup owner retained throughout resource teardown.
    * @returns Promise resolving when the branch is removed.
    */
   async removeBranch(
     cardId: string,
     name: string,
-    options?: { sessionId?: string; expectedRevision?: string }
+    options?: { sessionId?: string; expectedRevision?: string; expectedCleanupOwner?: string }
   ): Promise<RemoveBranchResponse> {
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(name)}`, {
-      expectedRevision: options?.expectedRevision
+      expectedRevision: options?.expectedRevision,
+      expectedCleanupOwner: options?.expectedCleanupOwner
     });
     const headers: Record<string, string> = {};
     if (options?.sessionId) {

@@ -67,9 +67,6 @@ export interface ActionCommand<N extends string = string> {
   /** Background mode flag from config, if provided. */
   supportsBackgroundMode?: boolean;
 
-  /** Concurrent execution flag from config, if provided. */
-  allowConcurrent?: boolean;
-
   /** Timeout from config, if provided. */
   timeout?: number;
 

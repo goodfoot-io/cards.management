@@ -96,7 +96,7 @@ export default defineConfig({
 
 | Factory | Purpose | Config Fields |
 |---------|---------|---------------|
-| `defineAction` | Per-card action handler | `actionName`, `id?`, `description?`, `icon?`, `supportsBackgroundMode?`, `allowConcurrent?`, `timeout?` |
+| `defineAction` | Per-card action handler | `actionName`, `id?`, `description?`, `icon?`, `supportsBackgroundMode?`, `timeout?` |
 | `defineCardsAssistant` | Workspace-scoped assistant handler | _(none — pass an empty `{}` config)_ |
 
 ## Development Checklist

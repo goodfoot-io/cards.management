@@ -533,12 +533,6 @@ export interface ActionSummaryResponse {
    * When true, users can choose between interactive and background modes.
    */
   supportsBackgroundMode?: boolean;
-
-  /**
-   * Whether multiple instances can run on the same card simultaneously.
-   * When false, starting a new instance cancels any existing one.
-   */
-  allowConcurrent?: boolean;
 }
 
 /**

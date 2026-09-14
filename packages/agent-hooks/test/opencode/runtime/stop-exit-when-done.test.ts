@@ -54,6 +54,8 @@ afterEach(() => {
 function actionInput(exitWhenDone: boolean): ActionInput {
   return {
     cardId: 'main-453',
+    executionId: 'execution-453',
+    worktreeDirective: { kind: 'reuse' },
     actionName: 'Launch Cards',
     environment: 'default',
     executionMode: 'interactive',

@@ -402,6 +402,25 @@ describe('CardsClient', () => {
       });
     });
 
+    it('conditionally changes branch ownership with exact revision and owner', async () => {
+      const httpClient = new TestHttpClient();
+      const client = new CardsClient(options, httpClient);
+      await client.updateBranchOwner('card-123', 'feature/test', {
+        expectedRevision: 'revision-1',
+        expectedOwner: { kind: 'none' },
+        replacementOwner: 'execution-1'
+      });
+      expect(httpClient.requests[0]).toMatchObject({
+        method: 'PATCH',
+        url: expect.stringContaining('/cards/card-123/branches/feature%2Ftest/owner'),
+        body: {
+          expectedRevision: 'revision-1',
+          expectedOwner: { kind: 'none' },
+          replacementOwner: 'execution-1'
+        }
+      });
+    });
+
     it('should DELETE /cards/:id/branches/:name when removing branch', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
@@ -476,8 +495,7 @@ describe('CardsClient', () => {
               name: 'Launch',
               description: 'Start an implementation agent',
               icon: '/workspace/icons/launch.svg',
-              supportsBackgroundMode: true,
-              allowConcurrent: false
+              supportsBackgroundMode: true
             }
           ]
         }

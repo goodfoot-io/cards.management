@@ -80,6 +80,8 @@ describe('executeCommand', () => {
     Object.assign(process.env, {
       [CARDS_ENV_VARS.CARD_ID]: 'card-123',
       [CARDS_ENV_VARS.ACTION_NAME]: 'Test Action',
+      [CARDS_ENV_VARS.EXECUTION_ID]: 'execution-1',
+      [CARDS_ENV_VARS.WORKTREE_DIRECTIVE]: JSON.stringify({ kind: 'reuse' }),
       [CARDS_ENV_VARS.ENVIRONMENT]: 'default',
       [CARDS_ENV_VARS.EXECUTION_MODE]: 'interactive',
       [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false',

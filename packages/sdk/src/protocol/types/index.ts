@@ -46,15 +46,19 @@ export type {
   AddBranchResponse,
   BranchesResponse,
   BranchInfo,
+  BranchOwnerExpectation,
   BranchRegistrationIntent,
   RemoveBranchRequest,
   RemoveBranchResponse,
+  UpdateBranchOwnerRequest,
+  UpdateBranchOwnerResponse,
   WorkspaceBranch
 } from './branch.js';
 export {
   BRANCHES_DIR,
   COMMITS_DIR,
-  EMPTY_TREE_SHA
+  EMPTY_TREE_SHA,
+  UpdateBranchOwnerRequestSchema
 } from './branch.js';
 // --- Card Types ---
 export type { Card, CardGates, CardMetadata, CardRelation, CardRelationType } from './card.js';
@@ -281,7 +285,8 @@ export {
   type RuntimeCapabilities,
   type RuntimeMessageType,
   type RuntimePayload,
-  runtimeMessageTypeSchema
+  runtimeMessageTypeSchema,
+  worktreeAssignmentResultPayloadSchema
 } from './runtime-messages.js';
 // --- Runtime Protocol: Transition Tables ---
 export {

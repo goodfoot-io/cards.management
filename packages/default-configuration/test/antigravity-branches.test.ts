@@ -175,6 +175,8 @@ beforeEach(async () => {
   });
 
   globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+    if (opts?.method === 'PATCH')
+      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
         new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
@@ -238,6 +240,7 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
+    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -271,6 +274,8 @@ function createMockChild(): ChildProcess {
 
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
+    executionId: 'execution-test',
+    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Launch',
     environment: 'default',

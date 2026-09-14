@@ -49,6 +49,12 @@ export const CARDS_ENV_VARS = {
    */
   ACTION_NAME: 'ACTION_NAME',
 
+  /** Server-minted identity of the admitted execution. */
+  EXECUTION_ID: 'CARDS_EXECUTION_ID',
+
+  /** Strict JSON authority-issued worktree allocation directive. */
+  WORKTREE_DIRECTIVE: 'CARDS_WORKTREE_DIRECTIVE',
+
   /**
    * Card's execution mode, determining UI interaction model.
    * Available in actions only (not type hooks).
@@ -693,12 +699,44 @@ export function readSwitchToInteractiveData(): unknown | undefined {
  * ```
  */
 export function extractActionInput(): ActionInput {
+  const cardId = getCardId();
+  const actionName = getActionName();
+  const environment = getEnvironment();
+  const executionMode = getExecutionMode();
+  const exitWhenDone = getExitWhenDone();
+  const executionId = process.env[CARDS_ENV_VARS.EXECUTION_ID]?.trim();
+  if (!executionId) throw new Error(`Missing required environment variable: ${CARDS_ENV_VARS.EXECUTION_ID}`);
+  const serializedWorktreeDirective = process.env[CARDS_ENV_VARS.WORKTREE_DIRECTIVE];
+  let worktreeDirective: ActionInput['worktreeDirective'];
+  try {
+    const parsed: unknown = JSON.parse(serializedWorktreeDirective ?? '');
+    if (typeof parsed !== 'object' || parsed === null || !('kind' in parsed)) throw new Error('missing kind');
+    if (parsed.kind === 'reuse' || parsed.kind === 'allocate') {
+      if (Object.keys(parsed).length !== 1) throw new Error('unexpected fields');
+      worktreeDirective = { kind: parsed.kind };
+    } else if (
+      parsed.kind === 'preowned' &&
+      Object.keys(parsed).length === 3 &&
+      'branch' in parsed &&
+      typeof parsed.branch === 'string' &&
+      parsed.branch.length > 0 &&
+      'worktreePath' in parsed &&
+      typeof parsed.worktreePath === 'string' &&
+      parsed.worktreePath.length > 0
+    ) {
+      worktreeDirective = { kind: 'preowned', branch: parsed.branch, worktreePath: parsed.worktreePath };
+    } else throw new Error('unknown directive');
+  } catch {
+    throw new Error(`Invalid ${CARDS_ENV_VARS.WORKTREE_DIRECTIVE}: expected a strict worktree directive object`);
+  }
   return {
-    cardId: getCardId(),
-    actionName: getActionName(),
-    environment: getEnvironment(),
-    executionMode: getExecutionMode(),
-    exitWhenDone: getExitWhenDone(),
+    executionId,
+    worktreeDirective,
+    cardId,
+    actionName,
+    environment,
+    executionMode,
+    exitWhenDone,
     codingAgent: getCodingAgent(),
     switchToInteractiveData: readSwitchToInteractiveData(),
     repoRoot: getRepoRoot(),

@@ -299,8 +299,7 @@ export default defineAction(
     description: 'An action with all metadata',
     icon: 'rocket',
     timeout: 60000,
-    supportsBackgroundMode: true,
-    allowConcurrent: false
+    supportsBackgroundMode: true
   },
   async (input, { logger }) => {
     logger.info('Executed');
@@ -337,7 +336,6 @@ export default {
       expect(action.description).toBe('An action with all metadata');
       expect(action.icon).toBe('rocket');
       expect(action.supportsBackgroundMode).toBe(true);
-      expect(action.allowConcurrent).toBe(false);
       expect(action.command.timeout).toBe(60000);
     });
   });

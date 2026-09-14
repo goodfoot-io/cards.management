@@ -496,8 +496,7 @@ describe('card binary', () => {
               name: 'Launch',
               description: 'Start an implementation agent',
               icon: '/workspace/icons/launch.svg',
-              supportsBackgroundMode: true,
-              allowConcurrent: false
+              supportsBackgroundMode: true
             }
           ]
         }

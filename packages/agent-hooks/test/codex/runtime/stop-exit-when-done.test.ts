@@ -42,6 +42,8 @@ const mockIsSessionIdle = vi.mocked(isSessionIdle);
 const logger = new Logger();
 const actionInput = {
   cardId: 'main-453',
+  executionId: 'execution-453',
+  worktreeDirective: { kind: 'reuse' } as const,
   actionName: 'Launch',
   environment: 'default',
   executionMode: 'interactive' as const,

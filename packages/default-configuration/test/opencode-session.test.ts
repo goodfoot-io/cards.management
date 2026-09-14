@@ -546,6 +546,8 @@ describe('opencode-session library', () => {
 
       // API: workspace discovery + branches
       globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+        if (opts?.method === 'PATCH')
+          return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
         if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
           return Promise.resolve(
             new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
@@ -627,6 +629,7 @@ describe('opencode-session library', () => {
 
     function createMockContext(): ActionContext {
       return {
+        reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),
@@ -654,6 +657,8 @@ describe('opencode-session library', () => {
 
     function baseInput(overrides?: Partial<ActionInput>): ActionInput {
       return {
+        executionId: 'execution-test',
+        worktreeDirective: { kind: 'reuse' },
         cardId: 'card-123',
         actionName: 'Launch',
         environment: 'default',

@@ -9,7 +9,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -224,6 +224,7 @@ export interface OutfitAttributionOutcome {
  * @param client - CardsClient used to register the branch record.
  * @param worktreeDir - Absolute path to the (already-created) worktree root.
  * @param options - Card id, parent branch, session, transcript, and compiled hook paths.
+ * @param registrationReady - Materialization barrier before the registration becomes reusable.
  * @returns An {@link OutfitAttributionOutcome} describing whether attribution
  *   was spawned or skipped (and why), so callers like `cards <id> attach` can
  *   fail closed when the branch was registered but the card was not activated.
@@ -231,7 +232,8 @@ export interface OutfitAttributionOutcome {
 export async function outfitWorktreeForCard(
   client: CardsClient,
   worktreeDir: string,
-  options: OutfitWorktreeForCardOptions
+  options: OutfitWorktreeForCardOptions,
+  registrationReady: Promise<unknown> = Promise.resolve()
 ): Promise<OutfitAttributionOutcome> {
   const { cardId, parentBranch, sessionId, transcriptPath, runtime, compiledScriptPaths } = options;
 
@@ -315,6 +317,7 @@ export async function outfitWorktreeForCard(
   );
 
   // --- API phase ---
+  await registrationReady;
 
   // Serialize concurrent outfits against the same worktree across processes so
   // a re-run race cannot duplicate the addBranch POST. No client-side
@@ -449,13 +452,13 @@ export interface CreateWorktreeForCardOptions {
  * @param client - CardsClient used to register the branch record.
  * @param ref - Branch name to create.
  * @param options - Card-binding options.
- * @returns EarlyWorktreeResult — path is usable immediately, settle resolves later.
+ * @returns Settled worktree and the exact registration revision created by this invocation.
  */
 export async function createWorktreeForCard(
   client: CardsClient,
   ref: string,
   options: CreateWorktreeForCardOptions
-): Promise<EarlyWorktreeResult> {
+): Promise<EarlyWorktreeResult & { registrationRevision: string }> {
   const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId, registrationIntent } = options;
 
   // Settlement and outfit deliberately overlap on the early path. Keep cleanup
@@ -485,58 +488,30 @@ export async function createWorktreeForCard(
   // rejection and crashes the process. Callers that care about settle
   // health attach their own handler and observe the outcome; this handler
   // is a safety net, not a semantic consumer.
-  void result.settle.catch(() => undefined);
+  const registrationReady = result.settle.catch((error) => {
+    throw initiatingSettlementFailure(error);
+  });
+  void registrationReady.catch(() => undefined);
 
   try {
-    const outfit = await outfitWorktreeForCard(client, result.path, {
-      cardId,
-      parentBranch,
-      sessionId,
-      compiledScriptPaths,
-      registrationIntent
-    });
-
-    // Settlement owns all asynchronous materialization. If it fails, wait for
-    // that work to become quiescent (the rejection is the boundary), then
-    // conditionally release only the registration revision created here before
-    // removing the invocation-owned Git worktree and branch.
-    const settle = result.settle.catch(async (settleError: unknown) => {
-      const initiatingError = initiatingSettlementFailure(settleError);
-      try {
-        await client.removeBranch(cardId, ref, {
-          sessionId,
-          expectedRevision: outfit.registrationRevision
-        });
-      } catch (error: unknown) {
-        // A conditional unregister failure can mean a newer registration now
-        // owns this path. Preserve the Git resources rather than deleting them
-        // beneath that owner. It is also the safest response to an ambiguous
-        // transport failure: retry/reconciliation can inspect intact state.
-        throw new Error(
-          `createWorktreeForCard: settlement failed and rollback was not attempted at ${result.path}: ` +
-            `settle=${initiatingError instanceof Error ? initiatingError.message : String(initiatingError)}; ` +
-            `registration=${error instanceof Error ? error.message : String(error)}`,
-          { cause: initiatingError }
-        );
-      }
-      const cleanupFailures = await cleanupCreatedResources();
-      if (cleanupFailures.length > 0) {
-        throw new Error(
-          `createWorktreeForCard: settlement failed and rollback was incomplete at ${result.path}: ` +
-            `settle=${initiatingError instanceof Error ? initiatingError.message : String(initiatingError)}; ` +
-            cleanupFailures.join('; ')
-        );
-      }
-      throw initiatingError;
-    });
-
-    // Do not publish the worktree path while this invocation can still roll it
-    // back. Awaiting here preserves the early overlap between settlement and
-    // outfit without allowing a launched process to acquire the path first.
-    // Return (rather than await) the guarded handoff promise so a settlement
-    // rejection is not mistaken for an outfit failure by the catch below.
-    return settle.then(() => ({ path: result.path, settle }));
+    const outfit = await outfitWorktreeForCard(
+      client,
+      result.path,
+      {
+        cardId,
+        parentBranch,
+        sessionId,
+        compiledScriptPaths,
+        registrationIntent
+      },
+      registrationReady
+    );
+    return { path: result.path, settle: result.settle, registrationRevision: outfit.registrationRevision };
   } catch (outfitError) {
+    // A create-only registration conflict means a different invocation owns
+    // this slot. Never undo that registration's Git resources.
+    if (outfitError instanceof Error && 'code' in outfitError && outfitError.code === 'BRANCH_REGISTRATION_CONFLICT')
+      throw outfitError;
     // Atomicity: the worktree dir + git branch now exist on disk but outfit
     // failed partway (e.g. addBranch rejected), so no fully-registered worktree
     // exists. First quiesce createWorktree's asynchronous materialization: its
@@ -561,6 +536,7 @@ export async function createWorktreeForCard(
         { cause: outfitError }
       );
     }
+    if (outfitError === settlementFailure) throw settlementFailure;
     if (settlementFailure !== undefined) {
       throw new Error(
         `createWorktreeForCard: outfit and settlement failed, but rollback completed at ${result.path}: ` +
@@ -571,6 +547,33 @@ export async function createWorktreeForCard(
     }
     throw outfitError;
   }
+}
+
+/**
+ * Acquires exclusive cleanup ownership before unbinding or removing a checkout.
+ * @param client - Durable branch authority.
+ * @param cardId - Card owning the registration.
+ * @param branchName - Exact branch being reclaimed.
+ * @param sessionId - Optional commit attribution.
+ * @returns Exact cleanup token retained until all local effects finish.
+ */
+async function claimReclamation(client: CardsClient, cardId: string, branchName: string, sessionId?: string) {
+  const branch = (await client.getBranches(cardId)).branches.find((entry) => entry.name === branchName);
+  if (!branch || branch.activeExecutionOwner !== undefined)
+    throw new Error(`Worktree is owned or unregistered: ${branchName}`);
+  const owner = `cleanup:${randomUUID()}`;
+  const claim = await client.updateBranchOwner(
+    cardId,
+    branchName,
+    {
+      expectedRevision: branch.revision,
+      expectedOwner: { kind: 'none' },
+      replacementOwner: owner
+    },
+    sessionId ? { sessionId } : undefined
+  );
+  if (claim.outcome !== 'applied' || !claim.revision) throw new Error(`Worktree reclamation conflicted: ${branchName}`);
+  return { expectedRevision: claim.revision, expectedCleanupOwner: owner, sessionId };
 }
 
 export interface ReleaseWorktreeForCardOptions {
@@ -589,16 +592,9 @@ export interface ReleaseWorktreeForCardOptions {
  * {@link removeWorktree} — so it is usable on externally-located worktrees a
  * caller wants to un-bind but keep on disk.
  *
- * Steps:
- * 1. Derive the branch name via `git rev-parse --abbrev-ref HEAD`. On detached
- *    HEAD (`"HEAD"`) or a git error, log a warning and skip the branch
- *    unregister — there is no branch record we can confidently remove.
- * 2. `client.removeBranch(...)`, wrapped in {@link BranchUnregisterError} on
- *    failure so callers can apply the fail-open stance to the unregister phase.
- * 3. Restore `core.hooksPath` from `.cards/CARD_ORIGINAL_HOOK_PATH`. If the
- *    snapshot is missing (hand-made worktree, partial outfit), skip with a
- *    warning rather than fail.
- * 4. Clear `.cards/CARD_ID`.
+ * An exact cleanup claim excludes new execution owners while hooks and the
+ * binding marker are restored. The registration is removed only after those
+ * effects succeed; any failure retains the claim for explicit recovery.
  *
  * @param client - CardsClient used to unregister the branch record.
  * @param worktreeDir - Absolute path to the worktree directory (must still exist).
@@ -612,36 +608,8 @@ export async function releaseWorktreeForCard(
 ): Promise<void> {
   const { cardId, sessionId } = options;
 
-  // Step 1 — Derive the branch name. Skip-with-warning on detached HEAD or a
-  // git error, matching the existing worktree-remove stance.
-  let branchName: string | undefined;
-  try {
-    branchName = await resolveWorktreeBranchName(worktreeDir);
-    if (branchName === 'HEAD' || branchName.length === 0) {
-      stderrLogger.warn(
-        'releaseWorktreeForCard: worktree HEAD is detached; branch record could not be resolved, skipping branch unregister',
-        { cardId, worktreeDir }
-      );
-      branchName = undefined;
-    }
-  } catch (gitError) {
-    stderrLogger.warn('releaseWorktreeForCard: failed to resolve worktree branch name; skipping branch unregister', {
-      cardId,
-      worktreeDir,
-      error: gitError instanceof Error ? gitError.message : String(gitError)
-    });
-    branchName = undefined;
-  }
-
-  // Step 2 — Unregister the branch record. Wrap in a distinct typed error so
-  // callers branch on the unregister phase explicitly.
-  if (branchName !== undefined) {
-    try {
-      await client.removeBranch(cardId, branchName, { sessionId });
-    } catch (error) {
-      throw new BranchUnregisterError(error);
-    }
-  }
+  const branchName = await resolveWorktreeBranchName(worktreeDir);
+  const claim = await claimReclamation(client, cardId, branchName, sessionId);
 
   // Step 3 — Restore the worktree's original core.hooksPath from the snapshot.
   // Skip-with-warning if the snapshot is missing (hand-made worktree or a
@@ -668,6 +636,12 @@ export async function releaseWorktreeForCard(
 
   // Step 4 — Clear the CARD_ID marker.
   await clearCardBoundFile(worktreeDir);
+  try {
+    const removal = await client.removeBranch(cardId, branchName, claim);
+    if (removal.outcome !== 'removed') throw new Error(`Cleanup claim changed for ${branchName}`);
+  } catch (error) {
+    throw new BranchUnregisterError(error);
+  }
 }
 
 export interface RemoveWorktreeForCardOptions {
@@ -686,17 +660,9 @@ export interface RemoveWorktreeForCardOptions {
 /**
  * Removes a card-bound worktree and unregisters its branch from the Cards API.
  *
- * Composes {@link releaseWorktreeForCard} with the pure {@link removeWorktree}
- * git primitive. Release runs FIRST — it reads the worktree's HEAD and the
- * `CARD_ORIGINAL_HOOK_PATH` snapshot, both of which require the worktree to
- * still exist on disk — then the worktree is torn down.
- *
- * Teardown still runs even when release throws: a release failure (e.g. a
- * {@link BranchUnregisterError} from a failed removeBranch) leaves only a
- * recoverable orphaned record, so the disk teardown proceeds regardless and the
- * release error is rethrown afterward. A {@link removeWorktree} failure (the
- * teardown phase) propagates untouched so callers can apply their teardown
- * stance to it.
+ * Holds an exact durable cleanup claim throughout disk teardown, then removes
+ * that registration. Missing authority, active ownership, or contention refuses
+ * deletion. A teardown failure leaves the cleanup claim intact for recovery.
  *
  * @param client - CardsClient used to unregister the branch record.
  * @param worktreePath - Absolute path to the worktree directory.
@@ -710,21 +676,13 @@ export async function removeWorktreeForCard(
 ): Promise<void> {
   const { cardId, sessionId } = options;
 
-  // Release first (needs the worktree on disk), capturing any failure so disk
-  // teardown still runs. removeWorktree always executes; the release failure is
-  // rethrown only after teardown completes.
-  let releaseError: unknown;
-  try {
-    await releaseWorktreeForCard(client, worktreePath, { cardId, sessionId });
-  } catch (error) {
-    releaseError = error;
-  }
-
-  // Teardown phase: any failure here propagates untouched — it is the
-  // worktree-removal failure the callers' teardown stance handles.
+  const branchName = await resolveWorktreeBranchName(worktreePath);
+  const claim = await claimReclamation(client, cardId, branchName, sessionId);
   await removeWorktree(worktreePath);
-
-  if (releaseError !== undefined) {
-    throw releaseError;
+  try {
+    const removal = await client.removeBranch(cardId, branchName, claim);
+    if (removal.outcome !== 'removed') throw new Error(`Cleanup claim changed for ${branchName}`);
+  } catch (error) {
+    throw new BranchUnregisterError(error);
   }
 }

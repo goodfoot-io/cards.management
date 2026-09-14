@@ -115,6 +115,8 @@ beforeEach(async () => {
 
   // Default: no existing branches → createWorktree is called
   globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+    if (opts?.method === 'PATCH')
+      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
         new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
@@ -158,6 +160,7 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
+    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -193,6 +196,8 @@ function createMockChild(overrides?: Partial<ChildProcess>): ChildProcess {
 
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
+    executionId: 'execution-test',
+    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Interview',
     environment: 'default',
@@ -356,6 +361,8 @@ describe('Default Actions', () => {
       });
 
       globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+        if (opts?.method === 'PATCH')
+          return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
         if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
           return Promise.resolve(
             new Response(
@@ -511,6 +518,8 @@ describe('Default Actions', () => {
 
       function configureBranchesResponse(branches: BranchInfo[]): void {
         globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+          if (opts?.method === 'PATCH')
+            return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
           if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
             return Promise.resolve(
               new Response(JSON.stringify({ branches, commits: [], defaultBranch: 'main' }), { status: 200 })
@@ -677,14 +686,24 @@ describe('Default Actions', () => {
         });
 
         globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
+          if (opts?.method === 'PATCH')
+            return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
           if (typeof url === 'string' && url.includes('/branches')) {
             if (!opts?.method || opts.method === 'GET') {
               return Promise.resolve(
-                new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), {
-                  status: 200
-                })
+                new Response(
+                  JSON.stringify({
+                    branches: [{ name: 'cards/card-123/1', revision: 'cleanup-ready' }],
+                    commits: [],
+                    defaultBranch: 'main'
+                  }),
+                  {
+                    status: 200
+                  }
+                )
               );
             }
+            if (opts?.method === 'DELETE') return Promise.resolve(new Response(JSON.stringify({ outcome: 'removed' })));
             if (opts?.method === 'POST') {
               return Promise.resolve(new Response(JSON.stringify({}), { status: 201 }));
             }

@@ -14,6 +14,7 @@
  * @module types/branch
  */
 
+import { z } from 'zod';
 import type { CommitDetails } from './timeline.js';
 
 /**
@@ -49,6 +50,8 @@ export const COMMITS_DIR = 'commits';
 export interface WorkspaceBranch {
   /** Opaque ownership token rotated by every successful registration write. */
   revision: string;
+  /** Execution that exclusively owns this checkout. Absence means reusable. */
+  activeExecutionOwner?: string;
   /**
    * Optional absolute path to worktree directory (machine-specific, may be stale).
    * This path is advisory only and should be validated before use.
@@ -76,6 +79,10 @@ export interface WorkspaceBranch {
  * never persisted.
  */
 export interface BranchInfo {
+  /** Opaque revision required by conditional ownership mutations. */
+  revision: string;
+  /** Execution that exclusively owns this checkout. Absence means reusable. */
+  activeExecutionOwner?: string;
   /**
    * Branch name (may contain slashes, e.g., "feature/auth").
    * This is the Git ref name, not a filesystem path.
@@ -210,6 +217,8 @@ export interface AddBranchResponse {
 export interface RemoveBranchRequest {
   /** Delete only when the persisted registration still owns this token. */
   expectedRevision?: string;
+  /** Exact cleanup claim required to remove a reclamation-owned registration. */
+  expectedCleanupOwner?: string;
 }
 
 /** Successful response from branch removal. */
@@ -217,3 +226,30 @@ export interface RemoveBranchResponse {
   /** `preserved` means a revision mismatch left the current record untouched. */
   outcome: 'removed' | 'preserved';
 }
+
+/** Exact expected ownership state for a conditional mutation. */
+export type BranchOwnerExpectation = { kind: 'none' } | { kind: 'execution'; executionId: string };
+
+/** Request body for PATCH /cards/:id/branches/:branchName/owner. */
+export interface UpdateBranchOwnerRequest {
+  expectedRevision: string;
+  expectedOwner: BranchOwnerExpectation;
+  replacementOwner?: string;
+}
+
+/** A conditional ownership mutation never hides why it did not apply. */
+export interface UpdateBranchOwnerResponse {
+  outcome: 'applied' | 'idempotent' | 'revision_conflict' | 'owner_conflict' | 'missing';
+  revision?: string;
+  activeExecutionOwner?: string;
+}
+
+/** Strict authority mutation boundary shared by HTTP and direct store callers. */
+export const UpdateBranchOwnerRequestSchema = z.strictObject({
+  expectedRevision: z.string().min(1),
+  expectedOwner: z.discriminatedUnion('kind', [
+    z.strictObject({ kind: z.literal('none') }),
+    z.strictObject({ kind: z.literal('execution'), executionId: z.string().min(1) })
+  ]),
+  replacementOwner: z.string().min(1).optional()
+});

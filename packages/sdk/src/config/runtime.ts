@@ -350,12 +350,16 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       const commandEffects = new Map<string, Promise<void>>();
       let runtimeClient: RuntimeClient;
       const loaded = loadRuntimeCredential('agent-handler');
+      if (input.executionId !== loaded.execution.executionId) {
+        throw new Error('Action execution identity does not match its runtime credential');
+      }
       const sendDurable = async <
         T extends
           | 'execution.commandCustody'
           | 'execution.agentTermination'
           | 'execution.interactiveHandoff'
           | 'execution.commandEffectResult'
+          | 'execution.worktreeAssignmentResult'
       >(
         type: T,
         payload: RuntimePayload<T>,
@@ -377,6 +381,14 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       const context: ActionContext = {
         logger,
         cwd: process.cwd(),
+        reportWorktreeAssignment: async (assignment) => {
+          const accepted = await sendDurable(
+            'execution.worktreeAssignmentResult',
+            assignment,
+            `${loaded.execution.executionId}:worktree-assignment`
+          );
+          if (!accepted) throw new Error('Runtime authority did not accept the worktree assignment');
+        },
         onCancel: (callback) => {
           cancelCallback = callback;
         },

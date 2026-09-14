@@ -36,6 +36,17 @@ vi.mock('@cards.management/sdk/worktree', () => ({
   findGitRoots: vi.fn()
 }));
 
+vi.mock('@cards.management/sdk/client/discovery', () => ({
+  createCardsClient: async () => ({
+    getBranches: async () => ({ branches: [{ name: 'cards/card-123/1', revision: 'free' }] }),
+    updateBranchOwner: async () => ({ outcome: 'applied', revision: 'claimed' }),
+    removeBranch: async (_card: string, name: string) => {
+      fsSyncNs.unlinkSync(path.join(tempCardRepo, 'branches', `${encodeURIComponent(name)}.json`));
+      return { outcome: 'removed' };
+    }
+  })
+}));
+
 let tempCardRepo: string;
 
 beforeEach(async () => {
@@ -61,6 +72,8 @@ function createMockLogger(): ActionContext['logger'] {
 
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
+    executionId: 'execution-test',
+    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Launch',
     environment: 'default',

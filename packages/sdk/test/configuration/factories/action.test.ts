@@ -18,6 +18,8 @@ describe('defineAction', () => {
   const mockInput: ActionInput = {
     cardId: 'card-123',
     actionName: 'Test Action',
+    executionId: 'execution-1',
+    worktreeDirective: { kind: 'reuse' },
     environment: 'default',
     executionMode: 'interactive',
     exitWhenDone: false,
@@ -40,6 +42,7 @@ describe('defineAction', () => {
   const mockContext: ActionContext = {
     logger: mockLogger,
     cwd: '/workspace',
+    reportWorktreeAssignment: vi.fn(),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn(),
     onAgentShutdown: vi.fn()
@@ -151,26 +154,6 @@ describe('defineAction', () => {
       expect(command.supportsBackgroundMode).toBeUndefined();
     });
 
-    it('attaches allowConcurrent when provided', () => {
-      const handler = vi.fn();
-      const command = defineAction(
-        {
-          actionName: 'Monitor',
-          allowConcurrent: true
-        },
-        handler
-      );
-
-      expect(command.allowConcurrent).toBe(true);
-    });
-
-    it('leaves allowConcurrent undefined when not provided', () => {
-      const handler = vi.fn();
-      const command = defineAction({ actionName: 'Launch' }, handler);
-
-      expect(command.allowConcurrent).toBeUndefined();
-    });
-
     it('attaches timeout when provided', () => {
       const handler = vi.fn();
       const command = defineAction(
@@ -219,7 +202,6 @@ describe('defineAction', () => {
           description: 'Deploy to production',
           icon: './icons/deploy.svg',
           supportsBackgroundMode: true,
-          allowConcurrent: false,
           timeout: 120000
         },
         handler
@@ -230,7 +212,6 @@ describe('defineAction', () => {
       expect(command.description).toBe('Deploy to production');
       expect(command.icon).toBe('./icons/deploy.svg');
       expect(command.supportsBackgroundMode).toBe(true);
-      expect(command.allowConcurrent).toBe(false);
       expect(command.timeout).toBe(120000);
     });
   });

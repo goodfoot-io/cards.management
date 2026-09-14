@@ -208,6 +208,8 @@ export function makeActionInput(root: string, overrides: Partial<ActionInput> = 
   return {
     cardId: 'main-453',
     actionName: 'Launch',
+    executionId: 'execution-453',
+    worktreeDirective: { kind: 'reuse' },
     environment: 'default',
     executionMode: 'background',
     exitWhenDone: false,

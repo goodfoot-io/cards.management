@@ -307,10 +307,13 @@ export async function spawnAntigravitySession(
     worktreePath: cwd,
     branchName,
     parentBranch,
+    reason,
     settle
   } = await resolveOrCreateWorktree(input, client, baseBranch, context.logger, sessionId);
 
-  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
+  await context.reportWorktreeAssignment({ branch: branchName, worktreePath: cwd, reason });
+
+  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch, reason });
 
   // Worktree outfit/registration is part of launch preparation. Await it
   // before exposing the path to an agent process; a rejected settle removes
