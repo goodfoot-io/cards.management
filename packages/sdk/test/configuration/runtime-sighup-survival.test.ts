@@ -91,6 +91,10 @@ function waitForCondition(check: () => boolean, timeoutMs: number, label?: strin
  * @throws {NodeJS.ErrnoException} When process.kill fails with an unexpected error.
  */
 function killProcessGroup(pid: number, signal: NodeJS.Signals = 'SIGKILL'): void {
+  // The only group ids this suite may signal are ones above 1: -0 is the
+  // runner's own group and -1 is every process it may signal, so a truncated or
+  // recycled id must never reach process.kill.
+  if (!Number.isSafeInteger(pid) || pid <= 1) return;
   try {
     process.kill(-pid, signal);
   } catch (error: unknown) {

@@ -80,6 +80,11 @@ export function createProcessTreeAuthority(): ProcessTreeAuthority {
         ]);
         return result.failed ? 'refused' : 'sent';
       }
+      // -0 is this process's own group and -1 is every process we may signal,
+      // so neither names the tree this identity was captured for.
+      if (!Number.isSafeInteger(identity.groupId) || identity.groupId <= 1) {
+        return 'refused';
+      }
       try {
         process.kill(-identity.groupId, signal);
         return 'sent';
