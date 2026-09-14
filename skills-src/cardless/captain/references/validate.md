@@ -10,7 +10,7 @@ Classify dirty changes through `bug-dirty-tree.md`. Commit only coherent task-ow
 
 ## 2. Validate
 
-Run repository lint/typecheck and the package suites touched by the baseline diff, plus current-plan requirements. The full integration gate is in `deliver.md`. Resolve every warning and failure. For uncertain ownership, use `implementation.md`'s `<pre-existing-diagnosis>`; a check blocked by infrastructure blocks this route.
+Run repository lint/typecheck and the package suites touched by the baseline diff, plus current-plan requirements. Resolve every warning and failure. For uncertain ownership, use `implementation.md`'s `<pre-existing-diagnosis>`; a check blocked by infrastructure blocks this route.
 
 If the saved phase was bug reproduction, preserve its reproduction-first invariant: a deliberately red reproducer returns to `bug.md`'s resolve step rather than being treated as completed implementation.
 

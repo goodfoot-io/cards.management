@@ -98,7 +98,7 @@ Lint and typecheck per the project's <%= it.conventionsFile %> validation conven
 
 <completion-gate>
 
-After all logical units are complete, run workspace-wide lint and typecheck plus the test suite of every package the `implement/$CARD_ID/baseline..HEAD` diff touches (or the plan's validation commands, when following a plan). The full validation suite runs only in `merge.md`. Every command must pass before proceeding to Step 3.
+After all logical units are complete, run workspace-wide lint and typecheck plus the test suite of every package the `implement/$CARD_ID/baseline..HEAD` diff touches (or the plan's validation commands, when following a plan). Every command must pass before proceeding to Step 3.
 
 - **All pass** — proceed to Step 3.
 - **Failure originates in files the card's diff touched** — fix and re-run.

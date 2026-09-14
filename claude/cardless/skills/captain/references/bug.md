@@ -156,7 +156,7 @@ Based on the corrected test's result:
 
 ## 3. Validate
 
-Run workspace lint and typecheck, plus each package suite the fix touches. The full validation suite runs only in `deliver.md`.
+Run workspace lint and typecheck, plus each package suite the fix touches.
 
 <validation-gate>
 **Gate requirement:** ALL validation commands must pass.
@@ -181,7 +181,7 @@ Based on the result:
 
 ## 4. Finalize
 
-Record the fix SHA, reproduction evidence and scoped validation results. Preserve baseline and reproduction refs for review. Read `./implementation-evaluation.md`, then `./deliver.md` for full validation and PR delivery. A green reproducer is not a completed task until the rest of the workflow succeeds.
+Record the fix SHA, reproduction evidence and scoped validation results. Preserve baseline and reproduction refs for review. Read `./implementation-evaluation.md`, then `./deliver.md` for validation and PR delivery. A green reproducer is not a completed task until the rest of the workflow succeeds.
 
 </instructions>
 

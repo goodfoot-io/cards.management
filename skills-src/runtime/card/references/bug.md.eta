@@ -170,7 +170,7 @@ Based on the corrected test's result:
 
 ## 3. Validate
 
-Run workspace lint and typecheck, plus each package suite the fix touches. The full validation suite runs only in `merge.md`.
+Run workspace lint and typecheck, plus each package suite the fix touches.
 
 <validation-gate>
 **Gate requirement:** ALL validation commands must pass.

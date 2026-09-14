@@ -85,7 +85,7 @@ Lint and typecheck per the project's CLAUDE.md validation conventions. Re-run on
 
 <completion-gate>
 
-After all logical units are complete, run workspace-wide lint and typecheck plus the test suite of every package the `implement/$TASK_KEY/baseline..HEAD` diff touches (or the plan's validation commands, when following a plan). The full validation suite runs only in `deliver.md`. Every command must pass before proceeding to Step 3.
+After all logical units are complete, run workspace-wide lint and typecheck plus the test suite of every package the `implement/$TASK_KEY/baseline..HEAD` diff touches (or the plan's validation commands, when following a plan). Every command must pass before proceeding to Step 3.
 
 - **All pass** — proceed to Step 3.
 - **Failure originates in files the task's diff touched** — fix and re-run.

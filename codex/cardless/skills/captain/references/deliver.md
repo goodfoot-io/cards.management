@@ -10,9 +10,9 @@ Check whether this task branch is already published. Before its first push, reba
 
 Count commits and inspect the complete PR diff against the selected base, including any supplied commits preceding this session's baseline. If no requested change remains because it is already present on the base, verify the acceptance criteria and report that evidence. Do not fabricate an empty PR or claim a PR was opened; record a no-change outcome separately from successful PR delivery.
 
-## 2. Full Integration Gate
+## 2. Validation Gate
 
-Run the repository's required full validation suite: linting, type checking, tests and any declared integration/build gates. This is the workflow's full-suite gate; earlier gates were scoped. Commands must actually execute and pass. Resolve every warning and failure, including prior failures. An infrastructure error is blocking, not a pass.
+Run the validation gates the project's AGENTS.md declares. Commands must actually execute and pass. Resolve every warning and failure, including prior failures. An infrastructure error is blocking, not a pass.
 
 Fix and rerun the failed checks; when fixes change dependencies or cross-package behavior, repeat the affected integration checks. Bound repeated attempts that produce no new evidence at three; save exact output and route to `blocked.md` if no safe remedy remains. No branch publication or PR creation follows a failed required check.
 

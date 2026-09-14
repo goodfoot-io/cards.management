@@ -39,7 +39,7 @@ Each finding names the mechanism to remove — the wrong rule, axis, or key — 
 
 ## 4. Apply Fixes
 
-Fix every finding at the mechanism, not the flagged instance — a class finding closes only when the mechanism removes every instance, and every witness configuration lands as a green in-suite control. Keep changes minimal and focused on the findings. If a developer team is live, route every finding to its package's worker as a task (a fresh worker for a package with none) — do not fix inline. Merge each green report per `./developer-wave.md`'s `<integration-gate>`, then proceed to Step 5 (lint/typecheck/scoped tests, not `./developer-wave.md`'s `<integration-gate>`; the full validation suite runs only in `deliver.md`, after rebase). Otherwise fix inline; with many findings, dispatch a developer team per `./developer-wave.md`.
+Fix every finding at the mechanism, not the flagged instance — a class finding closes only when the mechanism removes every instance, and every witness configuration lands as a green in-suite control. Keep changes minimal and focused on the findings. If a developer team is live, route every finding to its package's worker as a task (a fresh worker for a package with none) — do not fix inline. Merge each green report per `./developer-wave.md`'s `<integration-gate>`, then proceed to Step 5 (lint/typecheck/scoped tests, not `./developer-wave.md`'s `<integration-gate>`). Otherwise fix inline; with many findings, dispatch a developer team per `./developer-wave.md`.
 
 ## 5. Validate and Commit
 

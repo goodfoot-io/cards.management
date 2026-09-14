@@ -116,7 +116,7 @@ When revision rounds stop producing information, usually by the third, split or 
 
 Merge each green report as it arrives, one branch at a time, from the lead checkout. Require clean status and verify the reported SHA is the recorded branch tip. Inspect its diff for ownership, contract compliance and the claimed gate evidence. Use a fast-forward when ancestry allows it; otherwise perform a regular local merge. A failed merge requires diagnosis, not an unconditional alternate command.
 
-Resolve conflicts before the next integration or task dispatch. A wave is all tasks since the last step tag. Workers with nothing queued remain idle while other reports arrive. Once every wave branch is integrated, review cross-package consistency, run workspace lint/typecheck and every touched package suite, reconcile any affected repository-maintained anchors, and commit integration fixes under the repository conventions. Full validation remains in `deliver.md`.
+Resolve conflicts before the next integration or task dispatch. A wave is all tasks since the last step tag. Workers with nothing queued remain idle while other reports arrive. Once every wave branch is integrated, review cross-package consistency, run workspace lint/typecheck and every touched package suite, reconcile any affected repository-maintained anchors, and commit integration fixes under the repository conventions.
 
 - All pass: tag `implement/[TASK_KEY]/step-N`, record the exact tag/SHA/gate evidence, then dispatch the next wave. When work is exhausted, return to the caller with workers retained for review fixes.
 - Implementation or contract error: send `REVISE:` to the owning worker. The lead may make a small integration fix when a handoff costs more than the correction, recording why.

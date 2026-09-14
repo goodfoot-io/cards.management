@@ -43,7 +43,7 @@ COMMITMSG
 
 ## 2. Pre-Review Validation
 
-Run the workspace's typecheck and lint, plus each package suite the diff `implement/$CARD_ID/baseline..HEAD` touches. If a plan file in `plans/` declares custom validation commands, run those instead. The full validation suite runs only in `merge.md`.
+Run the workspace's typecheck and lint, plus each package suite the diff `implement/$CARD_ID/baseline..HEAD` touches. If a plan file in `plans/` declares custom validation commands, run those instead.
 
 - **All validations pass**: Proceed to Step 3.
 - **Failure not obviously the active card's work** (anything ambiguous, unfamiliar, or that "feels" pre-existing): Diagnose it per `./implementation.md`'s `<pre-existing-diagnosis>`.
