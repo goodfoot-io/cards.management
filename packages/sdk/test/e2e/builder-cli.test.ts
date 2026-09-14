@@ -642,6 +642,27 @@ describe('builder CLI: compiled handler execution', () => {
   });
 
   /**
+   * Builds the child environment for a compiled handler.
+   *
+   * The handler must see exactly the Cards environment the test declares. A
+   * developer running this suite from inside a Cards action inherits that
+   * session's `CARDS_*` variables, and an inherited
+   * `CARDS_RUNTIME_CREDENTIAL_FILE` in particular hands the handler the very
+   * credentials these cases exist to withhold — the refusal assertion then
+   * passes vacuously against a handler that admitted cleanly.
+   *
+   * @param env - Cards environment variables declared for the handler.
+   * @returns Child environment with ambient Cards variables removed.
+   */
+  function handlerEnv(env: Record<string, string>): NodeJS.ProcessEnv {
+    const child: NodeJS.ProcessEnv = { ...process.env };
+    for (const key of Object.keys(child)) {
+      if (key.startsWith('CARDS_')) delete child[key];
+    }
+    return { ...child, ...env };
+  }
+
+  /**
    * Helper to execute a compiled handler.
    *
    * @param handlerPath - Absolute path to the compiled handler executable.
@@ -654,7 +675,7 @@ describe('builder CLI: compiled handler execution', () => {
   ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
     try {
       const { stdout, stderr } = await exec(`node "${handlerPath}"`, {
-        env: { ...process.env, ...env },
+        env: handlerEnv(env),
         timeout: 10000
       });
       return { exitCode: 0, stdout, stderr };
