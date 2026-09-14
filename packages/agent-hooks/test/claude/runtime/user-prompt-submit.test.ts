@@ -103,3 +103,21 @@ describe('a session whose transcript has not been written yet', () => {
     expect(second![0].requestId).not.toBe(first![0].requestId);
   });
 });
+
+describe('a transcript path that cannot be read for any reason other than absence', () => {
+  it('stops the turn rather than admitting against a defaulted position', async () => {
+    // A path whose parent component is a regular file fails with ENOTDIR —
+    // not "not written yet", but a malformed path. Tolerating it would pin
+    // every turn in the session to position 0 and silently mask the fault.
+    const blocker = join(scratch, `blocker-${randomUUID()}`);
+    writeFileSync(blocker, 'not a directory\n');
+    transcriptPath = join(blocker, 'transcript.jsonl');
+
+    const result = await buildHook()(turnInput(), context);
+
+    expect(admission).not.toHaveBeenCalled();
+    const stdout = result!.stdout as { continue?: boolean; stopReason?: string };
+    expect(stdout.continue).toBe(false);
+    expect(stdout.stopReason).toMatch(/^Cards work admission failed: ENOTDIR/);
+  });
+});

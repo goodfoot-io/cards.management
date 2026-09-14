@@ -19,7 +19,16 @@ export function createClaudeTurnHandler(
 ): Parameters<typeof userPromptSubmitHook>[1] {
   return async (input) => {
     try {
-      const position = statSync(input.transcript_path).size;
+      // The host writes the transcript lazily, so a session's first turn finds
+      // no file at all: absent means "no prior turns", not a failed admission.
+      // Only that one condition is tolerated; every other stat failure still
+      // stops the turn.
+      let position = 0;
+      try {
+        position = statSync(input.transcript_path).size;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
       const prompt = createHash('sha256').update(input.prompt).digest('hex');
       const hostBoundaryId = `claude:turn:${input.session_id}:${position}:${prompt}`;
       await authorityFactory().admit({ cause: 'turn', messageId: hostBoundaryId, requestId: hostBoundaryId });
