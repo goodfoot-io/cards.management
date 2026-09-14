@@ -56,6 +56,26 @@ const EXECUTABLE = 'ELECTRON_RUN_AS_NODE=1 "$(cat $HOME/.cards/VSCODE_NODE 2>/de
 const TEXT_LOADERS = ['--loader', '.md=text', '--loader', '.txt=text'];
 
 /**
+ * Ceiling on one target's CLI build, in milliseconds.
+ *
+ * The CLI compiles through esbuild's long-lived service process, whose requests
+ * carry no timeout of their own, so a service that stops answering parks the CLI
+ * on an unsettled promise with no timer to break the tie. Nothing above this
+ * call bounds the wait either: `payload-build.js` `execFileSync`s this script,
+ * `runTest.ts` and `yarn test` await that, and `validate.mjs`'s `runStep`
+ * resolves only on `close`. An unresponsive target therefore used to freeze the
+ * whole pipeline at zero CPU rather than fail it — observed once, when the CLI
+ * emitted its completion line for `claude-core` and then never exited, stalling
+ * a `yarn validate` run for ten minutes with `build.mjs`, the CLI, and the
+ * esbuild service all idle.
+ *
+ * Matches the ceiling `test/setup/build-once.ts` already puts on this same
+ * script for all nine targets at once, so it is strictly looser than a bound the
+ * suite already accepts and cannot fail a target that path would have passed.
+ */
+const TARGET_TIMEOUT_MS = 120_000;
+
+/**
  * The six build targets. `agent` selects the CLI's `--agent claude-code|codex`
  * flag; `clean` lists the output subdirectories to remove before compiling
  * (relative to the target's output base); `logEnvVar` is the Claude-only
@@ -404,10 +424,15 @@ function buildTarget(target) {
   // note above.
   const result = spawnSync(process.execPath, [agentHooksCli, ...args], {
     cwd: packageRoot,
-    stdio: 'inherit'
+    stdio: 'inherit',
+    timeout: TARGET_TIMEOUT_MS
   });
   if (result.status !== 0) {
-    throw new Error(`target ${target.name} failed with exit code ${result.status}`);
+    throw new Error(
+      result.signal
+        ? `target ${target.name} did not exit within ${TARGET_TIMEOUT_MS}ms and was killed by ${result.signal}`
+        : `target ${target.name} failed with exit code ${result.status}`
+    );
   }
 
   // The Codex CLI emits strict-ESM bundles with no `require` binding, so any
