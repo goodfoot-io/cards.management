@@ -224,7 +224,6 @@ export interface OutfitAttributionOutcome {
  * @param client - CardsClient used to register the branch record.
  * @param worktreeDir - Absolute path to the (already-created) worktree root.
  * @param options - Card id, parent branch, session, transcript, and compiled hook paths.
- * @param registrationReady - Materialization barrier before the registration becomes reusable.
  * @returns An {@link OutfitAttributionOutcome} describing whether attribution
  *   was spawned or skipped (and why), so callers like `cards <id> attach` can
  *   fail closed when the branch was registered but the card was not activated.
@@ -232,8 +231,27 @@ export interface OutfitAttributionOutcome {
 export async function outfitWorktreeForCard(
   client: CardsClient,
   worktreeDir: string,
+  options: OutfitWorktreeForCardOptions
+): Promise<OutfitAttributionOutcome> {
+  return outfitWithPublicationBarrier(client, worktreeDir, options, Promise.resolve(), { attempted: false });
+}
+
+/**
+ * Outfits a checkout while recording whether registration might have published it.
+ * @param client - Registration authority.
+ * @param worktreeDir - Checkout being prepared.
+ * @param options - Card binding and attribution settings.
+ * @param registrationReady - Materialization completion barrier.
+ * @param publication - Invocation-local publication evidence retained on failures.
+ * @param publication.attempted - True before dispatching registration, including ambiguous response loss.
+ * @returns The completed binding and attribution result.
+ */
+async function outfitWithPublicationBarrier(
+  client: CardsClient,
+  worktreeDir: string,
   options: OutfitWorktreeForCardOptions,
-  registrationReady: Promise<unknown> = Promise.resolve()
+  registrationReady: Promise<unknown>,
+  publication: { attempted: boolean }
 ): Promise<OutfitAttributionOutcome> {
   const { cardId, parentBranch, sessionId, transcriptPath, runtime, compiledScriptPaths } = options;
 
@@ -334,6 +352,7 @@ export async function outfitWorktreeForCard(
     await perf.measure('outfit:writeCardsParentConfig', () =>
       writeCardsParentConfig(worktreeDir, branchName, parentBranch)
     );
+    publication.attempted = true;
     const registration = await perf.measure('outfit:addBranch', () =>
       client.addBranch(
         cardId,
@@ -493,8 +512,9 @@ export async function createWorktreeForCard(
   });
   void registrationReady.catch(() => undefined);
 
+  const publication = { attempted: false };
   try {
-    const outfit = await outfitWorktreeForCard(
+    const outfit = await outfitWithPublicationBarrier(
       client,
       result.path,
       {
@@ -504,14 +524,15 @@ export async function createWorktreeForCard(
         compiledScriptPaths,
         registrationIntent
       },
-      registrationReady
+      registrationReady,
+      publication
     );
     return { path: result.path, settle: result.settle, registrationRevision: outfit.registrationRevision };
   } catch (outfitError) {
-    // A create-only registration conflict means a different invocation owns
-    // this slot. Never undo that registration's Git resources.
-    if (outfitError instanceof Error && 'code' in outfitError && outfitError.code === 'BRANCH_REGISTRATION_CONFLICT')
-      throw outfitError;
+    // Once registration was dispatched, even a rejected promise may hide a
+    // committed registration and a sibling claim. Never infer absence from a
+    // failed response or race a request still in flight with local rollback.
+    if (publication.attempted) throw outfitError;
     // Atomicity: the worktree dir + git branch now exist on disk but outfit
     // failed partway (e.g. addBranch rejected), so no fully-registered worktree
     // exists. First quiesce createWorktree's asynchronous materialization: its

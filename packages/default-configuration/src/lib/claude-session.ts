@@ -336,12 +336,9 @@ function isCardWriteConflict(error: unknown): boolean {
  * still claim). Repeated contention accumulates those slots, so the allocation
  * loop releases the one it just registered before advancing.
  *
- * Fail-closed ordering mirrors {@link createWorktreeForCard}'s rollback: the
- * store unregisters the exact revision this invocation created *first*, and
- * the Git worktree and branch are removed only when that conditional
- * unregister reported `removed`. A `preserved` outcome — or any unregister
- * failure — means a newer registration may own this path, so its Git resources
- * are left intact rather than deleted beneath that owner.
+ * Claims the creator revision for exclusive cleanup before removing Git
+ * resources. Conditional unregister happens last. Contention preserves the
+ * checkout, and failed teardown retains the cleanup claim for recovery.
  *
  * @param client - Cards API client used for the conditional unregister.
  * @param cardId - Card the slot belongs to.
@@ -762,10 +759,9 @@ async function killProcessesInDirectory(dirPath: string, logger: ActionContext['
 }
 
 /**
- * Runs a single cleanup step, logging a warning on failure rather than
- * aborting the sweep. Each step (worktree removal, branch deletion, API
- * record removal) is independent — a failure in one must not prevent the
- * others from running.
+ * Runs a cleanup step and propagates failures to the per-branch boundary.
+ * Later destructive steps on that branch stop, retaining the cleanup claim;
+ * the sweep can still process other branches.
  *
  * @param step - Async operation to attempt.
  * @param label - Human-readable label logged on failure.

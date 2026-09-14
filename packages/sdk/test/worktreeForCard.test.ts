@@ -433,7 +433,7 @@ describe('createWorktreeForCard', () => {
     await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow('API failure');
   });
 
-  it('rolls back the worktree and rethrows the original error when addBranch rejects', async () => {
+  it('preserves the worktree and rethrows an ambiguous registration failure', async () => {
     // Give createWorktree a settle that resolves so rollback can quiesce before
     // removing the worktree.
     vi.mocked(createWorktree).mockResolvedValue({
@@ -450,11 +450,10 @@ describe('createWorktreeForCard', () => {
     await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow('API failure');
 
     // The just-created worktree is rolled back so no orphan remains on disk.
-    expect(removeWorktree).toHaveBeenCalledOnce();
-    expect(removeWorktree).toHaveBeenCalledWith(EARLY_PATH);
+    expect(removeWorktree).not.toHaveBeenCalled();
   });
 
-  it('waits for deferred settlement before teardown when addBranch rejects', async () => {
+  it('waits for deferred settlement before registration and preserves an ambiguous rejection', async () => {
     let resolveSettle!: () => void;
     const settle = new Promise<void>((resolve) => {
       resolveSettle = resolve;
@@ -475,7 +474,7 @@ describe('createWorktreeForCard', () => {
 
     resolveSettle();
     await expect(creation).rejects.toThrow('API failure');
-    expect(removeWorktree).toHaveBeenCalledOnce();
+    expect(removeWorktree).not.toHaveBeenCalled();
   });
 
   it('waits for deferred settlement before teardown when the outfit disk phase fails', async () => {
@@ -526,22 +525,20 @@ describe('createWorktreeForCard', () => {
     }
   });
 
-  it('reports a combined error when rollback also fails after addBranch rejects', async () => {
-    vi.mocked(createWorktree).mockResolvedValue({
-      path: EARLY_PATH,
-      settle: Promise.resolve(undefined) as unknown as EarlyWorktreeResult['settle']
-    });
-    vi.mocked(removeWorktree).mockRejectedValue(new Error('rollback boom'));
-
+  it('preserves a sibling checkout when registration commits but its response is lost', async () => {
+    let activeOwner: string | undefined;
+    const responseLost = new Error('response lost after commit');
     const client = makeClient({
       addBranch: async () => {
-        throw new Error('API failure');
+        activeOwner = 'sibling-execution';
+        throw responseLost;
       }
     });
-
-    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toThrow(
-      /outfit=API failure; worktree=.* may remain: rollback boom/
-    );
+    await expect(createWorktreeForCard(client, 'cards/main-95/1', BASE_OPTIONS)).rejects.toBe(responseLost);
+    expect(activeOwner).toBe('sibling-execution');
+    expect(removeWorktree).not.toHaveBeenCalled();
+    expect(cleanupFailedWorktree).not.toHaveBeenCalled();
+    expect(client.removeBranchCalls).toEqual([]);
   });
 
   it('aggregates settlement and cleanup failures while retaining the outfit failure as cause', async () => {
