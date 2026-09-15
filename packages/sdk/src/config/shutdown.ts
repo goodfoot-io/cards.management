@@ -6,7 +6,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '../cards-config.js';
 
@@ -33,6 +33,34 @@ function pendingShutdownPath(sessionId: string): string {
   );
 }
 
+function journalPath(): string {
+  return join(resolveGlobalCardsConfigDir(), 'card-repo-commits', 'shutdown-requests.ndjson');
+}
+
+/**
+ * Append one lifecycle record to the durable shutdown-request journal.
+ *
+ * The marker file itself is intentionally consumed by a later Stop hook, so
+ * presence/absence at inspection time is not evidence. The journal is what
+ * makes the marker's lifecycle — created, cleared, and by which request
+ * identity — traceable after the fact.
+ *
+ * @param event - Lifecycle transition being recorded.
+ * @param sessionId - Session the pending request belongs to.
+ * @param request - The correlated request identity and parameters.
+ */
+function appendShutdownJournal(event: 'created' | 'cleared', sessionId: string, request: PendingShutdownRequest): void {
+  const record = {
+    at: new Date().toISOString(),
+    event,
+    sessionId,
+    requestId: request.requestId,
+    messageId: request.messageId
+  };
+  mkdirSync(join(resolveGlobalCardsConfigDir(), 'card-repo-commits'), { recursive: true, mode: 0o700 });
+  appendFileSync(journalPath(), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
 /**
  * Atomically persist the request that a later Stop hook must acknowledge.
  *
@@ -45,6 +73,7 @@ export function writePendingShutdownRequest(sessionId: string, request: PendingS
   const temporary = `${destination}.${process.pid}.${randomUUID()}.tmp`;
   writeFileSync(temporary, `${JSON.stringify(request)}\n`, { encoding: 'utf8', mode: 0o600 });
   renameSync(temporary, destination);
+  appendShutdownJournal('created', sessionId, request);
 }
 
 /**
@@ -83,5 +112,8 @@ export function readPendingShutdownRequest(sessionId: string): PendingShutdownRe
  */
 export function clearPendingShutdownRequest(sessionId: string, requestId: string): void {
   const pending = readPendingShutdownRequest(sessionId);
-  if (pending?.requestId === requestId) rmSync(pendingShutdownPath(sessionId), { force: true });
+  if (pending?.requestId === requestId) {
+    rmSync(pendingShutdownPath(sessionId), { force: true });
+    appendShutdownJournal('cleared', sessionId, pending);
+  }
 }

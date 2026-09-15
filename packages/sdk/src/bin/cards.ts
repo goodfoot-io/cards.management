@@ -1449,7 +1449,12 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
   });
   try {
     const connected = await client.connect();
-    if (connected.status !== 'connected') throw new Error(`runtime connection ${connected.status}`);
+    if (connected.status !== 'connected') {
+      // The client already computed the hop-level diagnostic; a retry decision
+      // depends on it, so it must survive into the message the agent sees.
+      const diagnostic = connected.status === 'unavailable' ? connected.detail : connected.reason;
+      throw new Error(`runtime connection ${connected.status}: ${diagnostic}`);
+    }
     const result = await client.send({
       type: 'execution.shutdownRequest',
       payload: { outcome, ...(message !== undefined ? { message } : {}) },

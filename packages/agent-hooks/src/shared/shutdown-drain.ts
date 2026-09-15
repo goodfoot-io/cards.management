@@ -64,7 +64,12 @@ export async function deliverShutdownReadiness(
   });
   try {
     const connected = await client.connect();
-    if (connected.status !== 'connected') throw new Error(`runtime connection ${connected.status}`);
+    if (connected.status !== 'connected') {
+      // The client already computed the hop-level diagnostic; the hook log is
+      // the only trace a failed readiness delivery leaves, so it must survive.
+      const diagnostic = connected.status === 'unavailable' ? connected.detail : connected.reason;
+      throw new Error(`runtime connection ${connected.status}: ${diagnostic}`);
+    }
     const readiness = await client.send({
       type: 'execution.shutdownReadiness',
       payload: {
