@@ -27,6 +27,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { writeRuntimeCredentialFile } from '@cards.management/sdk/client/runtime';
+import type { ChildRuntimeCredentialRole } from '@cards.management/sdk/protocol';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const packageRoot = resolve(fileURLToPath(import.meta.url), '..', '..', '..');
@@ -79,7 +80,7 @@ function mintRuntimeCredentialFile(root: string): string {
   mkdirSync(credentialDir, { mode: 0o700 });
   chmodSync(credentialDir, 0o700);
   const credentialPath = join(credentialDir, 'credential.json');
-  const credential = (role: string) => ({
+  const credential = (role: ChildRuntimeCredentialRole) => ({
     credentialId: `${role}-credential`,
     requestId: REQUEST_ID,
     executionId: EXECUTION_ID,
@@ -94,7 +95,9 @@ function mintRuntimeCredentialFile(root: string): string {
     scope: { repositoryId: 'github.com/org/repo', workspacePath: join(root, 'workspace'), cardId: 'main-453' },
     ownership: { ownerId: 'fake-runtime-server', generation: 1 },
     requestId: REQUEST_ID,
-    credentials: ['runtime-wrapper', 'agent-handler', 'agent-hook', 'watcher', 'cli'].map(credential)
+    credentials: (
+      ['runtime-wrapper', 'agent-handler', 'agent-hook', 'watcher', 'cli'] as ChildRuntimeCredentialRole[]
+    ).map(credential)
   });
   return credentialPath;
 }

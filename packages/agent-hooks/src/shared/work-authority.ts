@@ -119,11 +119,17 @@ export function createHookWorkAuthority(): WorkAuthority {
 /**
  * Constructs the authenticated runtime adapter used by platform handlers.
  *
+ * The adapter owns the connection lifecycle of the client it is given: each
+ * operation opens the runtime connection it needs and closes it before
+ * resolving. Short-lived hook processes wire a fresh client into a fresh
+ * adapter per invocation, so a connection left open after the operation would
+ * hold the process's event loop open forever — the hook would finish its work
+ * and then hang as an orphan until killed (card main-707).
+ *
  * @param _input - Protected credential, execution identity, runtime client,
  *   and durable boundary identity store. Nothing is read from module globals.
  * @returns A port whose admission is fail-closed and whose observation never
  *   creates work.
- * @throws Until the production adapter is implemented.
  */
 export function createWorkAuthorityAdapter(_input: WorkAuthorityAdapterInput): WorkAuthority {
   const { boundaryIds, client, execution } = _input;
@@ -132,31 +138,49 @@ export function createWorkAuthorityAdapter(_input: WorkAuthorityAdapterInput): W
     if (connected.status !== 'connected') throw new Error(`runtime connection ${connected.status}`);
     return connected.synchronization.workRevision;
   };
+  const close = async (): Promise<void> => {
+    try {
+      await client.close();
+    } catch {
+      // A refused close must not mask the operation's own outcome; the
+      // lifecycle teardown below is best-effort by design.
+    }
+  };
   return {
     async admit(boundary) {
-      const executionId = execution.executionId;
-      if (executionId === null) throw new Error('Execution is not admitted');
-      const identity = await boundaryIds.getOrCreate({
-        platformSessionId: executionId,
-        hostBoundaryId: boundary.requestId
-      });
-      await connect();
-      const outcome = await client.send({
-        type: 'execution.workAdmission',
-        payload: { cause: boundary.cause },
-        messageId: identity.messageId,
-        requestId: identity.requestId,
-        execution,
-        deadlineMs: 5_000
-      });
-      if (outcome.status !== 'accepted' || outcome.workAdmission === undefined) {
-        throw new Error(`work admission ${outcome.status}`);
+      try {
+        const executionId = execution.executionId;
+        if (executionId === null) throw new Error('Execution is not admitted');
+        const identity = await boundaryIds.getOrCreate({
+          platformSessionId: executionId,
+          hostBoundaryId: boundary.requestId
+        });
+        await connect();
+        const outcome = await client.send({
+          type: 'execution.workAdmission',
+          payload: { cause: boundary.cause },
+          messageId: identity.messageId,
+          requestId: identity.requestId,
+          execution,
+          deadlineMs: 5_000
+        });
+        if (outcome.status !== 'accepted' || outcome.workAdmission === undefined) {
+          throw new Error(`work admission ${outcome.status}`);
+        }
+        if (outcome.workAdmission.status === 'rejected') {
+          throw new Error(`drain barrier held by ${outcome.workAdmission.barrierHolderId}`);
+        }
+        return { workRevision: outcome.workAdmission.workRevision };
+      } finally {
+        await close();
       }
-      if (outcome.workAdmission.status === 'rejected') {
-        throw new Error(`drain barrier held by ${outcome.workAdmission.barrierHolderId}`);
-      }
-      return { workRevision: outcome.workAdmission.workRevision };
     },
-    observeRevision: connect
+    async observeRevision() {
+      try {
+        return await connect();
+      } finally {
+        await close();
+      }
+    }
   };
 }
