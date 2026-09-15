@@ -572,7 +572,7 @@ describe('create-worktree CLI', () => {
   );
 
   it(
-    'exits 2 (fail-closed) and leaves no worktree when --card-id points at an unreachable server',
+    'exits 2 (fail-closed) and preserves the worktree when --card-id points at an unreachable server',
     async () => {
       tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'cwt-cli-')));
       const repoDir = path.join(tmpBase, 'repo');
@@ -610,18 +610,19 @@ describe('create-worktree CLI', () => {
       });
 
       expect(result.exitCode).toBe(2);
-      // The worktree was rolled back: no orphaned worktree registered with git and
-      // no leftover directory under the repo's worktrees root. This is the exact
-      // orphaned-unregistered state the card retires — addBranch never succeeded,
-      // so the worktree must not persist.
+      // The registration was dispatched before the failure, so the outcome is
+      // ambiguous: the server may have committed the branch record even though
+      // the response was lost. The worktree is deliberately preserved for
+      // recovery instead of rolled back — deleting it could orphan a committed
+      // registration or yank a checkout a sibling claim now owns.
       const worktrees = execFileSync('git', ['-C', repoDir, 'worktree', 'list', '--porcelain'], {
         encoding: 'utf8'
       });
-      expect(worktrees).not.toContain('card-branch');
+      expect(worktrees).toContain('card-branch');
       const branches = execFileSync('git', ['-C', repoDir, 'branch', '--list', 'card-branch'], {
         encoding: 'utf8'
       });
-      expect(branches.trim()).toBe('');
+      expect(branches.trim()).toContain('card-branch');
     },
     CLI_TEST_TIMEOUT_MS
   );

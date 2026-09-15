@@ -33,9 +33,43 @@ async function startStubApi(discoveryPath: string): Promise<{
 }> {
   const removeBranchCalls: Array<{ cardId: string; name: string }> = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    const match = /^\/cards\/([^/]+)\/branches\/([^/]+)$/.exec(req.url ?? '');
-    if (req.method === 'DELETE' && match) {
-      removeBranchCalls.push({ cardId: decodeURIComponent(match[1]!), name: decodeURIComponent(match[2]!) });
+    // The claim phase reads the branch registry, takes the cleanup owner
+    // token, and only then deletes — mirror those routes faithfully, because
+    // removeWorktreeForCard refuses deletion when the authority cannot answer
+    // them. Query strings (expectedRevision/expectedCleanupOwner) are stripped
+    // before matching, and the branch name arrives percent-encoded.
+    const url = new URL(req.url ?? '/', 'http://localhost');
+    const branchMatch = /^\/cards\/([^/]+)\/branches\/([^/]+)$/.exec(url.pathname);
+    const ownerMatch = /^\/cards\/([^/]+)\/branches\/([^/]+)\/owner$/.exec(url.pathname);
+    if (req.method === 'GET' && /^\/cards\/([^/]+)\/branches$/.exec(url.pathname)) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          branches: [
+            {
+              name: 'cards/main-88/1',
+              revision: 'stub-revision-1',
+              parentBranch: 'master',
+              addedAt: new Date().toISOString()
+            }
+          ]
+        })
+      );
+      return;
+    }
+    if (req.method === 'PATCH' && ownerMatch) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ outcome: 'applied', revision: 'stub-revision-2' }));
+      return;
+    }
+    if (req.method === 'DELETE' && branchMatch) {
+      removeBranchCalls.push({
+        cardId: decodeURIComponent(branchMatch[1]!),
+        name: decodeURIComponent(branchMatch[2]!)
+      });
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ outcome: 'removed' }));
+      return;
     }
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end('{}');
@@ -326,13 +360,13 @@ describe('remove-worktree CLI', () => {
     await expect(fs.access(worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
   }, 30000);
 
-  it('exits 0 promptly (no hang) when the discovery server is unreachable for a bound worktree', async () => {
+  it('exits 2 fail-closed and keeps the worktree when the discovery server is unreachable for a bound worktree', async () => {
     tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'rwt-cli-')));
     const repoDir = path.join(tmpBase, 'repo');
     const worktreesDir = path.join(tmpBase, 'worktrees');
-    await fs.mkdir(repoDir);
     await fs.mkdir(worktreesDir);
-    initGitRepo(repoDir);
+    await fs.mkdir(repoDir);
+    await initGitRepo(repoDir);
 
     const extDir = path.join(tmpBase, 'ext');
     const gitHooksDir = path.join(extDir, 'dist', 'git-hooks');
@@ -353,8 +387,11 @@ describe('remove-worktree CLI', () => {
 
     // Take the real server down but leave a WELL-FORMED discovery file pointing
     // at a dead port: createCardsClient returns a client (discovery succeeds),
-    // and removeBranch hits a network error. retryOnNetworkError is disabled, so
-    // the command must fail open promptly instead of retrying forever.
+    // and the cleanup-ownership claim hits a network error. retryOnNetworkError
+    // is disabled, so the command must fail fast instead of hanging forever.
+    // A claim that cannot be proven refuses deletion (fail-closed): the
+    // worktree stays on disk and the branch record stays registered, recoverable
+    // once the server returns.
     await stub.stop();
     await fs.writeFile(
       discoveryPath,
@@ -374,9 +411,14 @@ describe('remove-worktree CLI', () => {
     });
     const elapsedMs = Date.now() - startedAt;
 
-    expect(result.exitCode).toBe(0);
-    expect(result.stderr).toContain('branch unregister failed');
-    await expect(fs.access(worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result.exitCode).toBe(2);
+    expect(
+      await fs.access(worktreePath).then(
+        () => true,
+        () => false
+      )
+    ).toBe(true);
+    expect(result.stderr).not.toContain('branch unregister failed');
     // Bounded: must not hang on the forever-retry path (cap is 30s/backoff).
     expect(elapsedMs).toBeLessThan(20000);
   }, 30000);
@@ -407,16 +449,39 @@ describe('remove-worktree CLI', () => {
     });
     const worktreePath = (JSON.parse(createOut.trim()) as { worktree: string }).worktree;
 
-    // Replace the stub with one that returns 500 for the DELETE, so removeBranch
+    // Replace the stub with one that serves the claim phase (branch registry,
+    // cleanup-owner token) but returns 500 for the DELETE, so removeBranch
     // throws an ApiError (not a network error) — the unregister phase fails but
     // disk teardown already succeeded. The CLI classifies this as a
     // BranchUnregisterError and exits 0 (fail-open), not as a teardown failure.
     await stub.stop();
     stubStop = undefined;
     const errServer = createServer((req: IncomingMessage, res: ServerResponse) => {
+      const url = new URL(req.url ?? '/', 'http://localhost');
       if (req.method === 'DELETE') {
         res.writeHead(500, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ error: 'boom', code: 'INTERNAL' }));
+        return;
+      }
+      if (req.method === 'GET' && /^\/cards\/([^/]+)\/branches$/.exec(url.pathname)) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            branches: [
+              {
+                name: 'cards/main-88/1',
+                revision: 'stub-revision-1',
+                parentBranch: 'master',
+                addedAt: new Date().toISOString()
+              }
+            ]
+          })
+        );
+        return;
+      }
+      if (req.method === 'PATCH' && /^\/cards\/([^/]+)\/branches\/([^/]+)\/owner$/.exec(url.pathname)) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ outcome: 'applied', revision: 'stub-revision-2' }));
         return;
       }
       res.writeHead(200, { 'content-type': 'application/json' });
