@@ -10,7 +10,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { writeRuntimeCredentialFile } from '../../src/client/runtime/credential-file.js';
 import type { RuntimeCredentialFile } from '../../src/protocol/index.js';
-import { FakeRuntimeServer } from '../client/runtime/fakeServer.js';
+import { FakeRuntimeServer, type FakeRuntimeServerScript } from '../client/runtime/fakeServer.js';
 import { TEST_OWNERSHIP, TEST_SCOPE } from '../client/runtime/index.js';
 
 const tsxCli = createRequire(import.meta.url).resolve('tsx/cli');
@@ -75,8 +75,8 @@ describe('cards shutdown verb', () => {
     return { stderr, status };
   }
 
-  async function startRuntime(withholdAcceptance = false): Promise<FakeRuntimeServer> {
-    server = await FakeRuntimeServer.start({ withholdAcceptance });
+  async function startRuntime(script: FakeRuntimeServerScript = {}): Promise<FakeRuntimeServer> {
+    server = await FakeRuntimeServer.start(script);
     writeFileSync(
       join(cardsHome, 'cards-api.json'),
       JSON.stringify({
@@ -128,5 +128,19 @@ describe('cards shutdown verb', () => {
     const result = await runCli(['--outcome', 'maybe']);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('invalid --outcome');
+  });
+
+  it('names the failing hop when the connection closes before registration', async () => {
+    await startRuntime({ closeBeforeRegistration: true });
+    const result = await runCli([]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('the connection closed before registration');
+  });
+
+  it('names the refusal reason when registration is refused', async () => {
+    await startRuntime({ registration: { status: 'refused', reason: 'stale-generation' } });
+    const result = await runCli([]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('stale-generation');
   });
 });

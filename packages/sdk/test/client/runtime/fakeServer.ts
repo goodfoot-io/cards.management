@@ -30,6 +30,8 @@ export interface FakeRuntimeServerScript {
   readonly acceptedMessageIds?: readonly string[];
   /** Reject the upgrade outright, as a forged or revoked credential would be. */
   readonly refuseUpgrade?: boolean;
+  /** Terminate the socket when the opening register/resume arrives, before any registration outcome. */
+  readonly closeBeforeRegistration?: boolean;
   /** Withhold the synchronization reply, leaving the barrier unmet. */
   readonly withholdResumeAck?: boolean;
   /** Never acknowledge client messages, so sends stay outstanding. */
@@ -198,6 +200,10 @@ export class FakeRuntimeServer {
       this.received.push(envelope);
 
       if (envelope.type === 'runtime.register' || envelope.type === 'runtime.resume') {
+        if (this.script.closeBeforeRegistration === true) {
+          socket.terminate();
+          return;
+        }
         const registration: RegistrationOutcome = this.script.registration ?? {
           status: 'registered',
           generation: 1 as ConnectionGeneration,
