@@ -91,9 +91,11 @@ import {
 /**
  * Creates a minimal CardsClient fake that tracks calls and resolves immediately.
  *
- * @param overrides - Optional overrides for addBranch and removeBranch.
+ * @param overrides - Optional overrides for the client methods.
  * @param overrides.addBranch - Override for the addBranch method.
  * @param overrides.removeBranch - Override for the removeBranch method.
+ * @param overrides.updateBranchOwner - Override for the updateBranchOwner method.
+ * @param overrides.getBranches - Override for the getBranches method.
  * @returns A partial CardsClient with call tracking arrays attached.
  */
 function makeClient(overrides?: {
