@@ -122,7 +122,7 @@ describe('authorizeMessage', () => {
 
   it('refuses an authenticated role the message type does not permit', () => {
     const envelope = envelopeOf({
-      type: 'execution.agentTermination',
+      type: 'execution.cleanupResult',
       producer: { producerId: 'watcher-1', role: 'watcher' }
     });
     const context = contextOf({ authenticatedRole: 'watcher', authenticatedProducerId: 'watcher-1' });
@@ -135,14 +135,14 @@ describe('authorizeMessage', () => {
   });
 
   it('refuses a message for an execution that has not passed admission', () => {
-    expect(refusal(envelopeOf({ type: 'execution.agentTermination' }), contextOf({ executionAdmitted: false }))).toBe(
+    expect(refusal(envelopeOf({ type: 'execution.cleanupResult' }), contextOf({ executionAdmitted: false }))).toBe(
       'execution-not-admitted'
     );
   });
 
   it('refuses a message requiring an admitted execution that names none', () => {
     const envelope = envelopeOf({
-      type: 'execution.agentTermination',
+      type: 'execution.cleanupResult',
       execution: { executionId: null, launchRequestId: 'launch-1' }
     });
     expect(refusal(envelope, contextOf())).toBe('execution-not-admitted');

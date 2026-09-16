@@ -40,8 +40,8 @@ describe('lifecycle transition table integrity', () => {
   it('reaches terminating only from draining under a fresh strict drain with its barrier held', () => {
     const intoTerminating = EXECUTION_LIFECYCLE_TRANSITIONS.filter((row) => row.to === 'terminating');
     expect(intoTerminating).toHaveLength(1);
-    expect(intoTerminating[0]).toMatchObject({ from: 'draining', trigger: 'execution.agentShutdownCommand' });
-    expect(intoTerminating[0]?.guards).toContain('fresh-strict-drain-with-barrier');
+    expect(intoTerminating[0]).toMatchObject({ from: 'draining', trigger: 'execution.stopCommand' });
+    expect(intoTerminating[0]?.guards).toContain('terminal-decision-accepted');
   });
 
   it('leaves a terminal state only by absorbing a replayed result into itself', () => {
@@ -83,33 +83,25 @@ describe('findLifecycleTransition', () => {
 
   it('routes a cleanup result to completed or failed by the observed exit', () => {
     expect(
-      findLifecycleTransition('terminating', 'execution.cleanupComplete', ['ownership-current', 'terminal-exit-zero'])
+      findLifecycleTransition('terminating', 'execution.cleanupResult', ['ownership-current', 'terminal-exit-zero'])
     ).toMatchObject({ to: 'completed' });
     expect(
-      findLifecycleTransition('terminating', 'execution.cleanupComplete', [
-        'ownership-current',
-        'terminal-exit-nonzero'
-      ])
+      findLifecycleTransition('terminating', 'execution.cleanupResult', ['ownership-current', 'terminal-exit-nonzero'])
     ).toMatchObject({ to: 'failed' });
   });
 
-  it('will not terminate a draining execution without the strict-drain barrier', () => {
+  it('will not terminate a draining execution without an accepted terminal decision', () => {
+    expect(findLifecycleTransition('draining', 'execution.stopCommand', ['ownership-current'])).toBeUndefined();
     expect(
-      findLifecycleTransition('draining', 'execution.agentShutdownCommand', ['ownership-current'])
-    ).toBeUndefined();
-    expect(
-      findLifecycleTransition('draining', 'execution.agentShutdownCommand', [
-        'ownership-current',
-        'fresh-strict-drain-with-barrier'
-      ])
+      findLifecycleTransition('draining', 'execution.stopCommand', ['ownership-current', 'terminal-decision-accepted'])
     ).toMatchObject({ to: 'terminating' });
   });
 
   it('ignores guards the caller established that the transition does not require', () => {
     expect(
-      findLifecycleTransition('draining', 'execution.agentShutdownCommand', [
+      findLifecycleTransition('draining', 'execution.stopCommand', [
         'ownership-current',
-        'fresh-strict-drain-with-barrier',
+        'terminal-decision-accepted',
         'user-authorized-cancel'
       ])
     ).toMatchObject({ to: 'terminating' });

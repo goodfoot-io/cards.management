@@ -122,72 +122,6 @@ describe('executeCommand', () => {
     expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.ERROR);
   });
 
-  it('takes durable custody before reporting a correlated agent termination', async () => {
-    let release!: () => void;
-    const handler = vi.fn(async (_input, context) => {
-      context.onAgentShutdown(async () => 'graceful');
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
-    });
-    const command: ActionCommand = Object.assign(handler, {
-      factoryType: 'action' as const,
-      actionName: 'Test Action'
-    });
-    const executing = executeCommand(command);
-    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
-    await runtime.onMessage?.({
-      type: 'execution.agentShutdownCommand',
-      messageId: 'command-1',
-      payload: { shutdownRequestId: 'shutdown-1', workRevision: 1 }
-    });
-    expect(runtime.send.mock.calls.map(([message]) => message.type)).toEqual([
-      'execution.commandCustody',
-      'execution.agentTermination'
-    ]);
-    expect(runtime.send.mock.calls[1]?.[0]).toMatchObject({
-      causationId: 'command-1',
-      payload: { shutdownRequestId: 'shutdown-1', commandMessageId: 'command-1', result: 'graceful' }
-    });
-    release();
-    await executing;
-    expect(runtime.stop).toHaveBeenCalledOnce();
-  });
-
-  it('performs and reports shutdown once when custody ACK is lost and the command is replayed', async () => {
-    runtime.send.mockRejectedValueOnce(new Error('connection closed before ACK'));
-    let release!: () => void;
-    const shutdown = vi.fn(async () => 'graceful' as const);
-    const handler = vi.fn(async (_input, context) => {
-      context.onAgentShutdown(shutdown);
-      await new Promise<void>((resolve) => {
-        release = resolve;
-      });
-    });
-    const command: ActionCommand = Object.assign(handler, {
-      factoryType: 'action' as const,
-      actionName: 'Test Action'
-    });
-    const executing = executeCommand(command);
-    await vi.waitFor(() => expect(runtime.onMessage).toBeTypeOf('function'));
-    const incoming = {
-      type: 'execution.agentShutdownCommand',
-      messageId: 'lost-custody-command',
-      payload: { shutdownRequestId: 'shutdown-lost', workRevision: 1 }
-    };
-    await runtime.onMessage?.(incoming);
-    await runtime.onMessage?.(incoming);
-    expect(shutdown).toHaveBeenCalledOnce();
-    expect(runtime.send).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'execution.agentTermination',
-        causationId: 'lost-custody-command'
-      })
-    );
-    release();
-    await executing;
-  });
-
   it('performs cancellation once despite an uncertain custody ACK and duplicate delivery', async () => {
     runtime.send.mockRejectedValueOnce(new Error('custody ACK dropped'));
     let release!: () => void;
@@ -272,16 +206,6 @@ describe('executeCommand', () => {
         causationId: 'switch-request',
         payload: {}
       }
-    ],
-    [
-      'execution.agentShutdownCommand',
-      {
-        type: 'execution.agentShutdownCommand',
-        messageId: 'restart-shutdown',
-        requestId: 'execution-request',
-        causationId: 'shutdown-request',
-        payload: { shutdownRequestId: 'shutdown-restart', workRevision: 1 }
-      }
     ]
   ] as const)('reconciles interrupted %s effects as explicitly in doubt after restart', async (commandType, incoming) => {
     await mkdir(path.dirname(commandJournalFile(incoming.messageId)), { recursive: true });
@@ -297,11 +221,9 @@ describe('executeCommand', () => {
     let release!: () => void;
     const cancel = vi.fn(async () => undefined);
     const switchToInteractive = vi.fn(() => ({ sessionId: 'duplicate' }));
-    const shutdown = vi.fn(async () => 'graceful' as const);
     const handler = vi.fn(async (_input, context) => {
       context.onCancel(cancel);
       context.onSwitchToInteractive(switchToInteractive);
-      context.onAgentShutdown(shutdown);
       await new Promise<void>((resolve) => {
         release = resolve;
       });
@@ -315,7 +237,6 @@ describe('executeCommand', () => {
     await runtime.onMessage?.(incoming);
     expect(cancel).not.toHaveBeenCalled();
     expect(switchToInteractive).not.toHaveBeenCalled();
-    expect(shutdown).not.toHaveBeenCalled();
     expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt-reported');
     expect(runtime.send).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -335,8 +256,7 @@ describe('executeCommand', () => {
 
   it.each([
     ['execution.cancelCommand', 'retry-cancel', {}],
-    ['execution.switchToInteractiveCommand', 'retry-switch', {}],
-    ['execution.agentShutdownCommand', 'retry-shutdown', { shutdownRequestId: 'shutdown-retry', workRevision: 1 }]
+    ['execution.switchToInteractiveCommand', 'retry-switch', {}]
   ] as const)('retries uncertain %s diagnostics live and remains terminal after fresh replay', async (type, id, payload) => {
     const incoming = {
       type,
@@ -357,14 +277,12 @@ describe('executeCommand', () => {
     );
     const cancel = vi.fn(async () => undefined);
     const switchToInteractive = vi.fn(() => ({ sessionId: 'must-not-run' }));
-    const shutdown = vi.fn(async () => 'graceful' as const);
     const run = async () => {
       let release!: () => void;
       const handler: ActionCommand = Object.assign(
         async (_input: ActionInput, context: ActionContext) => {
           context.onCancel(cancel);
           context.onSwitchToInteractive(switchToInteractive);
-          context.onAgentShutdown(shutdown);
           await new Promise<void>((resolve) => {
             release = resolve;
           });
@@ -408,7 +326,6 @@ describe('executeCommand', () => {
     await replay(incoming);
     expect(cancel).not.toHaveBeenCalled();
     expect(switchToInteractive).not.toHaveBeenCalled();
-    expect(shutdown).not.toHaveBeenCalled();
     expect(reports()).toHaveLength(reportCount);
     expect(await readCommandPhase(incoming.messageId)).toBe('effect-in-doubt-reported');
     fresh.release();
@@ -417,8 +334,7 @@ describe('executeCommand', () => {
 
   it.each([
     ['execution.cancelCommand', 'fresh-cancel', {}],
-    ['execution.switchToInteractiveCommand', 'fresh-switch', {}],
-    ['execution.agentShutdownCommand', 'fresh-shutdown', { shutdownRequestId: 'shutdown-fresh', workRevision: 1 }]
+    ['execution.switchToInteractiveCommand', 'fresh-switch', {}]
   ] as const)('lets a fresh handler retry an uncertain %s diagnostic', async (type, id, payload) => {
     const incoming = {
       type,
@@ -434,8 +350,7 @@ describe('executeCommand', () => {
     );
     const callbacks = {
       cancel: vi.fn(async () => undefined),
-      switch: vi.fn(() => ({ sessionId: 'must-not-run' })),
-      shutdown: vi.fn(async () => 'graceful' as const)
+      switch: vi.fn(() => ({ sessionId: 'must-not-run' }))
     };
     const run = async () => {
       let release!: () => void;
@@ -443,7 +358,6 @@ describe('executeCommand', () => {
         async (_input: ActionInput, context: ActionContext) => {
           context.onCancel(callbacks.cancel);
           context.onSwitchToInteractive(callbacks.switch);
-          context.onAgentShutdown(callbacks.shutdown);
           await new Promise<void>((resolve) => {
             release = resolve;
           });
@@ -483,7 +397,6 @@ describe('executeCommand', () => {
     expect(await readCommandPhase(id)).toBe('effect-in-doubt-reported');
     expect(callbacks.cancel).not.toHaveBeenCalled();
     expect(callbacks.switch).not.toHaveBeenCalled();
-    expect(callbacks.shutdown).not.toHaveBeenCalled();
     fresh.release();
     await fresh.executing;
   });

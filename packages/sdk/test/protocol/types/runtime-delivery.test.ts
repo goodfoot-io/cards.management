@@ -26,7 +26,7 @@ describe('delivery-class assignment', () => {
     expect(deliveryClassFor('runtime.liveness')).toBe('reconciled-snapshot');
     expect(deliveryClassFor('execution.executeRequest')).toBe('durable-intent');
     expect(deliveryClassFor('execution.shutdownReadiness')).toBe('revocable-readiness');
-    expect(deliveryClassFor('execution.agentTermination')).toBe('durable-result');
+    expect(deliveryClassFor('execution.cleanupResult')).toBe('durable-result');
     expect(deliveryClassFor('watcher.telemetry')).toBe('disposable-telemetry');
   });
 
@@ -215,7 +215,7 @@ describe('revocable readiness, via execution.shutdownReadiness', () => {
   });
 });
 
-describe('durable result, via execution.agentTermination', () => {
+describe('durable result, via execution.cleanupResult', () => {
   it('accepts a result never seen before', () => {
     expect(evaluateDurableResult('msg-1', undefined).disposition).toBe('accept');
   });

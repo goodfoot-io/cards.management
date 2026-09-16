@@ -107,14 +107,14 @@ describe('parseEnvelope', () => {
     expect(rejectionReason(frame)).toBe('accepted');
   });
 
-  it('requires shutdown-command correlation on agent termination', () => {
+  it('requires terminal-decision correlation on a cleanup result', () => {
     const frame = validFrame({
-      type: 'execution.agentTermination',
+      type: 'execution.cleanupResult',
       causationId: 'command-1',
-      payload: { shutdownRequestId: 'shutdown-1', result: 'graceful' }
+      payload: { observationId: 'obs-1', trigger: 'command', status: 'drained', finalization: 'complete' }
     });
     expect(rejectionReason(frame)).toBe('invalid-payload');
-    (frame['payload'] as Record<string, unknown>)['commandMessageId'] = 'command-1';
+    (frame['payload'] as Record<string, unknown>)['terminalDecisionId'] = 'terminal:execution-1';
     expect(rejectionReason(frame)).toBe('accepted');
   });
 

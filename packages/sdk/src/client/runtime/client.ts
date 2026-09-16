@@ -654,7 +654,8 @@ class RuntimeClientImpl implements RuntimeClient {
     return (
       envelope.type === 'execution.cancelCommand' ||
       envelope.type === 'execution.switchToInteractiveCommand' ||
-      envelope.type === 'execution.agentShutdownCommand' ||
+      envelope.type === 'execution.stopCommand' ||
+      envelope.type === 'execution.branchCleanupEffect' ||
       envelope.type === 'execution.executeRequest' ||
       envelope.type === 'watcher.stopCommand'
     );

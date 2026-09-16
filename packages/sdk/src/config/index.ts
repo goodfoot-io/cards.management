@@ -70,7 +70,6 @@ export type {
 export type {
   ActionContext,
   ActionInput,
-  AgentTerminationResult,
   CardsAssistantContext,
   CardsAssistantInput,
   WorktreeAllocationDirective,

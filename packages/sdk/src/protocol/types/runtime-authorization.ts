@@ -262,8 +262,12 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: false,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
-  'execution.agentShutdownCommand': {
-    type: 'execution.agentShutdownCommand',
+  // Addressed to the one wrapper that currently owns the execution. Nothing in
+  // the payload says so: the envelope's execution scope and ownership fence are
+  // what refuse a superseded wrapper, and `requiresOwnershipCurrent` is what
+  // makes that refusal happen before any handler sees the command.
+  'execution.stopCommand': {
+    type: 'execution.stopCommand',
     direction: 'server-to-client',
     deliveryClass: 'durable-intent',
     allowedRoles: ['server'],
@@ -328,17 +332,6 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
-  'execution.agentTermination': {
-    type: 'execution.agentTermination',
-    direction: 'client-to-server',
-    deliveryClass: 'durable-result',
-    allowedRoles: ['agent-handler', 'runtime-wrapper'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: true,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
   'execution.worktreeAssignmentResult': {
     type: 'execution.worktreeAssignmentResult',
     direction: 'client-to-server',
@@ -361,14 +354,40 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
-  'execution.cleanupComplete': {
-    type: 'execution.cleanupComplete',
+  // The wrapper alone reports it, and it reports it for observed ends as well
+  // as commanded ones — so no causation ID is required. A root exit has no
+  // causing command, and demanding one would leave the most important report
+  // the protocol carries unsendable.
+  'execution.cleanupResult': {
+    type: 'execution.cleanupResult',
     direction: 'client-to-server',
     deliveryClass: 'durable-result',
     allowedRoles: ['runtime-wrapper'],
     executionRequirement: 'admitted',
-    requiresRequestId: false,
+    requiresRequestId: true,
     requiresCausationId: false,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
+  'execution.branchCleanupRegistration': {
+    type: 'execution.branchCleanupRegistration',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-intent',
+    allowedRoles: ['agent-handler'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: false,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
+  'execution.branchCleanupEffect': {
+    type: 'execution.branchCleanupEffect',
+    direction: 'server-to-client',
+    deliveryClass: 'durable-intent',
+    allowedRoles: ['server'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: true,
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },

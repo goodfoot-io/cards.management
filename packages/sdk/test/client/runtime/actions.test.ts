@@ -155,7 +155,15 @@ describe('runtime action HTTP client', () => {
           status: 'completed',
           execution: EXECUTION,
           retrievedOutcome: { disposition: 'spawned', processBootId: 'boot-1' },
-          terminalOutcome: { exitCode: 0, signal: null, lifecycleState: 'completed', statusMutationDeferred: false }
+          terminalOutcome: {
+            terminalDecisionId: 'terminal:execution-1',
+            observationId: 'obs-1',
+            trigger: 'root-exit',
+            status: 'drained',
+            phase: 'graceful',
+            rootExit: { code: 0, signal: null },
+            finalization: 'complete'
+          }
         })
       );
     });

@@ -50,13 +50,7 @@ import type { RuntimeEnvelope, RuntimePayload } from '../protocol/index.js';
 import type { ActionCommand, CardsAssistantCommand } from './command-types.js';
 import { extractActionInput, extractCardsAssistantInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
-import type {
-  ActionContext,
-  ActionInput,
-  AgentTerminationResult,
-  CardsAssistantContext,
-  CardsAssistantInput
-} from './inputs.js';
+import type { ActionContext, ActionInput, CardsAssistantContext, CardsAssistantInput } from './inputs.js';
 import { Logger } from './logger.js';
 
 /**
@@ -86,10 +80,7 @@ export const logger = new Logger({ subsystem: 'cards-default-configuration-hooks
  */
 type AnyCommand = ActionCommand | CardsAssistantCommand;
 
-type AgentCommandType =
-  | 'execution.cancelCommand'
-  | 'execution.switchToInteractiveCommand'
-  | 'execution.agentShutdownCommand';
+type AgentCommandType = 'execution.cancelCommand' | 'execution.switchToInteractiveCommand';
 type AgentCommandPhase =
   | 'claimed'
   | 'effect-started'
@@ -152,8 +143,7 @@ async function readAgentCommandProgress(executionId: string, messageId: string):
       throw new Error('Agent command journal identity mismatch');
     if (
       value['commandType'] !== 'execution.cancelCommand' &&
-      value['commandType'] !== 'execution.switchToInteractiveCommand' &&
-      value['commandType'] !== 'execution.agentShutdownCommand'
+      value['commandType'] !== 'execution.switchToInteractiveCommand'
     )
       throw new Error('Agent command journal type is invalid');
     if (
@@ -342,11 +332,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       // Callback registration state
       let cancelCallback: (() => void | Promise<void>) | undefined;
       let switchToInteractiveCallback: (() => unknown | Promise<unknown>) | undefined;
-      let agentShutdownCallback:
-        | (() => AgentTerminationResult | undefined | Promise<AgentTerminationResult | undefined>)
-        | undefined;
       let commandProcessed = false;
-      let agentShutdownProcessed = false;
       const commandEffects = new Map<string, Promise<void>>();
       let runtimeClient: RuntimeClient;
       const loaded = loadRuntimeCredential('agent-handler');
@@ -356,7 +342,6 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       const sendDurable = async <
         T extends
           | 'execution.commandCustody'
-          | 'execution.agentTermination'
           | 'execution.interactiveHandoff'
           | 'execution.commandEffectResult'
           | 'execution.worktreeAssignmentResult'
@@ -398,37 +383,28 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             type: 'runtime.capabilities',
             payload: {
               revision: 1,
-              capabilities: { switchToInteractive: true, agentShutdown: true, strictDrainBarrier: true }
+              capabilities: { switchToInteractive: true, agentShutdown: false, strictDrainBarrier: true }
             },
             messageId: `${loaded.execution.executionId}:agent-handler:switch-capability`,
             requestId: loaded.credential.requestId,
             execution: loaded.execution
           });
-        },
-        onAgentShutdown: (callback) => {
-          agentShutdownCallback = callback;
         }
       };
 
       runtimeClient = createRuntimeClientFromCredentialFile({
         role: 'agent-handler',
-        capabilities: { switchToInteractive: false, agentShutdown: true, strictDrainBarrier: true },
+        capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: true },
         outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
         discover: async () => {
           const info = await discoverApiInfo();
           return info ? { host: info.host, port: info.port, accessToken: info.accessToken } : null;
         },
         onMessage: async (cmd: RuntimeEnvelope) => {
-          // First-wins semantics for user-initiated commands; agentShutdown is
-          // deduplicated independently so a later cancel still lands after it.
+          // First-wins semantics for user-initiated commands.
           if (commandProcessed) return;
 
-          if (
-            cmd.type !== 'execution.cancelCommand' &&
-            cmd.type !== 'execution.switchToInteractiveCommand' &&
-            cmd.type !== 'execution.agentShutdownCommand'
-          )
-            return;
+          if (cmd.type !== 'execution.cancelCommand' && cmd.type !== 'execution.switchToInteractiveCommand') return;
           const commandType: AgentCommandType = cmd.type;
           const existingEffect = commandEffects.get(cmd.messageId);
           if (existingEffect) return existingEffect;
@@ -495,23 +471,6 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             }
 
             await recordAgentCommandPhase(loaded.execution.executionId, cmd.messageId, commandType, 'effect-started');
-
-            if (cmd.type === 'execution.agentShutdownCommand') {
-              if (agentShutdownProcessed) return;
-              agentShutdownProcessed = true;
-              await handleAgentShutdownCommand(
-                agentShutdownCallback,
-                cmd as RuntimeEnvelope<'execution.agentShutdownCommand'>,
-                sendDurable
-              );
-              await recordAgentCommandPhase(
-                loaded.execution.executionId,
-                cmd.messageId,
-                commandType,
-                'effect-observed'
-              );
-              return;
-            }
 
             commandProcessed = true;
 
@@ -672,61 +631,5 @@ async function handleSwitchToInteractiveCommand(
     logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
     await recordObserved();
     cleanupAndExit(EXIT_CODES.ERROR);
-  }
-}
-
-/**
- * Handles an authenticated durable agent-shutdown command.
- *
- * Invokes the registered `onAgentShutdown` callback — typically terminating
- * the agent CLI gracefully so the normal post-exit cascade proceeds — and
- * returns. Unlike {@link handleCancelCommand}, this handler never exits the
- * process and has no SIGTERM fallback: responding to a shutdown request is
- * entirely the callbacks' job, and with no callback registered the command
- * is a no-op. Callback rejections are reported via the logger only.
- *
- * @param callback - The registered agentShutdown callback, if any
- * @param command - Correlated shutdown command from the runtime.
- * @param sendDurable - Authenticated durable-result sender.
- * @returns Completion after the callback and any terminal result are settled.
- *
- * @internal
- */
-function handleAgentShutdownCommand(
-  callback: (() => AgentTerminationResult | undefined | Promise<AgentTerminationResult | undefined>) | undefined,
-  command: RuntimeEnvelope<'execution.agentShutdownCommand'>,
-  sendDurable: <T extends 'execution.commandCustody' | 'execution.agentTermination'>(
-    type: T,
-    payload: RuntimePayload<T>,
-    causationId: string
-  ) => Promise<boolean>
-): Promise<void> {
-  if (!callback) {
-    return Promise.resolve();
-  }
-
-  try {
-    // Contain synchronous callback failures inside the lifecycle handler.
-    return toPromise(callback()).then(
-      async (result) => {
-        if (result !== undefined) {
-          await sendDurable(
-            'execution.agentTermination',
-            {
-              shutdownRequestId: command.payload.shutdownRequestId,
-              commandMessageId: command.messageId,
-              result
-            },
-            command.messageId
-          );
-        }
-      },
-      (error) => {
-        logger.error(`onAgentShutdown callback error: ${getErrorMessage(error)}`);
-      }
-    );
-  } catch (error) {
-    logger.error(`onAgentShutdown callback error: ${getErrorMessage(error)}`);
-    return Promise.resolve();
   }
 }

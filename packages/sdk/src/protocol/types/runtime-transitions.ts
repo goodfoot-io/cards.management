@@ -12,9 +12,9 @@
  * A guard is a condition the caller must independently establish before the
  * transition is legal; the table records the requirement so that a handler
  * cannot perform the transition while forgetting the check. The guard that
- * matters most is `fresh-strict-drain-with-barrier`: it is the only route into
- * `terminating` from `draining`, so no replayed readiness record and no expired
- * deadline can reach a termination on its own.
+ * matters most is `terminal-decision-accepted`: it is the only route into
+ * `terminating` from `draining`, so a stop command cannot be dispatched before
+ * one terminal decision has been atomically written for the execution.
  *
  * @summary Execution lifecycle and connection state transition tables with guards
  * @module
@@ -31,8 +31,8 @@ import type { RuntimeMessageType } from './runtime-messages.js';
  *   to this execution with immutable parameters.
  * - `launch-token-claimed` — the authorized launcher claimed the launch token
  *   exactly once, so recovery cannot spawn a second harness.
- * - `fresh-strict-drain-with-barrier` — a strict drain was established for the
- *   current work revision and its new-work barrier is held across the effect.
+ * - `terminal-decision-accepted` — one terminal decision is already durably
+ *   written for this execution, and the message names that decision ID.
  * - `readiness-superseded` — stored readiness names an older work revision.
  * - `user-authorized-cancel` — explicit user cancellation, which is separately
  *   authorized and may override idle requirements.
@@ -51,7 +51,7 @@ export const LIFECYCLE_GUARDS = [
   'ownership-current',
   'admission-bound',
   'launch-token-claimed',
-  'fresh-strict-drain-with-barrier',
+  'terminal-decision-accepted',
   'readiness-superseded',
   'launch-observed-successful',
   'user-authorized-cancel',
@@ -129,20 +129,8 @@ export const EXECUTION_LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
   {
     from: 'draining',
     to: 'terminating',
-    trigger: 'execution.agentShutdownCommand',
-    guards: ['ownership-current', 'fresh-strict-drain-with-barrier']
-  },
-  {
-    from: 'terminating',
-    to: 'completed',
-    trigger: 'execution.agentTermination',
-    guards: ['ownership-current', 'terminal-exit-zero']
-  },
-  {
-    from: 'terminating',
-    to: 'failed',
-    trigger: 'execution.agentTermination',
-    guards: ['ownership-current', 'terminal-exit-nonzero']
+    trigger: 'execution.stopCommand',
+    guards: ['ownership-current', 'terminal-decision-accepted']
   },
   {
     from: 'running',
@@ -153,25 +141,25 @@ export const EXECUTION_LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
   {
     from: 'running',
     to: 'completed',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['ownership-current', 'terminal-exit-zero']
   },
   {
     from: 'running',
     to: 'failed',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['ownership-current', 'terminal-exit-nonzero']
   },
   {
     from: 'terminating',
     to: 'completed',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['ownership-current', 'terminal-exit-zero']
   },
   {
     from: 'terminating',
     to: 'failed',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['ownership-current', 'terminal-exit-nonzero']
   },
   {
@@ -207,19 +195,19 @@ export const EXECUTION_LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
   {
     from: 'completed',
     to: 'completed',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['idempotent-finalization']
   },
   {
     from: 'failed',
     to: 'failed',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['idempotent-finalization']
   },
   {
     from: 'cancelled',
     to: 'cancelled',
-    trigger: 'execution.cleanupComplete',
+    trigger: 'execution.cleanupResult',
     guards: ['idempotent-finalization']
   }
 ];
@@ -282,7 +270,7 @@ export const CONNECTION_TRANSITIONS: readonly ConnectionTransition[] = [
  * established.
  *
  * Several transitions can share a `from` and `trigger` and be separated only by
- * their guards — `cleanupComplete` from `running` leads to `completed` or
+ * their guards — `cleanupResult` from `running` leads to `completed` or
  * `failed` depending on the observed exit. Selection therefore requires the
  * caller's guard set, and a transition matches only when every one of its
  * guards is present.

@@ -44,8 +44,7 @@ describe('defineAction', () => {
     cwd: '/workspace',
     reportWorktreeAssignment: vi.fn(),
     onCancel: vi.fn(),
-    onSwitchToInteractive: vi.fn(),
-    onAgentShutdown: vi.fn()
+    onSwitchToInteractive: vi.fn()
   };
 
   describe('basic functionality', () => {

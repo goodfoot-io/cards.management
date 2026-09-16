@@ -184,12 +184,67 @@ export const shutdownRequestPayloadSchema = z
   })
   .strict();
 
-/** Payload of `execution.agentShutdownCommand`. */
-export const agentShutdownCommandPayloadSchema = z
+/** Why an execution reached its one terminal decision. */
+export const terminalDecisionReasonSchema = z.enum([
+  'completion',
+  'cancel',
+  'terminal-close',
+  'natural-exit',
+  'startup-failure'
+]);
+
+/**
+ * The single terminal decision recorded on an execution record.
+ *
+ * It is atomically first-written: whichever intent arrives first wins, and a
+ * later one attaches evidence rather than replacing the accepted reason. That
+ * is what makes a root exit racing a recorded completion reportable without
+ * either observation overwriting the other.
+ *
+ * `decisionId` is derived from the execution alone ({@link terminalDecisionId}),
+ * so a wrapper that observed a local exit while disconnected names the same
+ * decision the server would, and the two reconcile on replay instead of
+ * creating a second terminal record.
+ */
+export const terminalDecisionSchema = z
   .object({
-    shutdownRequestId: z.string().min(1),
-    /** Work revision the drain authority was established for. */
-    workRevision: workRevisionSchema
+    decisionId: z.string().min(1),
+    /** `messageId` of the intent or local observation that produced this decision. */
+    originMessageId: z.string().min(1),
+    reason: terminalDecisionReasonSchema,
+    /** Work outcome reported by an explicit requester; absent for observed ends. */
+    outcome: shutdownOutcomeSchema.optional(),
+    message: z.string().max(4096).optional(),
+    acceptedAt: z.string().datetime()
+  })
+  .strict();
+
+/** One execution's accepted terminal decision. */
+export type TerminalDecision = z.infer<typeof terminalDecisionSchema>;
+
+/**
+ * Derives the deterministic decision ID for an execution.
+ *
+ * @param executionId - Admitted execution the decision belongs to.
+ * @returns The canonical `terminal:<executionId>` decision identifier.
+ */
+export function terminalDecisionId(executionId: string): string {
+  return `terminal:${executionId}`;
+}
+
+/** Terminal reasons that dispatch a stop command to a live wrapper. */
+export const stopCommandReasonSchema = z.enum(['completion', 'cancel', 'terminal-close']);
+
+/**
+ * Payload of `execution.stopCommand`, sent only to the current wrapper of an
+ * accepted terminal decision. Execution scope and ownership generation ride in
+ * the envelope, so a stale wrapper's delivery is refused by the fence rather
+ * than by anything in this payload.
+ */
+export const stopCommandPayloadSchema = z
+  .object({
+    terminalDecisionId: z.string().min(1),
+    reason: stopCommandReasonSchema
   })
   .strict();
 
@@ -278,17 +333,82 @@ export const worktreeAssignmentResultPayloadSchema = z
   })
   .strict();
 
-/** How an agent's termination actually resolved. */
-export const terminationResultSchema = z.enum(['graceful', 'forced', 'failed']);
+/** What began the wrapper's one bounded cleanup operation. */
+export const cleanupTriggerSchema = z.enum(['command', 'root-exit', 'spawn-error', 'terminal-close']);
 
-/** Payload of `execution.agentTermination`. */
-export const agentTerminationPayloadSchema = z
+/**
+ * How far containment got. `unknown` is never an error path to be smoothed
+ * over: a failed identity check, an uninterruptible member, or a lost anchor
+ * all land here, and nothing downstream may read it as drained.
+ */
+export const cleanupStatusSchema = z.enum(['drained', 'failed', 'unknown']);
+
+/** Which half of the cleanup interval the recorded status was reached in. */
+export const cleanupPhaseSchema = z.enum(['graceful', 'forced']);
+
+/** Whether required stream finalization produced evidence within its own window. */
+export const cleanupFinalizationSchema = z.enum(['complete', 'incomplete', 'not-required']);
+
+/**
+ * Payload of `execution.cleanupResult`: the wrapper's single durable report for
+ * one ended execution, replacing the separate termination and cleanup records.
+ *
+ * `status` and `finalization` are deliberately independent. A process boundary
+ * can be provably drained while a transcript flush never closed, and that
+ * combination has to stay visible rather than collapsing into one verdict —
+ * the worktree may be released on the first, but the action result still says
+ * the second did not finish.
+ */
+export const cleanupResultPayloadSchema = z
   .object({
-    shutdownRequestId: z.string().min(1),
-    /** Exact shutdown command completed by the wrapper handler. */
-    commandMessageId: z.string().min(1),
-    result: terminationResultSchema,
-    message: z.string().max(4096).optional()
+    terminalDecisionId: z.string().min(1),
+    /** Wrapper-local observation this report settles; stable across replay. */
+    observationId: z.string().min(1),
+    trigger: cleanupTriggerSchema,
+    status: cleanupStatusSchema,
+    phase: cleanupPhaseSchema.optional(),
+    rootExit: z
+      .object({
+        code: z.number().int().nullable(),
+        signal: z.string().min(1).nullable()
+      })
+      .strict()
+      .optional(),
+    finalization: cleanupFinalizationSchema,
+    detail: z.string().max(4096).optional()
+  })
+  .strict();
+
+/**
+ * Payload of `execution.branchCleanupRegistration`, sent by the provider while
+ * it still holds its session-specific inputs. It carries nothing else on
+ * purpose: `cardId`, `repoRoot`, and `cardRepoPath` are derived by the server
+ * from the admitted execution and its reservation, so no path supplied by a
+ * producer can steer the maintenance worker.
+ */
+export const branchCleanupRegistrationPayloadSchema = z
+  .object({
+    sessionId: z.string().min(1).optional()
+  })
+  .strict();
+
+/**
+ * Payload of `execution.branchCleanupEffect`, journaled by the server only
+ * after a `cleanupResult` with accepted `status: 'drained'`, and implemented by
+ * the extension authority outside the ended wrapper session.
+ *
+ * Every path here is server-derived from the admitted execution, never echoed
+ * from the registration, and the effect names no program: the extension
+ * resolves its packaged worker entrypoint from its own installation.
+ */
+export const branchCleanupEffectPayloadSchema = z
+  .object({
+    terminalDecisionId: z.string().min(1),
+    cardId: z.string().min(1),
+    repoRoot: z.string().min(1),
+    cardRepoPath: z.string().min(1),
+    /** Session the registration named, carried through for marker correlation. */
+    sessionId: z.string().min(1).optional()
   })
   .strict();
 
@@ -297,30 +417,10 @@ export const commandEffectResultPayloadSchema = z
   .object({
     commandMessageId: z.string().min(1),
     controlRequestId: z.string().min(1),
-    commandType: z.enum([
-      'execution.cancelCommand',
-      'execution.switchToInteractiveCommand',
-      'execution.agentShutdownCommand'
-    ]),
+    commandType: z.enum(['execution.cancelCommand', 'execution.switchToInteractiveCommand']),
     disposition: z.literal('in-doubt'),
     observedAt: z.string().datetime(),
     reason: z.literal('handler-restarted-during-effect')
-  })
-  .strict();
-
-/**
- * Payload of `execution.cleanupComplete`. `statusMutationDeferred` is true when
- * an offline finisher could not verify fresh execution authority: the terminal
- * result is still recorded durably, but the card status mutation is left to a
- * writer that can prove no newer execution supersedes it.
- */
-export const cleanupCompletePayloadSchema = z
-  .object({
-    exitCode: z.number().int().nullable(),
-    signal: z.string().nullable(),
-    lifecycleState: executionLifecycleStateSchema,
-    statusMutationDeferred: z.boolean(),
-    stderr: z.string().max(16384).optional()
   })
   .strict();
 
@@ -478,16 +578,17 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.switchToInteractiveRequest': switchToInteractiveRequestPayloadSchema,
   'execution.switchToInteractiveCommand': switchToInteractiveCommandPayloadSchema,
   'execution.shutdownRequest': shutdownRequestPayloadSchema,
-  'execution.agentShutdownCommand': agentShutdownCommandPayloadSchema,
+  'execution.stopCommand': stopCommandPayloadSchema,
   'execution.executeRequest': executeRequestPayloadSchema,
   'execution.shutdownReadiness': shutdownReadinessPayloadSchema,
   'execution.workAdmission': workAdmissionPayloadSchema,
   'execution.launchAdmission': launchAdmissionPayloadSchema,
   'execution.launchOutcome': launchOutcomePayloadSchema,
   'execution.worktreeAssignmentResult': worktreeAssignmentResultPayloadSchema,
-  'execution.agentTermination': agentTerminationPayloadSchema,
   'execution.commandEffectResult': commandEffectResultPayloadSchema,
-  'execution.cleanupComplete': cleanupCompletePayloadSchema,
+  'execution.cleanupResult': cleanupResultPayloadSchema,
+  'execution.branchCleanupRegistration': branchCleanupRegistrationPayloadSchema,
+  'execution.branchCleanupEffect': branchCleanupEffectPayloadSchema,
   'watcher.stopRequest': watcherStopPayloadSchema,
   'watcher.stopCommand': watcherStopPayloadSchema,
   'watcher.stopResult': watcherStopResultPayloadSchema,

@@ -59,7 +59,8 @@ export type RuntimeInboundMessageType = Extract<
   RuntimeMessageType,
   | 'execution.cancelCommand'
   | 'execution.switchToInteractiveCommand'
-  | 'execution.agentShutdownCommand'
+  | 'execution.stopCommand'
+  | 'execution.branchCleanupEffect'
   | 'execution.executeRequest'
   | 'watcher.stopCommand'
 >;

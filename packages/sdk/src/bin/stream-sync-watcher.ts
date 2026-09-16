@@ -55,6 +55,55 @@ import { WatchInstaller } from '../transcript-sync/engine/watch-installer.js';
 import { parseManifest, type SessionSyncManifest, type SqlitePollSourceSpec } from '../transcript-sync/manifest.js';
 import { isProcessAlive } from './process-utils.js';
 
+/** What asked this watcher to finalize. */
+export type FinalizationTrigger = 'control-stop' | 'sigterm' | 'local';
+
+/**
+ * The one way this watcher is asked to wind down, shared by every path that can
+ * ask.
+ *
+ * It exists because the watcher is now an ordinary same-session background
+ * process rather than a detached one: the wrapper stops it with a signal, and a
+ * signal arrives whether or not a control socket is connected. Routing
+ * `ctx.onControl('stop')` and `SIGTERM` through the same idempotent entry point
+ * is what keeps an API outage from turning a five-second graceful window into a
+ * five-second sleep the watcher never wakes from.
+ *
+ * {@link FinalizationController.sleep} replaces the loop's plain timer so that
+ * a request lands immediately instead of at the end of the current tick.
+ */
+export interface FinalizationController {
+  /** Stop signal handed to {@link runWatcherLoop}. */
+  readonly signal: { stopped: boolean };
+  /** Interruptible sleep handed to {@link runWatcherLoop}. */
+  readonly sleep: (ms: number) => Promise<void>;
+  /** What first requested finalization, or `null` while none has. */
+  readonly trigger: FinalizationTrigger | null;
+  /**
+   * Marks stop, wakes the steady-loop sleep, and starts the finalizer. Safe to
+   * call any number of times from any path: the finalizer runs at most once and
+   * every caller awaits the same settlement.
+   *
+   * @param trigger - What is asking; only the first caller's value is recorded.
+   * @returns Settlement of the one finalizer run.
+   */
+  requestFinalization(trigger: FinalizationTrigger): Promise<void>;
+  /** Removes the process-level signal handler this controller installed. */
+  dispose(): void;
+}
+
+/**
+ * Builds the shared finalization controller and installs its `SIGTERM` handler.
+ *
+ * @param finalize - The session's existing finalizer; invoked at most once.
+ * @returns A controller whose `signal` and `sleep` drive {@link runWatcherLoop}.
+ * @throws {Error} Always, until the controller is implemented.
+ */
+export function createFinalizationController(finalize: () => Promise<void>): FinalizationController {
+  void finalize;
+  throw new Error('Not Implemented');
+}
+
 /** Minimal identity extracted from the raw manifest argv for registration purposes only. */
 export interface MinimalIdentity {
   sessionId: string;

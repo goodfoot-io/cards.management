@@ -22,10 +22,9 @@ export type DurableResultMessageType = Extract<
   RuntimeMessageType,
   | 'execution.launchAdmission'
   | 'execution.launchOutcome'
-  | 'execution.agentTermination'
   | 'execution.commandEffectResult'
   | 'execution.worktreeAssignmentResult'
-  | 'execution.cleanupComplete'
+  | 'execution.cleanupResult'
   | 'execution.commandCustody'
   | 'watcher.stopResult'
 >;

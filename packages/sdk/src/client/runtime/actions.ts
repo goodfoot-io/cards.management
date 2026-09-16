@@ -120,7 +120,7 @@ const retrievalResponseSchema = z
         status: z.literal('completed'),
         execution: executionIdentitySchema,
         retrievedOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.launchOutcome'],
-        terminalOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.cleanupComplete'].optional()
+        terminalOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.cleanupResult'].optional()
       })
       .strict(),
     z
@@ -259,7 +259,7 @@ export type RuntimeActionRetrievalResult =
       readonly requestId: OriginalCallerRequestId;
       readonly execution: BoundExecution;
       readonly outcome: LaunchOutcome;
-      readonly terminalOutcome?: RuntimePayload<'execution.cleanupComplete'>;
+      readonly terminalOutcome?: RuntimePayload<'execution.cleanupResult'>;
     }
   | {
       readonly status: 'rejected';

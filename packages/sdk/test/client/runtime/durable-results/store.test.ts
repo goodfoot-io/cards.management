@@ -160,7 +160,7 @@ describe('taking custody', () => {
             ? { executionId: 'execution-other', launchRequestId: original.requestId }
             : envelope.execution,
         scope: drift === 'scope' ? { ...envelope.scope, cardId: 'main-other' } : envelope.scope,
-        payload: drift === 'payload' ? { ...envelope.payload, statusMutationDeferred: true } : envelope.payload
+        payload: drift === 'payload' ? { ...envelope.payload, detail: 'drifted' } : envelope.payload
       } as DurableResultCustodyInput['envelope']
     };
 
@@ -169,7 +169,7 @@ describe('taking custody', () => {
     expect(outcome).not.toHaveProperty('acknowledgment');
   });
 
-  it('uses the authoritative request ID for cleanupComplete without inventing an envelope requestId', async () => {
+  it('uses the authoritative request ID for a cleanup result without inventing an envelope requestId', async () => {
     const input = custodyInput(makeRecord({ requestId: 'authoritative-request' }));
     expect(input.envelope.requestId).toBeUndefined();
 
@@ -338,7 +338,7 @@ describe('the custodian reconciliation calls', () => {
       ...record,
       envelope: {
         ...record.envelope,
-        payload: { ...record.envelope.payload, statusMutationDeferred: true }
+        payload: { ...record.envelope.payload, detail: 'changed' }
       }
     } as OutboxRecord;
 

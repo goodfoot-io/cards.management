@@ -60,8 +60,16 @@ const pendingResult = (messageId: string, role: 'runtime-wrapper' | 'agent-hook'
     envelope: {
       ...base.envelope,
       messageId,
-      type: 'execution.cleanupComplete' as const,
-      payload: { exitCode: 0, signal: null, lifecycleState: 'completed' as const, statusMutationDeferred: false }
+      type: 'execution.cleanupResult' as const,
+      payload: {
+        terminalDecisionId: 'terminal:exec-1',
+        observationId: 'obs-1',
+        trigger: 'root-exit' as const,
+        status: 'drained' as const,
+        phase: 'graceful' as const,
+        rootExit: { code: 0, signal: null },
+        finalization: 'complete' as const
+      }
     }
   };
 };

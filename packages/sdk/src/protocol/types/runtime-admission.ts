@@ -255,7 +255,7 @@ export type RetrievedAdmission =
       readonly execution: BoundExecution;
       readonly retrievedOutcome: LaunchOutcome;
       /** Custodied cleanup proof which, unlike a successful spawn, is terminal. */
-      readonly terminalOutcome?: RuntimePayload<'execution.cleanupComplete'>;
+      readonly terminalOutcome?: RuntimePayload<'execution.cleanupResult'>;
     }
   | {
       readonly status: 'rejected';

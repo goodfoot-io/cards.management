@@ -46,7 +46,7 @@ export interface RecordInputOverrides {
 }
 
 /**
- * Builds a valid record input carrying a real `execution.cleanupComplete` envelope.
+ * Builds a valid record input carrying a real `execution.cleanupResult` envelope.
  *
  * @param overrides - Fields to vary; everything else is canonical.
  * @returns A record input the store will accept.
@@ -69,8 +69,16 @@ export function makeRecordInput(overrides: RecordInputOverrides = {}): OutboxRec
       scope: { repositoryId: 'github.com/org/repo', workspacePath: '/workspace', cardId: 'main-1' },
       producer: { producerId: 'wrapper-1', role: 'runtime-wrapper' },
       ownership: { ownerId: 'wrapper-1', generation: 1 },
-      type: 'execution.cleanupComplete',
-      payload: { exitCode: 0, signal: null, lifecycleState: 'completed', statusMutationDeferred: false }
+      type: 'execution.cleanupResult',
+      payload: {
+        terminalDecisionId: 'terminal:exec-1',
+        observationId: 'obs-1',
+        trigger: 'root-exit',
+        status: 'drained',
+        phase: 'graceful',
+        rootExit: { code: 0, signal: null },
+        finalization: 'complete'
+      }
     }
   };
 }
