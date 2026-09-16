@@ -10,7 +10,8 @@
  * @module
  */
 
-import { type ChildProcess, spawn } from 'node:child_process';
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -24,6 +25,7 @@ import {
   resolveLogFilePath
 } from '@cards.management/sdk/config';
 import { cleanupMergedBranches, errorMessage } from './claude-session.js';
+import { resolveDetachedNodeInterpreter } from './detached-node.js';
 import {
   createProcessTreeAuthority,
   type ProcessTreeAuthority,
@@ -83,6 +85,169 @@ export function resolveInterimSelfWatcherPath(): string {
 }
 
 /**
+ * True when `watcherPath` is a JS/TS module — the interim self-invocation
+ * shim ({@link resolveInterimSelfWatcherPath}'s result) — rather than an
+ * installed binary wrapper (`branch-cleanup-watcher`/`.cmd`, resolved from
+ * `sdk-protocol`'s `resolveBranchCleanupWatcher`). The two require different
+ * spawn forms: a module is run under a Node interpreter (`node <path>`), a
+ * wrapper is exec'd directly ({@link resolveWatcherSpawnPlan}).
+ *
+ * @param watcherPath - The path passed to {@link spawnBranchCleanupWatcher}.
+ * @returns Whether the path is a spawnable JS/TS module.
+ */
+function isModuleWatcherPath(watcherPath: string): boolean {
+  return /\.(?:mjs|cjs|js|ts)$/iu.test(watcherPath);
+}
+
+/**
+ * Probes whether a POSIX wrapper command is launchable.
+ *
+ * - **Absolute path:** verified with `fs.existsSync` (the file either exists at
+ *   the resolved location or it does not).
+ * - **Bare name (PATH lookup):** resolved with `sh -c 'command -v "$1"'`, which
+ *   exits 0 only when the name is found on PATH.
+ *
+ * (win32 resolution does not use this — see {@link resolveWin32WatcherMjs}.)
+ *
+ * @param command - Absolute path or bare wrapper name to probe.
+ * @returns True when the command is launchable.
+ */
+function isPosixWrapperAvailable(command: string): boolean {
+  if (path.isAbsolute(command)) {
+    return existsSync(command);
+  }
+  const probe = spawnSync('sh', ['-c', 'command -v "$1"', 'sh', command], { stdio: 'ignore' });
+  return !probe.error && probe.status === 0;
+}
+
+/**
+ * Resolves the absolute `.mjs` that a `.cmd` wrapper would exec on win32,
+ * from the wrapper reference the caller passed.
+ *
+ * - **Absolute `.cmd` path:** the `.mjs` is the sibling the `.cmd` invokes
+ *   (`%~dp0<name>.mjs`), i.e. the same path with the `.cmd` extension swapped
+ *   for `.mjs`.
+ * - **Bare name:** `where <name>` is run to capture the absolute `.cmd` path
+ *   it resolves to on PATH, then the extension is swapped. `where`'s exit
+ *   status alone is insufficient here — the absolute path is needed to find
+ *   the sibling `.mjs`.
+ *
+ * @param watcher - Absolute `.cmd` path or bare wrapper name.
+ * @returns The absolute `.mjs` path, or `null` when it cannot be resolved or
+ *   the resolved file does not exist.
+ */
+function resolveWin32WatcherMjs(watcher: string): string | null {
+  let cmdPath: string | null = null;
+  if (path.isAbsolute(watcher)) {
+    cmdPath = watcher;
+  } else {
+    const probe = spawnSync('where', [watcher], { encoding: 'utf-8', windowsHide: true });
+    if (probe.error || probe.status !== 0 || typeof probe.stdout !== 'string') return null;
+    cmdPath = probe.stdout.split(/\r?\n/).map((line) => line.trim())[0] || null;
+  }
+  if (!cmdPath) return null;
+
+  const mjsPath = cmdPath.replace(/\.cmd$/iu, '.mjs');
+  if (mjsPath === cmdPath) return null;
+  return existsSync(mjsPath) ? mjsPath : null;
+}
+
+/**
+ * Appends a Node CLI flag to an existing `NODE_OPTIONS` value, if any.
+ *
+ * @param existing - The current `NODE_OPTIONS` value, if the env already sets one.
+ * @param addition - The flag to append (e.g. a `--import=data:` preload argument).
+ * @returns The combined `NODE_OPTIONS` value.
+ */
+function appendNodeOptions(existing: string | undefined, addition: string): string {
+  return existing && existing.length > 0 ? `${existing} ${addition}` : addition;
+}
+
+/** The resolved command, args, and env {@link spawnBranchCleanupWatcher} should spawn. */
+interface WatcherSpawnPlan {
+  command: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+}
+
+/**
+ * Resolves how to spawn `watcherPath`, branching on whether it is the interim
+ * self-invocation module or an installed binary wrapper.
+ *
+ * A module path is run under `node <path> --branch-cleanup` — the flag
+ * distinguishes "run as the entry point" from "imported as a library" for a
+ * file that serves both purposes. A wrapper path is exec'd directly instead:
+ * `node <wrapperPath>` would fail at runtime, since a resolved installed
+ * binary is a shell shim (`branch-cleanup-watcher` on POSIX, `.cmd` on
+ * win32), not a JS module a Node interpreter can load. This mirrors
+ * `spawnStreamSyncWatcher`'s split (POSIX exec's the wrapper directly, win32
+ * resolves a console-subsystem Node interpreter plus the sibling `.mjs` to
+ * avoid a console-window pop through the `.cmd` hop).
+ *
+ * The output-capture preload argument (a Node `--import=data:` flag) is
+ * appended to argv for the module/win32 branches, since both invoke a Node
+ * interpreter directly and control its argv. The POSIX wrapper branch instead
+ * carries it via `NODE_OPTIONS`: the wrapper's `exec "$NODE" ".../*.mjs"
+ * "$@"` has no room to insert a node flag ahead of the script path, but
+ * `--import` is one of the flags Node honors from `NODE_OPTIONS`.
+ *
+ * @param watcherPath - The path {@link spawnBranchCleanupWatcher} was given.
+ * @param preloadArg - The output-capture preload argument, if capture succeeded.
+ * @param baseEnv - The env the child should inherit (already carries `CARDS_HOOKS_LOG_FILE`).
+ * @param logger - Logger for a resolution failure (fail-open: caller skips the spawn).
+ * @param params - Only used for structured failure-log context.
+ * @returns The resolved spawn plan, or `null` when nothing could be resolved.
+ */
+function resolveWatcherSpawnPlan(
+  watcherPath: string,
+  preloadArg: string | undefined,
+  baseEnv: NodeJS.ProcessEnv,
+  logger: ActionContext['logger'],
+  params: BranchCleanupParams
+): WatcherSpawnPlan | null {
+  if (isModuleWatcherPath(watcherPath)) {
+    const args = preloadArg ? [preloadArg, watcherPath, '--branch-cleanup'] : [watcherPath, '--branch-cleanup'];
+    return { command: process.execPath, args, env: baseEnv };
+  }
+
+  if (process.platform === 'win32') {
+    const nodeExe = resolveDetachedNodeInterpreter();
+    if (!nodeExe) {
+      logger.error('Branch-cleanup watcher: no usable Node interpreter — skipping spawn', {
+        watcher: watcherPath,
+        cardId: params.cardId,
+        sessionId: params.sessionId
+      });
+      return null;
+    }
+    const mjs = resolveWin32WatcherMjs(watcherPath);
+    if (!mjs) {
+      logger.error('Branch-cleanup watcher .mjs not resolvable — skipping spawn', {
+        watcher: watcherPath,
+        cardId: params.cardId,
+        sessionId: params.sessionId
+      });
+      return null;
+    }
+    const args = preloadArg ? [preloadArg, mjs] : [mjs];
+    return { command: nodeExe, args, env: baseEnv };
+  }
+
+  if (!isPosixWrapperAvailable(watcherPath)) {
+    logger.error('Branch-cleanup watcher not resolvable — skipping spawn', {
+      watcher: watcherPath,
+      cardId: params.cardId,
+      sessionId: params.sessionId
+    });
+    return null;
+  }
+  const env = preloadArg
+    ? { ...baseEnv, NODE_OPTIONS: appendNodeOptions(baseEnv['NODE_OPTIONS'], preloadArg) }
+    : baseEnv;
+  return { command: watcherPath, args: [], env };
+}
+
+/**
  * Spawns a detached Node.js process that calls {@link cleanupMergedBranches}
  * after receiving serialized parameters via stdin.
  *
@@ -129,13 +294,17 @@ export async function spawnBranchCleanupWatcher(
   logger: ActionContext['logger'],
   watcherPath: string
 ): Promise<void> {
-  const nodeBin = process.execPath;
-
   // Resolve to the exact file the parent's own singleton Logger writes to
   // (same subsystem, same env-driven resolution order), not a hardcoded
   // recomputation that could diverge under a CARDS_HOOKS_LOG_FILE/CARDS_LOG_DIR
   // override.
   const logFilePath = resolveLogFilePath({ subsystem: HOOKS_LOGGER_SUBSYSTEM });
+  // Give the detached child a working Logger target before it has even parsed
+  // stdin — see resolveLogFilePath() in the SDK's Logger, which checks this
+  // env var before falling back to repo-root discovery. Skip setting it
+  // entirely when file logging is disabled (null) rather than passing an
+  // empty/null value.
+  const baseEnv = logFilePath === null ? process.env : { ...process.env, CARDS_HOOKS_LOG_FILE: logFilePath };
 
   const capture = prepareDetachedChildOutputCapture({
     cardId: params.cardId,
@@ -150,15 +319,24 @@ export async function spawnBranchCleanupWatcher(
     });
   }
   const capturePath = capture.ok ? capture.path : null;
-  const childArgs = capture.ok
-    ? [capture.preloadArg, watcherPath, '--branch-cleanup']
-    : [watcherPath, '--branch-cleanup'];
   const outputSink = capture.ok ? capture.fd : 'ignore';
+
+  const spawnPlan = resolveWatcherSpawnPlan(
+    watcherPath,
+    capture.ok ? capture.preloadArg : undefined,
+    baseEnv,
+    logger,
+    params
+  );
+  if (!spawnPlan) {
+    if (capture.ok) capture.close();
+    return;
+  }
 
   let child: ChildProcess;
   try {
     try {
-      child = spawn(nodeBin, childArgs, {
+      child = spawn(spawnPlan.command, spawnPlan.args, {
         detached: true,
         stdio: ['pipe', outputSink, outputSink],
         // Detached, console-less root. On win32 the interpreter is a stock
@@ -167,12 +345,7 @@ export async function spawnBranchCleanupWatcher(
         // descriptor used for output capture remains compatible with this mode.
         // No-op on POSIX.
         windowsHide: true,
-        // Give the detached child a working Logger target before it has even
-        // parsed stdin — see resolveLogFilePath() in the SDK's Logger, which
-        // checks this env var before falling back to repo-root discovery. Skip
-        // setting it entirely when file logging is disabled (null) rather than
-        // passing an empty/null value.
-        env: logFilePath === null ? process.env : { ...process.env, CARDS_HOOKS_LOG_FILE: logFilePath }
+        env: spawnPlan.env
       });
     } finally {
       if (capture.ok) capture.close();

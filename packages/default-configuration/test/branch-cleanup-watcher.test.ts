@@ -23,7 +23,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  */
 
 vi.mock('node:child_process', () => ({
-  spawn: vi.fn()
+  spawn: vi.fn(),
+  spawnSync: vi.fn()
+}));
+
+// Wraps `existsSync` in a spy that forwards to the real implementation by
+// default (most tests spawn the interim `.js` module path, which never calls
+// `existsSync`, but the real `Logger`/detached-output-capture machinery uses
+// other `node:fs` exports synchronously and must not be replaced wholesale).
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
+
+vi.mock('../src/lib/detached-node.js', () => ({
+  resolveDetachedNodeInterpreter: vi.fn()
 }));
 
 vi.mock('@cards.management/sdk/client/discovery', () => ({
@@ -519,6 +533,175 @@ describe('spawnBranchCleanupWatcher', () => {
       );
       // Fail-open: the spawn itself still happened despite the marker failure.
       expect(spawn).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('installed-binary wrapper resolution', () => {
+    // Unlike `watcherPath` above (a `.js` module — the interim self-invocation
+    // shim), a resolved installed binary has no JS extension on POSIX
+    // (`branch-cleanup-watcher`) and `.cmd` on win32 — `node <path>` cannot run
+    // either, so these must be spawned via the wrapper-exec branch.
+    const wrapperPath = '/resolved/dist/bin/branch-cleanup-watcher';
+
+    let savedPlatform: PropertyDescriptor | undefined;
+
+    beforeEach(() => {
+      savedPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+    });
+
+    afterEach(() => {
+      if (savedPlatform) Object.defineProperty(process, 'platform', savedPlatform);
+    });
+
+    function setPlatform(platform: NodeJS.Platform): void {
+      Object.defineProperty(process, 'platform', { value: platform });
+    }
+
+    describe('POSIX', () => {
+      beforeEach(() => setPlatform('linux'));
+
+      it('execs the wrapper directly with no argv and no node interpreter', async () => {
+        const { spawn } = await import('node:child_process');
+        const { existsSync } = await import('node:fs');
+        const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
+
+        vi.mocked(existsSync).mockReturnValue(true);
+        const child = createMockChild();
+        vi.mocked(spawn).mockReturnValue(child);
+
+        const logger = createSpyLogger();
+        const promise = spawnBranchCleanupWatcher(baseParams, logger, wrapperPath);
+        child.emit('exit', 0, null);
+        await promise;
+
+        expect(spawn).toHaveBeenCalledWith(wrapperPath, [], expect.objectContaining({ detached: true }));
+      });
+
+      it('carries the output-capture preload via NODE_OPTIONS instead of argv', async () => {
+        const capturePath = path.join(
+          await fs.mkdtemp(path.join(os.tmpdir(), 'branch-cleanup-capture-')),
+          'detached-output.log'
+        );
+        process.env['CARDS_DETACHED_STDERR_LOG_FILE'] = capturePath;
+
+        const { spawn } = await import('node:child_process');
+        const { existsSync } = await import('node:fs');
+        const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
+
+        vi.mocked(existsSync).mockReturnValue(true);
+        const child = createMockChild();
+        vi.mocked(spawn).mockReturnValue(child);
+
+        const logger = createSpyLogger();
+        const promise = spawnBranchCleanupWatcher(baseParams, logger, wrapperPath);
+        child.emit('exit', 0, null);
+        await promise;
+
+        const [command, args, options] = vi.mocked(spawn).mock.calls[0]!;
+        expect(command).toBe(wrapperPath);
+        expect(args).toEqual([]);
+        const env = (options as { env: Record<string, string> }).env;
+        expect(env['NODE_OPTIONS']).toMatch(/--import=data:text\/javascript,/u);
+      });
+
+      it('skips the spawn and logs an error when the wrapper does not exist', async () => {
+        const { spawn } = await import('node:child_process');
+        const { existsSync } = await import('node:fs');
+        const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
+
+        vi.mocked(existsSync).mockReturnValue(false);
+        const logger = createSpyLogger();
+
+        await spawnBranchCleanupWatcher(baseParams, logger, wrapperPath);
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect(logger.error).toHaveBeenCalledWith(
+          'Branch-cleanup watcher not resolvable — skipping spawn',
+          expect.objectContaining({ watcher: wrapperPath })
+        );
+      });
+    });
+
+    describe('win32', () => {
+      beforeEach(() => setPlatform('win32'));
+
+      it('skips the spawn when no Node interpreter can be resolved', async () => {
+        const { spawn } = await import('node:child_process');
+        const { resolveDetachedNodeInterpreter } = await import('../src/lib/detached-node.js');
+        const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
+
+        vi.mocked(resolveDetachedNodeInterpreter).mockReturnValue(null);
+        const logger = createSpyLogger();
+
+        await spawnBranchCleanupWatcher(baseParams, logger, `${wrapperPath}.cmd`);
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.stringContaining('no usable Node interpreter'),
+          expect.any(Object)
+        );
+      });
+
+      it('spawns node.exe directly with the sibling .mjs and no shell when resolution succeeds', async () => {
+        const { spawn, spawnSync } = await import('node:child_process');
+        const { existsSync } = await import('node:fs');
+        const { prepareDetachedChildOutputCapture } = await import('@cards.management/sdk/config');
+        const { resolveDetachedNodeInterpreter } = await import('../src/lib/detached-node.js');
+        const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
+
+        // Capture failure isolates this test to interpreter/.mjs resolution;
+        // the NODE_OPTIONS-preload carry-through is covered by the POSIX test
+        // above.
+        vi.mocked(prepareDetachedChildOutputCapture).mockReturnValueOnce({
+          ok: false,
+          reason: 'capture directory is unavailable'
+        });
+        vi.mocked(resolveDetachedNodeInterpreter).mockReturnValue('C:\\node.exe');
+        // node:path's isAbsolute() uses the POSIX implementation under a Linux
+        // test runner even with process.platform stubbed to 'win32', so a
+        // `C:\...` wrapper path is not seen as absolute here — the code takes
+        // the `where`-lookup branch.
+        vi.mocked(spawnSync).mockReturnValue({
+          status: 0,
+          error: undefined,
+          stdout: 'C:\\ext\\dist\\bin\\branch-cleanup-watcher.cmd\n'
+        } as never);
+        vi.mocked(existsSync).mockReturnValue(true);
+        const child = createMockChild();
+        vi.mocked(spawn).mockReturnValue(child);
+
+        const logger = createSpyLogger();
+        const promise = spawnBranchCleanupWatcher(baseParams, logger, 'branch-cleanup-watcher.cmd');
+        child.emit('exit', 0, null);
+        await promise;
+
+        expect(spawn).toHaveBeenCalledWith(
+          'C:\\node.exe',
+          ['C:\\ext\\dist\\bin\\branch-cleanup-watcher.mjs'],
+          expect.objectContaining({ detached: true, windowsHide: true })
+        );
+      });
+
+      it('skips the spawn when the sibling .mjs cannot be resolved', async () => {
+        const { spawn, spawnSync } = await import('node:child_process');
+        const { existsSync } = await import('node:fs');
+        const { resolveDetachedNodeInterpreter } = await import('../src/lib/detached-node.js');
+        const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
+
+        vi.mocked(resolveDetachedNodeInterpreter).mockReturnValue('C:\\node.exe');
+        vi.mocked(spawnSync).mockReturnValue({
+          status: 0,
+          error: undefined,
+          stdout: 'C:\\ext\\dist\\bin\\branch-cleanup-watcher.cmd\n'
+        } as never);
+        vi.mocked(existsSync).mockReturnValue(false);
+        const logger = createSpyLogger();
+
+        await spawnBranchCleanupWatcher(baseParams, logger, 'branch-cleanup-watcher.cmd');
+
+        expect(spawn).not.toHaveBeenCalled();
+        expect(logger.error).toHaveBeenCalledWith(expect.stringContaining('.mjs not resolvable'), expect.any(Object));
+      });
     });
   });
 });
