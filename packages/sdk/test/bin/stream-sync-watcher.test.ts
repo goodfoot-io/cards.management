@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseMinimalIdentity, runSession } from '../../src/bin/stream-sync-watcher.js';
+import { createFinalizationController, parseMinimalIdentity, runSession } from '../../src/bin/stream-sync-watcher.js';
 import type { ReconnectingWatcherHandle } from '../../src/config/watcher/reconnectingWatcher.js';
 import type { SessionSyncManifest } from '../../src/transcript-sync/manifest.js';
 
@@ -20,6 +20,68 @@ describe('parseMinimalIdentity', () => {
     expect(parseMinimalIdentity('{bad')).toBeNull();
     expect(parseMinimalIdentity(JSON.stringify({ sessionId: 1, cardId: 'c1' }))).toBeNull();
     expect(parseMinimalIdentity(JSON.stringify({ sessionId: 's1', cardId: '' }))).toBeNull();
+  });
+});
+
+describe('createFinalizationController', () => {
+  it('wakes a pending sleep at once instead of at the end of the tick', async () => {
+    const controller = createFinalizationController(async () => undefined);
+    try {
+      const startedAt = Date.now();
+      const sleeping = controller.sleep(5_000);
+      await controller.requestFinalization('control-stop');
+      await sleeping;
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+      expect(controller.signal.stopped).toBe(true);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it('resolves a sleep started after the request without waiting', async () => {
+    const controller = createFinalizationController(async () => undefined);
+    try {
+      await controller.requestFinalization('local');
+      const startedAt = Date.now();
+      await controller.sleep(5_000);
+      expect(Date.now() - startedAt).toBeLessThan(1_000);
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it('runs the finalizer once however many paths ask, and records the first asker', async () => {
+    let runs = 0;
+    const controller = createFinalizationController(async () => {
+      runs += 1;
+    });
+    try {
+      await Promise.all([
+        controller.requestFinalization('sigterm'),
+        controller.requestFinalization('control-stop'),
+        controller.requestFinalization('local')
+      ]);
+      await controller.requestFinalization('control-stop');
+      expect(runs).toBe(1);
+      expect(controller.trigger).toBe('sigterm');
+    } finally {
+      controller.dispose();
+    }
+  });
+
+  it('finalizes on SIGTERM without any control socket, and stops doing so once disposed', async () => {
+    let runs = 0;
+    const controller = createFinalizationController(async () => {
+      runs += 1;
+    });
+    process.emit('SIGTERM');
+    await controller.requestFinalization('local');
+    expect(runs).toBe(1);
+    expect(controller.trigger).toBe('sigterm');
+
+    const listenersBefore = process.listenerCount('SIGTERM');
+    controller.dispose();
+    expect(process.listenerCount('SIGTERM')).toBe(listenersBefore - 1);
   });
 });
 

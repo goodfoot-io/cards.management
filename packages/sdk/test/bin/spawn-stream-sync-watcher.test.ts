@@ -112,7 +112,7 @@ describe('spawnStreamSyncWatcher', () => {
       expect(mockSpawn).toHaveBeenCalledWith(
         '/ext/dist/bin/stream-sync-watcher',
         [JSON.stringify(manifest)],
-        expect.objectContaining({ detached: true, stdio: 'ignore' })
+        expect.objectContaining({ detached: false, stdio: 'ignore' })
       );
       expect(child.unref).toHaveBeenCalledOnce();
     });
@@ -128,7 +128,7 @@ describe('spawnStreamSyncWatcher', () => {
       expect(mockSpawn).toHaveBeenCalledWith(
         'stream-sync-watcher',
         [JSON.stringify(manifest)],
-        expect.objectContaining({ detached: true, stdio: 'ignore' })
+        expect.objectContaining({ detached: false, stdio: 'ignore' })
       );
     });
 
@@ -193,7 +193,7 @@ describe('spawnStreamSyncWatcher', () => {
       expect(mockSpawn).toHaveBeenCalledWith(
         'C:\\node.exe',
         ['C:\\ext\\dist\\bin\\stream-sync-watcher.mjs', JSON.stringify(manifest)],
-        expect.objectContaining({ detached: true, stdio: 'ignore', windowsHide: true })
+        expect.objectContaining({ detached: false, stdio: 'ignore', windowsHide: true })
       );
     });
 

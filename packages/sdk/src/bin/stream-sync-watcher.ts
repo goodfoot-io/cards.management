@@ -97,11 +97,58 @@ export interface FinalizationController {
  *
  * @param finalize - The session's existing finalizer; invoked at most once.
  * @returns A controller whose `signal` and `sleep` drive {@link runWatcherLoop}.
- * @throws {Error} Always, until the controller is implemented.
  */
 export function createFinalizationController(finalize: () => Promise<void>): FinalizationController {
-  void finalize;
-  throw new Error('Not Implemented');
+  interface SleepWaiter {
+    readonly resolve: () => void;
+    timer: ReturnType<typeof setTimeout> | undefined;
+  }
+
+  const signal = { stopped: false };
+  const waiters = new Set<SleepWaiter>();
+  let trigger: FinalizationTrigger | null = null;
+  let settlement: Promise<void> | null = null;
+
+  function requestFinalization(requested: FinalizationTrigger): Promise<void> {
+    trigger ??= requested;
+    signal.stopped = true;
+    for (const waiter of [...waiters]) {
+      waiters.delete(waiter);
+      if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+      waiter.resolve();
+    }
+    settlement ??= finalize();
+    return settlement;
+  }
+
+  const onSigterm = (): void => {
+    void requestFinalization('sigterm');
+  };
+  process.on('SIGTERM', onSigterm);
+
+  return {
+    signal,
+    sleep: (ms) =>
+      new Promise<void>((resolve) => {
+        if (signal.stopped) {
+          resolve();
+          return;
+        }
+        const waiter: SleepWaiter = { resolve, timer: undefined };
+        waiter.timer = setTimeout(() => {
+          waiters.delete(waiter);
+          resolve();
+        }, ms);
+        waiters.add(waiter);
+      }),
+    get trigger(): FinalizationTrigger | null {
+      return trigger;
+    },
+    requestFinalization,
+    dispose: () => {
+      process.off('SIGTERM', onSigterm);
+    }
+  };
 }
 
 /** Minimal identity extracted from the raw manifest argv for registration purposes only. */
@@ -277,20 +324,17 @@ async function runPollSession(manifest: SessionSyncManifest, handle: Reconnectin
     }
   };
 
-  const signal = { stopped: false };
-  ctx.onControl('stop', async () => {
-    signal.stopped = true;
-    await closeSession();
-  });
+  const controller = createFinalizationController(closeSession);
+  ctx.onControl('stop', () => controller.requestFinalization('control-stop'));
 
   ctx.emit({ type: 'watching', data: null });
 
-  const { maxLifetimeExceeded, stopRequested } = await runWatcherLoop({
-    signal,
+  const { maxLifetimeExceeded } = await runWatcherLoop({
+    signal: controller.signal,
     checkSentinel: () => sentinelExists(manifest),
     checkAlive: () => isProcessAlive(manifest.monitorPid),
     now: () => Date.now(),
-    sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    sleep: controller.sleep,
     onMaxLifetime: () =>
       warnFn(`stream-sync-watcher: exceeded maximum lifetime (${String(MAX_LIFETIME_MS)}ms), exiting`),
     onTick: async () => {
@@ -312,22 +356,25 @@ async function runPollSession(manifest: SessionSyncManifest, handle: Reconnectin
         // Named terminal outcomes — never a hang or silent vanish.
         errorFn(`stream-sync-watcher: ${outcome.detail}`);
         ctx.emit({ type: 'error', data: { message: outcome.detail } });
-        signal.stopped = true;
-        await closeSession();
+        await controller.requestFinalization('local');
         return 0;
       }
       return SQLITE_POLL_STEADY_INTERVAL_MS;
     }
   });
 
-  if (stopRequested) {
-    await handle.waitForStop();
-  } else {
-    await closeSession();
+  try {
+    if (controller.trigger === 'control-stop') {
+      await handle.waitForStop();
+      return;
+    }
+    await controller.requestFinalization('local');
     if (!maxLifetimeExceeded) {
       cleanupSessionArtifacts(manifest.sessionId, warnFn);
     }
     handle.shutdown();
+  } finally {
+    controller.dispose();
   }
 }
 
@@ -382,20 +429,17 @@ export async function runSession(manifest: SessionSyncManifest, handle: Reconnec
 
   await watchInstaller.tryInstall();
 
-  const signal = { stopped: false };
-  ctx.onControl('stop', async () => {
-    signal.stopped = true;
-    await closeSession();
-  });
+  const controller = createFinalizationController(closeSession);
+  ctx.onControl('stop', () => controller.requestFinalization('control-stop'));
 
   ctx.emit({ type: 'watching', data: null });
 
-  const { maxLifetimeExceeded, stopRequested } = await runWatcherLoop({
-    signal,
+  const { maxLifetimeExceeded } = await runWatcherLoop({
+    signal: controller.signal,
     checkSentinel: () => sentinelExists(manifest),
     checkAlive: () => isProcessAlive(manifest.monitorPid),
     now: () => Date.now(),
-    sleep: (ms) => new Promise<void>((resolve) => setTimeout(resolve, ms)),
+    sleep: controller.sleep,
     onMaxLifetime: () =>
       warnFn(`stream-sync-watcher: exceeded maximum lifetime (${String(MAX_LIFETIME_MS)}ms), exiting`),
     onTick: async () => {
@@ -424,24 +468,29 @@ export async function runSession(manifest: SessionSyncManifest, handle: Reconnec
     }
   });
 
-  if (stopRequested) {
-    // The onControl('stop', ...) callback above already ran closeSession()
-    // and the reconnecting watcher's own stop machinery still needs to send
-    // the stop-ack and end the socket after that callback resolves. Wait for
-    // it instead of racing it — calling handle.shutdown() here could destroy
-    // the socket before the stop-ack goes out.
-    await handle.waitForStop();
-  } else {
-    await closeSession();
+  try {
+    if (controller.trigger === 'control-stop') {
+      // The control callback already finalized, and the reconnecting watcher's
+      // own stop machinery still needs to send the stop-ack and end the socket.
+      // Wait for it instead of racing it — calling handle.shutdown() here could
+      // destroy the socket before the stop-ack goes out. Only a remote stop
+      // produces that ack; a signal or a local terminal outcome must not wait
+      // on a peer that was never asked.
+      await handle.waitForStop();
+      return;
+    }
+    await controller.requestFinalization('local');
     if (!maxLifetimeExceeded) {
       cleanupSessionArtifacts(manifest.sessionId, warnFn);
     }
     handle.shutdown();
+  } finally {
+    controller.dispose();
   }
 }
 
 /**
- * Main entry point for the detached stream-sync-watcher process.
+ * Main entry point for the stream-sync-watcher process.
  *
  * argv contract: exactly one argument, `process.argv[2]`, holding the
  * serialized manifest JSON produced by

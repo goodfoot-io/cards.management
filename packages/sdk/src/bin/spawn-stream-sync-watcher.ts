@@ -1,6 +1,6 @@
 /**
- * Extracted helper for spawning the detached, manifest-driven
- * `stream-sync-watcher` subprocess.
+ * Extracted helper for spawning the manifest-driven `stream-sync-watcher`
+ * subprocess inside the caller's own session.
  *
  * Shared between the Claude Code and Codex SessionStart hooks (launch-mode,
  * resolving the wrapper by absolute path under the extension's `dist/bin`)
@@ -10,7 +10,7 @@
  * with `shell: false` throughout (never string-concatenated), which is safe
  * regardless of quotes/spaces inside the JSON payload.
  *
- * @summary Spawn the detached, manifest-driven stream-sync-watcher subprocess
+ * @summary Spawn the manifest-driven stream-sync-watcher in the caller's session
  * @module
  */
 
@@ -138,17 +138,20 @@ export interface SpawnStreamSyncWatcherOptions {
 }
 
 /**
- * Spawns a detached stream-sync-watcher process for crash-resilient
- * transcript upload, driven entirely by the supplied manifest.
+ * Spawns a stream-sync-watcher process for crash-resilient transcript upload,
+ * driven entirely by the supplied manifest.
  *
- * Process hygiene: detached,
- * `stdio: 'ignore'`, `unref()`'d, and — on win32 — spawned as `node.exe
- * <stream-sync-watcher.mjs> <manifestJson>` with no shell and no `.cmd` hop
- * (avoiding a console-window pop in the detached tree), using the same
- * fail-closed interpreter resolution (`VSCODE_NODE` env → `~/.cards/VSCODE_NODE`
- * file → PATH `node`). On resolution failure the spawn is skipped (logged),
- * never silently routed through a shell. POSIX exec's the extension-less
- * wrapper script directly.
+ * Process hygiene: **not** detached, so the watcher stays in the spawning
+ * action's session and a session-wide terminate reaches it — the only signal
+ * path that does not depend on a control socket still being answered. It is
+ * still `unref()`'d and `stdio: 'ignore'`, so a short-lived hook can exit
+ * without waiting on a watcher that may live for hours. On win32 it is spawned
+ * as `node.exe <stream-sync-watcher.mjs> <manifestJson>` with no shell and no
+ * `.cmd` hop (avoiding a console-window pop), using the same fail-closed
+ * interpreter resolution (`VSCODE_NODE` env → `~/.cards/VSCODE_NODE` file →
+ * PATH `node`). On resolution failure the spawn is skipped (logged), never
+ * silently routed through a shell. POSIX exec's the extension-less wrapper
+ * script directly.
  *
  * @param options - The manifest to serialize, optional extension path for
  *   launch-mode resolution, and an optional logger.
@@ -168,7 +171,7 @@ export function spawnStreamSyncWatcher(options: SpawnStreamSyncWatcherOptions): 
 
   if (process.platform === 'win32') {
     // Resolve a console-subsystem interpreter and the sibling .mjs, then spawn
-    // directly — no `.cmd`, no shell — so the detached tree stays windowless.
+    // directly — no `.cmd`, no shell — so the spawned tree stays windowless.
     const nodeExe = resolveDetachedNodeInterpreter();
     if (!nodeExe) {
       logger.error('stream-sync-watcher: no usable Node interpreter — skipping spawn', {
@@ -189,7 +192,7 @@ export function spawnStreamSyncWatcher(options: SpawnStreamSyncWatcherOptions): 
     }
 
     const child = spawn(nodeExe, [mjs, ...spawnArgs], {
-      detached: true,
+      detached: false,
       stdio: 'ignore',
       env: { ...process.env },
       windowsHide: true
@@ -219,7 +222,7 @@ export function spawnStreamSyncWatcher(options: SpawnStreamSyncWatcherOptions): 
   }
 
   const child = spawn(watcher, spawnArgs, {
-    detached: true,
+    detached: false,
     stdio: 'ignore',
     env: { ...process.env }
   });
