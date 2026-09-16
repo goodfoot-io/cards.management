@@ -107,8 +107,6 @@ export interface RuntimeClientOptions {
  * reconciliation would be acting on a revision the server has already moved past.
  */
 export interface SynchronizationReport {
-  /** Server's current work revision, the fence every readiness claim is scoped to. */
-  readonly workRevision: number;
   /** Durable obligations the client still holds and must replay. */
   readonly pendingMessageIds: readonly string[];
   /** Obligations the server confirmed it already accepted; these retire locally. */
@@ -173,9 +171,6 @@ export type SendOutcome =
   | {
       readonly status: 'accepted';
       readonly messageId: string;
-      readonly workAdmission?:
-        | { readonly status: 'admitted'; readonly workRevision: number }
-        | { readonly status: 'rejected'; readonly reason: 'drainBarrierHeld'; readonly barrierHolderId: string };
     }
   | { readonly status: 'completed'; readonly messageId: string; readonly payload: unknown }
   | { readonly status: 'rejected'; readonly messageId: string; readonly reason: SendRejectionReason }

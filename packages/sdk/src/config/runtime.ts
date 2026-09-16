@@ -383,7 +383,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             type: 'runtime.capabilities',
             payload: {
               revision: 1,
-              capabilities: { switchToInteractive: true, agentShutdown: false, strictDrainBarrier: true }
+              capabilities: { switchToInteractive: true }
             },
             messageId: `${loaded.execution.executionId}:agent-handler:switch-capability`,
             requestId: loaded.credential.requestId,
@@ -394,7 +394,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
 
       runtimeClient = createRuntimeClientFromCredentialFile({
         role: 'agent-handler',
-        capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: true },
+        capabilities: { switchToInteractive: false },
         outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
         discover: async () => {
           const info = await discoverApiInfo();

@@ -190,7 +190,7 @@ export async function createReconnectingWatcher(registration: WatcherRegistratio
 
   client = createRuntimeClientFromCredentialFile({
     role: 'watcher',
-    capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
+    capabilities: { switchToInteractive: false },
     outbox,
     discover: async () => {
       const info = await discoverApiInfo();

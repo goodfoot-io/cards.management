@@ -43,12 +43,10 @@ export const OUTBOX_SCHEMA_VERSION = 1;
  * Delivery classes the outbox will store.
  *
  * Only durable intents and durable results are retained until acknowledged, which
- * is exactly what makes a local copy meaningful. Revocable readiness is excluded
- * on purpose even though it shares the retain-until-acknowledged flag: readiness
- * is evidence about a moment, and replaying it from disk after a crash would
- * re-assert that an agent was idle at a revision that has since advanced — the
- * false-idle claim the drain barrier exists to refuse. Readiness is re-established
- * on reconnect, never recovered.
+ * is exactly what makes a local copy meaningful. Reconciled snapshots and disposable
+ * telemetry are excluded on purpose: both are claims about a moment, and replaying
+ * one from disk after a crash would re-assert a state the producer is no longer
+ * observing. They are re-established on reconnect, never recovered.
  */
 export const OUTBOX_DELIVERY_CLASSES = ['durable-intent', 'durable-result'] as const;
 

@@ -6,18 +6,17 @@ import type { SynchronizationReport } from './types.js';
  * The explicit phase between a registered socket and a usable one.
  *
  * Registration proves who the client is; it does not establish what either side already
- * knows. Until that is settled the client holds two stale beliefs — an old work revision,
- * and a set of durable obligations it cannot tell apart from ones the server already
- * accepted. Delivering new work on top of either is how a duplicate effect happens, so the
- * barrier below is a correctness boundary rather than a startup nicety.
+ * knows. Until that is settled the client holds a set of durable obligations it cannot tell
+ * apart from ones the server already accepted. Delivering new work on top of them is how a
+ * duplicate effect happens, so the barrier below is a correctness boundary rather than a
+ * startup nicety.
  *
- * @summary Reconciles revision, pending obligations, and recovered records before new work
+ * @summary Reconciles pending obligations and recovered records before new work
  * @module
  */
 
 /** What the server reported in response to `runtime.resume`. */
 export interface ResumeAcknowledgment {
-  readonly workRevision: number;
   /** Obligations the server has already durably accepted; the client retires exactly these. */
   readonly acceptedMessageIds: readonly string[];
 }
@@ -79,7 +78,6 @@ export async function synchronize(input: SynchronizationInput): Promise<Synchron
   }
 
   return {
-    workRevision: input.acknowledgment.workRevision,
     acceptedMessageIds: outstanding.filter((id) => accepted.has(id)),
     pendingMessageIds: outstanding.filter((id) => !accepted.has(id)),
     reconciliation
@@ -89,9 +87,9 @@ export async function synchronize(input: SynchronizationInput): Promise<Synchron
 /**
  * Collects the message ids this client still owes, for the `runtime.resume` payload.
  *
- * Readiness never appears here: the outbox excludes it by delivery class, because a
- * readiness record replayed from disk cannot distinguish itself from a fresh observation
- * of idleness and would read as a false idle claim.
+ * Only durable classes appear here: the outbox excludes disposable telemetry by delivery
+ * class, because a telemetry record replayed from disk claims an observation the client is
+ * no longer making.
  *
  * @param outbox - The client's durable outbox.
  * @param executionId - Execution whose obligations to collect.

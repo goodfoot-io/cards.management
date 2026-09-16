@@ -65,6 +65,15 @@ describe('findLifecycleTransition', () => {
     expect(findLifecycleTransition(null, 'execution.launchRequest', [])).toBeUndefined();
   });
 
+  it('drains on a routed terminal close exactly as it does on a shutdown request', () => {
+    expect(findLifecycleTransition('running', 'execution.terminalCloseRequest', ['ownership-current'])).toMatchObject({
+      to: 'draining'
+    });
+    expect(
+      findLifecycleTransition('completed', 'execution.terminalCloseRequest', ['ownership-current'])
+    ).toBeUndefined();
+  });
+
   it('refuses a trigger that is not legal from the current state', () => {
     expect(findLifecycleTransition('completed', 'execution.shutdownRequest', ['ownership-current'])).toBeUndefined();
   });

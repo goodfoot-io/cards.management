@@ -262,6 +262,22 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: false,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
+  // The routed half of terminal-close. A real HUP/TERM reaches the wrapper as a
+  // signal and surfaces as `execution.cleanupResult` with `trigger: 'terminal-close'`;
+  // a terminal the user closed in the UI has no signal to send, so the extension
+  // reports it here and the server turns both into the same terminal decision.
+  // Only the dispatcher may: a closed terminal is something the UI observes.
+  'execution.terminalCloseRequest': {
+    type: 'execution.terminalCloseRequest',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-intent',
+    allowedRoles: ['extension-dispatcher'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: false,
+    requiresOwnershipCurrent: false,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   // Addressed to the one wrapper that currently owns the execution. Nothing in
   // the payload says so: the envelope's execution scope and ownership fence are
   // what refuse a superseded wrapper, and `requiresOwnershipCurrent` is what
@@ -285,28 +301,6 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     executionRequirement: 'admitted',
     requiresRequestId: true,
     requiresCausationId: true,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
-  'execution.shutdownReadiness': {
-    type: 'execution.shutdownReadiness',
-    direction: 'client-to-server',
-    deliveryClass: 'revocable-readiness',
-    allowedRoles: ['agent-hook', 'agent-handler'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: false,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
-  'execution.workAdmission': {
-    type: 'execution.workAdmission',
-    direction: 'client-to-server',
-    deliveryClass: 'durable-intent',
-    allowedRoles: ['agent-hook'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: false,
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },

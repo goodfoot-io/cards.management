@@ -115,9 +115,9 @@ describe('outbox store', () => {
     });
 
     it('refuses a delivery class the outbox will not retain', async () => {
-      const readiness = { ...makeRecordInput(), deliveryClass: 'revocable-readiness' as never };
+      const telemetry = { ...makeRecordInput(), deliveryClass: 'disposable-telemetry' as never };
 
-      await expect(outbox.enqueue(readiness)).rejects.toThrow(/delivery class/);
+      await expect(outbox.enqueue(telemetry)).rejects.toThrow(/delivery class/);
       expect(countRecordFiles(root)).toBe(0);
     });
 

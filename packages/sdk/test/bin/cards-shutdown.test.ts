@@ -3,7 +3,7 @@
  * @summary Runtime-native shutdown CLI tests
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -90,41 +90,37 @@ describe('cards shutdown verb', () => {
     return server;
   }
 
-  it('exits successfully only after durable acceptance and persists no socket address', async () => {
+  it('exits successfully only after durable acceptance, under the execution canonical decision id', async () => {
     await startRuntime();
     expect(await runCli(['--outcome', 'blocked', '--message', 'waiting'])).toEqual({ stderr: '', status: 0 });
     const request = server?.received.find((item) => item.type === 'execution.shutdownRequest');
     expect(request).toMatchObject({
-      requestId: expect.any(String),
-      messageId: expect.any(String),
+      requestId: 'terminal:exec-1',
+      messageId: 'terminal:exec-1',
       execution: { executionId: 'exec-1' },
       producer: { role: 'cli', producerId: 'cli-1' },
       payload: { outcome: 'blocked', message: 'waiting' }
     });
-    const markerPath = join(cardsHome, 'card-repo-commits', `${encodeURIComponent(sessionId)}.shutdown-request.json`);
-    const marker = JSON.parse(readFileSync(markerPath, 'utf8')) as Record<string, unknown>;
-    expect(marker).toMatchObject({ requestId: request?.requestId, messageId: request?.messageId, outcome: 'blocked' });
-    expect(marker).not.toHaveProperty('socketPath');
   });
 
-  it('reuses stable ids after an uncertain short-lived attempt', async () => {
-    expect((await runCli([])).status).not.toBe(0);
-    const markerPath = join(cardsHome, 'card-repo-commits', `${encodeURIComponent(sessionId)}.shutdown-request.json`);
-    const initial = JSON.parse(readFileSync(markerPath, 'utf8')) as Record<string, unknown>;
-    expect((await runCli([])).status).not.toBe(0);
-    const replay = JSON.parse(readFileSync(markerPath, 'utf8')) as Record<string, unknown>;
-    expect(replay).toMatchObject({ requestId: initial['requestId'], messageId: initial['messageId'] });
+  it('presents the same identity on a retry, with no local marker to consult', async () => {
+    await startRuntime();
+    expect((await runCli([])).status).toBe(0);
+    expect((await runCli([])).status).toBe(0);
+    const requests = server?.received.filter((item) => item.type === 'execution.shutdownRequest') ?? [];
+    expect(requests).toHaveLength(2);
+    expect(requests.map((item) => item.messageId)).toEqual(['terminal:exec-1', 'terminal:exec-1']);
+    expect(existsSync(join(cardsHome, 'card-repo-commits'))).toBe(false);
   });
 
-  it('fails closed without runtime while retaining the retry id', async () => {
+  it('fails closed without runtime while naming the retry identity', async () => {
     const result = await runCli([]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('runtime unavailable');
-    const markerPath = join(cardsHome, 'card-repo-commits', `${encodeURIComponent(sessionId)}.shutdown-request.json`);
-    expect(JSON.parse(readFileSync(markerPath, 'utf8'))).toMatchObject({ requestId: expect.any(String) });
+    expect(result.stderr).toContain('terminal:exec-1');
   });
 
-  it('rejects invalid outcomes before creating pending state', async () => {
+  it('rejects invalid outcomes before contacting the runtime', async () => {
     const result = await runCli(['--outcome', 'maybe']);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('invalid --outcome');

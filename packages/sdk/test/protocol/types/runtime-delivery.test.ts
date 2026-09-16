@@ -2,21 +2,19 @@ import { describe, expect, it } from 'vitest';
 import { deliveryClassFor } from '../../../src/protocol/types/runtime-authorization.js';
 import type { DurableIntentRecord, DurableResultRecord } from '../../../src/protocol/types/runtime-delivery.js';
 import {
-  authorizeTermination,
   canRetireDurableResult,
   DELIVERY_CLASS_POLICIES,
   evaluateDisposableTelemetry,
   evaluateDurableIntent,
   evaluateDurableResult,
-  evaluateReadinessReceipt,
   evaluateReconciledSnapshot
 } from '../../../src/protocol/types/runtime-delivery.js';
 
 /**
- * Exercises the five delivery classes in the types area through one representative message each.
+ * Exercises the four delivery classes in the types area through one representative message each.
  * The cases pin what a duplicate means, what may be dropped, and what may count as evidence that
  * work finished, so the class rather than the individual handler decides — which is what stops a
- * replayed readiness record from terminating an agent that has since started new work.
+ * replayed cleanup result from re-finalizing an execution that has already been journaled.
  *
  * @summary Tests delivery-class acceptance and replay semantics in types
  */
@@ -25,7 +23,6 @@ describe('delivery-class assignment', () => {
   it('assigns each representative message to the class under test', () => {
     expect(deliveryClassFor('runtime.liveness')).toBe('reconciled-snapshot');
     expect(deliveryClassFor('execution.executeRequest')).toBe('durable-intent');
-    expect(deliveryClassFor('execution.shutdownReadiness')).toBe('revocable-readiness');
     expect(deliveryClassFor('execution.cleanupResult')).toBe('durable-result');
     expect(deliveryClassFor('watcher.telemetry')).toBe('disposable-telemetry');
   });
@@ -90,128 +87,6 @@ describe('durable intent, via execution.executeRequest', () => {
       outcome: { exitCode: 0 }
     };
     expect(evaluateDurableIntent('msg-1', record).disposition).toBe('replay-recorded-outcome');
-  });
-});
-
-describe('revocable readiness, via execution.shutdownReadiness', () => {
-  it('accepts current readiness as durably stored evidence', () => {
-    expect(
-      evaluateReadinessReceipt({ evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 }, 7).disposition
-    ).toBe('accept');
-  });
-
-  it('stores superseded readiness but requires revalidation before it authorizes anything', () => {
-    expect(
-      evaluateReadinessReceipt({ evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 6 }, 7).disposition
-    ).toBe('require-revalidation');
-  });
-
-  it('authorizes termination only with current readiness and a held drain', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        currentWorkRevision: 7,
-        consumedEvidenceIds: [],
-        drain: { workRevision: 7, barrierHeld: true }
-      })
-    ).toEqual({ authorized: true });
-  });
-
-  it('refuses termination when no readiness was ever recorded', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: undefined,
-        currentWorkRevision: 7,
-        consumedEvidenceIds: [],
-        drain: { workRevision: 7, barrierHeld: true }
-      })
-    ).toEqual({ authorized: false, reason: 'no-readiness-recorded' });
-  });
-
-  it('refuses readiness recorded against a different shutdown request', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-2',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        currentWorkRevision: 7,
-        consumedEvidenceIds: [],
-        drain: { workRevision: 7, barrierHeld: true }
-      })
-    ).toEqual({ authorized: false, reason: 'readiness-for-other-request' });
-  });
-
-  it('refuses evidence already spent authorizing a termination, even with no new work', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        consumedEvidenceIds: ['ev-1'],
-        currentWorkRevision: 7,
-        drain: { workRevision: 7, barrierHeld: true }
-      })
-    ).toEqual({ authorized: false, reason: 'readiness-already-consumed' });
-  });
-
-  it('authorizes fresh evidence even when earlier evidence was already consumed', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-2', shutdownRequestId: 'sd-1', workRevision: 7 },
-        consumedEvidenceIds: ['ev-1'],
-        currentWorkRevision: 7,
-        drain: { workRevision: 7, barrierHeld: true }
-      })
-    ).toEqual({ authorized: true });
-  });
-
-  it('refuses a replayed readiness record once new work has started', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        currentWorkRevision: 8,
-        consumedEvidenceIds: [],
-        drain: { workRevision: 8, barrierHeld: true }
-      })
-    ).toEqual({ authorized: false, reason: 'readiness-superseded' });
-  });
-
-  it('refuses termination when no drain is held', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        currentWorkRevision: 7,
-        consumedEvidenceIds: [],
-        drain: undefined
-      })
-    ).toEqual({ authorized: false, reason: 'drain-missing' });
-  });
-
-  it('refuses a drain established for an earlier revision', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        currentWorkRevision: 7,
-        consumedEvidenceIds: [],
-        drain: { workRevision: 6, barrierHeld: true }
-      })
-    ).toEqual({ authorized: false, reason: 'drain-stale' });
-  });
-
-  it('refuses a drain whose new-work barrier has been released', () => {
-    expect(
-      authorizeTermination({
-        shutdownRequestId: 'sd-1',
-        readiness: { evidenceId: 'ev-1', shutdownRequestId: 'sd-1', workRevision: 7 },
-        currentWorkRevision: 7,
-        consumedEvidenceIds: [],
-        drain: { workRevision: 7, barrierHeld: false }
-      })
-    ).toEqual({ authorized: false, reason: 'barrier-not-held' });
   });
 });
 

@@ -38,8 +38,6 @@ import {
   type RuntimeActionLaunchResult
 } from '@cards.management/sdk/client/runtime';
 import { createFileClientOutbox, resolveOutboxRoot } from '@cards.management/sdk/client/runtime/outbox';
-import { readPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
-import { CARDS_ENV_VARS } from '@cards.management/sdk/config/env';
 import { buildCardRepoLogBlock, buildWorkspaceRepoLogBlocks } from '@cards.management/sdk/context';
 import {
   type CardCommit,
@@ -47,7 +45,8 @@ import {
   CODING_AGENT_IDS,
   type CodingAgentId,
   type ExecutionMode,
-  isCodingAgentId
+  isCodingAgentId,
+  terminalDecisionId
 } from '@cards.management/sdk/protocol';
 import { DERIVED_TAGS, filterCardsByTags, parseSearchQuery } from '@cards.management/sdk/search-utils';
 import { resolveRuntime, resolveSessionId, resolveTranscriptPath } from '@cards.management/sdk/session-resolver';
@@ -1387,9 +1386,10 @@ type ShutdownOutcome = (typeof SHUTDOWN_OUTCOMES)[number];
 /**
  * Signals "the agent is done" from inside a running action.
  *
- * Connects to the authenticated shared runtime using protected role
- * credentials and waits for durable acceptance. Endpoint addresses are
- * rediscovered and never persisted in the pending request marker.
+ * Connects to the authenticated shared runtime using protected role credentials
+ * and waits for durable acceptance. Retry identity comes from the credential-bound
+ * execution rather than from any local marker, so a re-run after a lost connection
+ * cannot open a second request against an execution that already has a decision.
  *
  * @param args - Flags after the verb: `--outcome <success|blocked|error>`
  *   (default `success`) and `--message <text>`.
@@ -1405,44 +1405,21 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
   }
   const message = flags['message']?.at(-1);
 
-  const sessionId = await resolveSessionId();
-  if (!sessionId) {
-    console.error(
-      `cards shutdown: no session id could be resolved (checked ${CARDS_ENV_VARS.CARDS_SESSION_ID}, ` +
-        'CLAUDE_CODE_SESSION_ID, CODEX_THREAD_ID, OPENCODE_RUN_ID, CURSOR_TRACE_ID, and agent PID) — ' +
-        'shutdown readiness cannot be correlated.'
-    );
-    process.exitCode = 1;
-    return;
-  }
-
-  const existing = readPendingShutdownRequest(sessionId);
-  if (existing && (existing.outcome !== outcome || existing.message !== message)) {
-    console.error(`cards shutdown: pending request ${existing.requestId} has different parameters.`);
-    process.exitCode = 1;
-    return;
-  }
-  const pending =
-    existing ??
-    ({
-      version: 1,
-      requestId: randomUUID(),
-      messageId: randomUUID(),
-      outcome,
-      ...(message ? { message } : {})
-    } as const);
-  if (!existing) writePendingShutdownRequest(sessionId, pending);
+  const credential = loadRuntimeCredential('cli');
+  // An execution admits exactly one terminal decision, so that decision's canonical id is
+  // also the retry identity: re-running the verb re-presents the same message rather than
+  // opening a second request, and the server answers from the decision it already wrote.
+  const decisionId = terminalDecisionId(credential.execution.executionId);
 
   const info = await discoverApiInfo();
   if (!info) {
-    console.error(`cards shutdown: runtime unavailable; retry request ${pending.requestId}.`);
+    console.error(`cards shutdown: runtime unavailable; retry ${decisionId}.`);
     process.exitCode = 1;
     return;
   }
-  const credential = loadRuntimeCredential('cli');
   const client = createRuntimeClientFromCredentialFile({
     role: 'cli',
-    capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
+    capabilities: { switchToInteractive: false },
     outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
     discover: async () => ({ host: info.host, port: info.port, accessToken: info.accessToken }),
     onMessage: () => undefined
@@ -1458,8 +1435,8 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
     const result = await client.send({
       type: 'execution.shutdownRequest',
       payload: { outcome, ...(message !== undefined ? { message } : {}) },
-      messageId: pending.messageId,
-      requestId: pending.requestId,
+      messageId: decisionId,
+      requestId: decisionId,
       execution: credential.execution,
       deadlineMs: 5_000
     });
@@ -1468,7 +1445,7 @@ export async function runShutdownVerb(args: string[]): Promise<void> {
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.error(`cards shutdown: acceptance unconfirmed for request ${pending.requestId} — ${detail}.`);
+    console.error(`cards shutdown: acceptance unconfirmed for ${decisionId} — ${detail}.`);
     process.exitCode = 1;
   } finally {
     await client.close();

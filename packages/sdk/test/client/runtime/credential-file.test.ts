@@ -180,7 +180,7 @@ describe('runtime credential file', () => {
     const before = JSON.stringify(outbox.stored[0]);
     const client = createRuntimeClientFromCredentialFile({
       role: 'agent-handler',
-      capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
+      capabilities: { switchToInteractive: false },
       credentialFilePath: credentialPath,
       outbox,
       discover: async () => ({ host: '127.0.0.1', port: server.port, accessToken: 'access-token' }),
@@ -215,7 +215,7 @@ describe('runtime credential file', () => {
     const server = await FakeRuntimeServer.start();
     const client = createRuntimeClientFromCredentialFile({
       role: 'watcher',
-      capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
+      capabilities: { switchToInteractive: false },
       credentialFilePath: credentialPath,
       outbox: new MemoryOutbox(),
       discover: async () => ({ host: '127.0.0.1', port: server.port, accessToken: 'access-token' }),

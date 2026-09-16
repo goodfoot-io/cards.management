@@ -34,7 +34,7 @@ const optionsFor = (
 ): RuntimeClientOptions => ({
   identity: makeIdentity(),
   credential: makeCredential(),
-  capabilities: { switchToInteractive: false, agentShutdown: false, strictDrainBarrier: false },
+  capabilities: { switchToInteractive: false },
   outbox: new MemoryOutbox(),
   authorities: makeAcceptingAuthorities(),
   discover: async () => ({ host: '127.0.0.1', port: target.port, accessToken: 'token-1' }),
@@ -187,16 +187,6 @@ describe('synchronization before new work', () => {
     await client.connect();
 
     expect(server.received[0]?.type).toMatch(/^runtime\.(register|resume)$/);
-  });
-
-  it('reports the server work revision rather than a locally assumed one', async () => {
-    const outbox = new MemoryOutbox();
-    await outbox.enqueue(makeRecordInput({ messageId: 'resume-me' }));
-    server = await FakeRuntimeServer.start({ workRevision: 12 });
-    client = createRuntimeClient(optionsFor(server, { outbox }));
-    const result = await client.connect();
-
-    expect(result).toMatchObject({ synchronization: { workRevision: 12 } });
   });
 
   it('refuses to send before the barrier has been cleared', async () => {

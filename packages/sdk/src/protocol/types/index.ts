@@ -220,7 +220,6 @@ export {
 } from './runtime-credential-file.js';
 // --- Runtime Protocol: Delivery Classes ---
 export {
-  authorizeTermination,
   canRetireDurableResult,
   DELIVERY_CLASS_POLICIES,
   DELIVERY_CLASSES,
@@ -234,14 +233,9 @@ export {
   evaluateDisposableTelemetry,
   evaluateDurableIntent,
   evaluateDurableResult,
-  evaluateReadinessReceipt,
   evaluateReconciledSnapshot,
-  type ReadinessRecord,
   type SnapshotStamp,
-  type TelemetryBufferState,
-  type TerminationAuthorization,
-  type TerminationAuthorizationInput,
-  type TerminationRefusalReason
+  type TelemetryBufferState
 } from './runtime-delivery.js';
 // --- Runtime Protocol: Envelope ---
 export {
@@ -278,6 +272,7 @@ export {
 } from './runtime-identity.js';
 // --- Runtime Protocol: Message Catalogue ---
 export {
+  type CleanupResultPayload,
   launchRequestPayloadSchema,
   MAX_CONTROL_FRAME_BYTES,
   RUNTIME_MESSAGE_PAYLOADS,
@@ -286,6 +281,11 @@ export {
   type RuntimeMessageType,
   type RuntimePayload,
   runtimeMessageTypeSchema,
+  type TerminalDecision,
+  terminalCloseRequestPayloadSchema,
+  terminalDecisionId,
+  terminalDecisionReasonSchema,
+  terminalDecisionSchema,
   worktreeAssignmentResultPayloadSchema
 } from './runtime-messages.js';
 // --- Runtime Protocol: Transition Tables ---

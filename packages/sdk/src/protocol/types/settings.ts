@@ -38,6 +38,7 @@
  * @module types/settings
  */
 
+import type { CleanupResultPayload } from './runtime-messages.js';
 import type { StreamDefinition } from './stream.js';
 
 // --- Command ---
@@ -309,7 +310,7 @@ export interface ActionState {
   runtimeCommandDiagnostic?: {
     commandMessageId: string;
     controlRequestId: string;
-    commandType: 'cancel' | 'switch-to-interactive' | 'agent-shutdown';
+    commandType: 'cancel' | 'switch-to-interactive';
     disposition: 'in-doubt';
     observedAt: number;
     reason: 'handler-restarted-during-effect';
@@ -332,13 +333,20 @@ export interface ActionState {
   shutdownMessage?: string;
 
   /** Current phase of the correlated, bounded shutdown lifecycle. */
-  shutdownState?: 'pending' | 'readiness_timeout' | 'terminating' | 'graceful' | 'forced' | 'failed';
+  shutdownState?: 'pending' | 'terminating' | 'graceful' | 'forced' | 'failed';
 
   /** Durable shutdown intent exists but cannot yet be safely completed. */
   shutdownDisposition?: 'pending' | 'deferred' | 'terminal';
 
-  /** Terminal result reported by the action handler after agent termination. */
-  terminationResult?: 'graceful' | 'forced' | 'failed';
+  /**
+   * What the wrapper's one cleanup report said, kept for display.
+   *
+   * Derived from `execution.cleanupResult` rather than restated, so the UI
+   * vocabulary cannot drift from the wire's. The identity fields
+   * (`terminalDecisionId`, `observationId`) and `rootExit` are deliberately
+   * not carried: correlation is the journal's job, not the dropdown's.
+   */
+  cleanup?: Pick<CleanupResultPayload, 'trigger' | 'status' | 'phase' | 'finalization' | 'detail'>;
 
   /**
    * Capabilities the running handler has advertised through the authenticated runtime.

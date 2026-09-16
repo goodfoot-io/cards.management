@@ -72,6 +72,38 @@ describe('authorization table integrity', () => {
   });
 });
 
+describe('terminal-close routing', () => {
+  const terminalClose = envelopeOf({
+    type: 'execution.terminalCloseRequest',
+    requestId: 'req-1',
+    producer: { producerId: 'dispatcher-1', role: 'extension-dispatcher' },
+    payload: {}
+  });
+
+  it('accepts a closed terminal reported by the dispatcher that watched it close', () => {
+    expect(
+      refusal(
+        terminalClose,
+        contextOf({ authenticatedRole: 'extension-dispatcher', authenticatedProducerId: 'dispatcher-1' })
+      )
+    ).toBe('authorized');
+  });
+
+  it('refuses a terminal-close claim from a peer that cannot observe a terminal', () => {
+    expect(
+      refusal(
+        envelopeOf({
+          type: 'execution.terminalCloseRequest',
+          requestId: 'req-1',
+          producer: { producerId: 'wrapper-1', role: 'runtime-wrapper' },
+          payload: {}
+        }),
+        contextOf()
+      )
+    ).not.toBe('authorized');
+  });
+});
+
 describe('authorizeMessage', () => {
   it('permits only the extension dispatcher to request an interactive switch', () => {
     const envelope = envelopeOf({

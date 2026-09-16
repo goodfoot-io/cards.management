@@ -13,10 +13,7 @@ import { MemoryOutbox, makeAcceptingAuthorities, makeRecordInput, makeUnavailabl
  * @summary Tests the reconnect synchronization phase
  */
 
-const ackFor = (workRevision: number, acceptedMessageIds: readonly string[] = []) => ({
-  workRevision,
-  acceptedMessageIds
-});
+const ackFor = (acceptedMessageIds: readonly string[] = []) => ({ acceptedMessageIds });
 
 describe('collecting outstanding obligations', () => {
   it('reports nothing when the outbox is empty', async () => {
@@ -41,17 +38,6 @@ describe('collecting outstanding obligations', () => {
 });
 
 describe('synchronization', () => {
-  it('adopts the server work revision rather than a locally remembered one', async () => {
-    const report = await synchronize({
-      outbox: new MemoryOutbox(),
-      authorities: makeAcceptingAuthorities(),
-      executionId: 'exec-1',
-      acknowledgment: ackFor(42),
-      recoverOrphans: false
-    });
-    expect(report.workRevision).toBe(42);
-  });
-
   it('retires exactly the obligations the server confirmed it accepted', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(makeRecordInput({ messageId: 'accepted-1' }));
@@ -61,7 +47,7 @@ describe('synchronization', () => {
       outbox,
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7, ['accepted-1']),
+      acknowledgment: ackFor(['accepted-1']),
       recoverOrphans: false
     });
 
@@ -77,7 +63,7 @@ describe('synchronization', () => {
       outbox,
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7, []),
+      acknowledgment: ackFor([]),
       recoverOrphans: false
     });
 
@@ -92,7 +78,7 @@ describe('synchronization', () => {
       outbox,
       authorities: makeAcceptingAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7),
+      acknowledgment: ackFor(),
       recoverOrphans: true
     });
 
@@ -108,7 +94,7 @@ describe('synchronization', () => {
       outbox,
       authorities: makeUnavailableAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7),
+      acknowledgment: ackFor(),
       recoverOrphans: true
     });
 
@@ -124,7 +110,7 @@ describe('synchronization', () => {
       outbox,
       authorities: makeUnavailableAuthorities(),
       executionId: 'exec-1',
-      acknowledgment: ackFor(7),
+      acknowledgment: ackFor(),
       recoverOrphans: true
     });
 

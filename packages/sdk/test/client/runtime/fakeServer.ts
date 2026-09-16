@@ -24,8 +24,6 @@ import { TEST_EXECUTION, TEST_OWNERSHIP, TEST_SCOPE } from './index.js';
 export interface FakeRuntimeServerScript {
   /** Registration outcome sent after the client presents its opening envelope. */
   readonly registration?: RegistrationOutcome;
-  /** Work revision reported in the synchronization reply. */
-  readonly workRevision?: number;
   /** Message ids the server claims it already accepted. */
   readonly acceptedMessageIds?: readonly string[];
   /** Reject the upgrade outright, as a forged or revoked credential would be. */
@@ -227,7 +225,6 @@ export class FakeRuntimeServer {
             JSON.stringify(
               this.envelope('runtime.resumeAck', {
                 revision: 1,
-                workRevision: this.script.workRevision ?? 0,
                 acceptedMessageIds: this.script.acceptedMessageIds ?? []
               })
             )

@@ -344,15 +344,9 @@ class RuntimeClientImpl implements RuntimeClient {
     }
 
     await this.retire(message);
-    const payload = accepted.payload as {
-      workAdmission?:
-        | { status: 'admitted'; workRevision: number }
-        | { status: 'rejected'; reason: 'drainBarrierHeld'; barrierHolderId: string };
-    };
     return {
       status: 'accepted',
-      messageId: message.messageId,
-      ...(payload.workAdmission ? { workAdmission: payload.workAdmission } : {})
+      messageId: message.messageId
     };
   }
 
@@ -502,8 +496,7 @@ class RuntimeClientImpl implements RuntimeClient {
     const base = {
       revision: 0,
       capabilities: this.options.capabilities,
-      lifecycleState: 'running',
-      workRevision: 0
+      lifecycleState: 'running'
     } as const;
 
     return resumed
@@ -532,13 +525,13 @@ class RuntimeClientImpl implements RuntimeClient {
 
     const payload =
       acknowledgment === null
-        ? { workRevision: 0, acceptedMessageIds: [] as readonly string[] }
-        : (acknowledgment.payload as { workRevision: number; acceptedMessageIds: readonly string[] });
+        ? { acceptedMessageIds: [] as readonly string[] }
+        : (acknowledgment.payload as { acceptedMessageIds: readonly string[] });
     const report = await synchronize({
       outbox: this.options.outbox,
       authorities: this.options.authorities,
       executionId,
-      acknowledgment: { workRevision: payload.workRevision, acceptedMessageIds: payload.acceptedMessageIds },
+      acknowledgment: { acceptedMessageIds: payload.acceptedMessageIds },
       recoverOrphans: false
     });
 

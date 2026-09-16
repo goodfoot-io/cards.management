@@ -33,7 +33,6 @@ import type { RuntimeMessageType } from './runtime-messages.js';
  *   exactly once, so recovery cannot spawn a second harness.
  * - `terminal-decision-accepted` — one terminal decision is already durably
  *   written for this execution, and the message names that decision ID.
- * - `readiness-superseded` — stored readiness names an older work revision.
  * - `user-authorized-cancel` — explicit user cancellation, which is separately
  *   authorized and may override idle requirements.
  * - `successor-continuation-durable` — the successor identity and its
@@ -52,7 +51,6 @@ export const LIFECYCLE_GUARDS = [
   'admission-bound',
   'launch-token-claimed',
   'terminal-decision-accepted',
-  'readiness-superseded',
   'launch-observed-successful',
   'user-authorized-cancel',
   'successor-continuation-durable',
@@ -121,10 +119,10 @@ export const EXECUTION_LIFECYCLE_TRANSITIONS: readonly LifecycleTransition[] = [
     guards: ['ownership-current']
   },
   {
-    from: 'draining',
+    from: 'running',
     to: 'draining',
-    trigger: 'execution.shutdownReadiness',
-    guards: ['readiness-superseded']
+    trigger: 'execution.terminalCloseRequest',
+    guards: ['ownership-current']
   },
   {
     from: 'draining',

@@ -52,22 +52,12 @@ export const inlineOrReferencedSchema = z.union([
   z.object({ kind: z.literal('reference'), reference: payloadReferenceSchema }).strict()
 ]);
 
-/**
- * Monotonic counter that invalidates readiness evidence. A new turn or newly
- * owned child work advances it, including while the client is disconnected, so
- * that readiness observed before the advance cannot authorize a termination
- * after it.
- */
-export const workRevisionSchema = z.number().int().nonnegative();
-
 // --- Reconciled snapshot payloads ---
 
 /** Capabilities a client advertises; absent flags are treated as unsupported. */
 export const capabilitiesSchema = z
   .object({
-    switchToInteractive: z.boolean(),
-    agentShutdown: z.boolean(),
-    strictDrainBarrier: z.boolean()
+    switchToInteractive: z.boolean()
   })
   .strict();
 
@@ -86,7 +76,6 @@ export const registerPayloadSchema = z
     revision: snapshotRevisionSchema,
     capabilities: capabilitiesSchema,
     lifecycleState: executionLifecycleStateSchema,
-    workRevision: workRevisionSchema,
     processBootId: z.string().min(1).optional()
   })
   .strict();
@@ -101,7 +90,6 @@ export const resumePayloadSchema = z
     revision: snapshotRevisionSchema,
     capabilities: capabilitiesSchema,
     lifecycleState: executionLifecycleStateSchema,
-    workRevision: workRevisionSchema,
     outstandingMessageIds: z.array(z.string().min(1)).max(1000)
   })
   .strict();
@@ -118,8 +106,7 @@ export const capabilitiesPayloadSchema = z
 export const livenessPayloadSchema = z
   .object({
     revision: snapshotRevisionSchema,
-    connectionState: connectionStateSchema,
-    workRevision: workRevisionSchema
+    connectionState: connectionStateSchema
   })
   .strict();
 
@@ -172,6 +159,16 @@ export const switchToInteractiveCommandPayloadSchema = z.object({}).strict();
 
 /** Extension-authored request to begin a durable interactive handoff. */
 export const switchToInteractiveRequestPayloadSchema = z.object({}).strict();
+
+/**
+ * Payload of `execution.terminalCloseRequest`.
+ *
+ * Empty by construction. A closed terminal carries no parameters — which
+ * execution ended is the envelope's scope, and why is the message type. The
+ * strict empty object is what refuses a later caller smuggling policy into a
+ * report of a fact.
+ */
+export const terminalCloseRequestPayloadSchema = z.object({}).strict();
 
 /** Outcome a shutdown requester reports for the work it is finishing. */
 export const shutdownOutcomeSchema = z.enum(['success', 'blocked', 'error']);
@@ -257,28 +254,6 @@ export const watcherStopPayloadSchema = z
     watcherId: z.string().min(1)
   })
   .strict();
-
-// --- Revocable readiness payload ---
-
-/**
- * Payload of `execution.shutdownReadiness`. Readiness is evidence about a
- * specific `workRevision` under a specific shutdown request; acknowledgment
- * confirms durable receipt only. Authorizing termination additionally requires
- * that the revision has not advanced and that a fresh strict drain is held
- * across the effect.
- */
-export const shutdownReadinessPayloadSchema = z
-  .object({
-    shutdownRequestId: z.string().min(1),
-    workRevision: workRevisionSchema,
-    /** Platform session whose authenticated hook established strict idleness. */
-    platformSessionId: z.string().min(1),
-    observedIdleAt: z.string().datetime()
-  })
-  .strict();
-
-/** Requests server-owned admission of a new turn or owned child task. */
-export const workAdmissionPayloadSchema = z.object({ cause: z.enum(['turn', 'childTask']) }).strict();
 
 // --- Durable result payloads ---
 
@@ -378,6 +353,9 @@ export const cleanupResultPayloadSchema = z
     detail: z.string().max(4096).optional()
   })
   .strict();
+
+/** The one cleanup report an execution produces. */
+export type CleanupResultPayload = z.infer<typeof cleanupResultPayloadSchema>;
 
 /**
  * Payload of `execution.branchCleanupRegistration`, sent by the provider while
@@ -509,7 +487,6 @@ export const watcherTelemetryPayloadSchema = z
 export const resumeAckPayloadSchema = z
   .object({
     revision: snapshotRevisionSchema,
-    workRevision: workRevisionSchema,
     acceptedMessageIds: z.array(z.string().min(1)).max(1000)
   })
   .strict();
@@ -530,19 +507,7 @@ export const resumeAckPayloadSchema = z
 export const acceptedPayloadSchema = z
   .object({
     acknowledgedMessageId: z.string().min(1),
-    acknowledgedAt: z.string().datetime(),
-    workAdmission: z
-      .discriminatedUnion('status', [
-        z.object({ status: z.literal('admitted'), workRevision: workRevisionSchema }).strict(),
-        z
-          .object({
-            status: z.literal('rejected'),
-            reason: z.literal('drainBarrierHeld'),
-            barrierHolderId: z.string().min(1)
-          })
-          .strict()
-      ])
-      .optional()
+    acknowledgedAt: z.string().datetime()
   })
   .strict();
 
@@ -578,10 +543,9 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.switchToInteractiveRequest': switchToInteractiveRequestPayloadSchema,
   'execution.switchToInteractiveCommand': switchToInteractiveCommandPayloadSchema,
   'execution.shutdownRequest': shutdownRequestPayloadSchema,
+  'execution.terminalCloseRequest': terminalCloseRequestPayloadSchema,
   'execution.stopCommand': stopCommandPayloadSchema,
   'execution.executeRequest': executeRequestPayloadSchema,
-  'execution.shutdownReadiness': shutdownReadinessPayloadSchema,
-  'execution.workAdmission': workAdmissionPayloadSchema,
   'execution.launchAdmission': launchAdmissionPayloadSchema,
   'execution.launchOutcome': launchOutcomePayloadSchema,
   'execution.worktreeAssignmentResult': worktreeAssignmentResultPayloadSchema,
