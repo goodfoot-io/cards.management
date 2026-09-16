@@ -15,7 +15,6 @@ import { existsSync } from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import type { ActionContext } from '@cards.management/sdk/config';
 import {
@@ -65,29 +64,8 @@ export interface BranchCleanupParams {
 }
 
 /**
- * Resolves this module's own file path for the interim self-invocation
- * worker shim (see {@link spawnBranchCleanupWatcher}'s `watcherPath`
- * parameter).
- *
- * TODO(main-711/sdk-protocol Phase 3): once `sdk-protocol` lands a resolved
- * installed-binary path (analogous to `resolveStreamSyncWatcher`) via a
- * `context.reportBranchCleanupRegistration(...)`-style round trip, callers
- * should pass that resolved path instead of this module's own file — this
- * function and its call sites can be deleted once no caller uses it.
- *
- * @returns This module's own absolute file path.
- */
-export function resolveInterimSelfWatcherPath(): string {
-  // `fileURLToPath` (not `new URL(...).pathname`) so the path is a real OS path
-  // on win32: `new URL(import.meta.url).pathname` yields `/C:/Users/…`, which is
-  // not a spawnable script path. Mirrors wrapper.ts's spawnDetachedCleanup.
-  return fileURLToPath(import.meta.url);
-}
-
-/**
- * True when `watcherPath` is a JS/TS module — the interim self-invocation
- * shim ({@link resolveInterimSelfWatcherPath}'s result) — rather than an
- * installed binary wrapper (`branch-cleanup-watcher`/`.cmd`, resolved from
+ * True when `watcherPath` is a JS/TS module rather than an installed binary
+ * wrapper (`branch-cleanup-watcher`/`.cmd`, resolved from
  * `sdk-protocol`'s `resolveBranchCleanupWatcher`). The two require different
  * spawn forms: a module is run under a Node interpreter (`node <path>`), a
  * wrapper is exec'd directly ({@link resolveWatcherSpawnPlan}).
@@ -283,11 +261,10 @@ function resolveWatcherSpawnPlan(
  *
  * @param params - Parameters for the cleanup run.
  * @param logger - Logger used for spawn/exit lifecycle diagnostics.
- * @param watcherPath - Absolute path to the worker program to spawn. Callers
- *   currently pass {@link resolveInterimSelfWatcherPath}'s result (this
- *   module invoking itself); once `sdk-protocol` exposes the installed
- *   standalone binary this becomes that resolved path instead — this
- *   function no longer derives it internally via `import.meta.url`.
+ * @param watcherPath - Absolute path to the worker program to spawn, resolved
+ *   by the caller via `sdk-protocol`'s `resolveBranchCleanupWatcher`. May be a
+ *   JS/TS module path or an installed binary wrapper — see
+ *   {@link resolveWatcherSpawnPlan} for how the two spawn forms differ.
  */
 export async function spawnBranchCleanupWatcher(
   params: BranchCleanupParams,

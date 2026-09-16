@@ -62,8 +62,11 @@ vi.mock('node:child_process', () => ({
 
 // Detached-watcher spawns are out of scope here; lock only the wiring.
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn().mockResolvedValue(undefined),
-  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
+  spawnBranchCleanupWatcher: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock('@cards.management/sdk/bin/resolve-branch-cleanup-watcher', () => ({
+  resolveBranchCleanupWatcher: vi.fn(() => '/resolved/dist/bin/branch-cleanup-watcher')
 }));
 
 vi.mock('node:fs', () => ({

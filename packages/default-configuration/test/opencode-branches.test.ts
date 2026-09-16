@@ -103,8 +103,11 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 }));
 
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn(),
-  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
+  spawnBranchCleanupWatcher: vi.fn()
+}));
+
+vi.mock('@cards.management/sdk/bin/resolve-branch-cleanup-watcher', () => ({
+  resolveBranchCleanupWatcher: vi.fn(() => '/resolved/dist/bin/branch-cleanup-watcher')
 }));
 
 const originalFetch = globalThis.fetch;

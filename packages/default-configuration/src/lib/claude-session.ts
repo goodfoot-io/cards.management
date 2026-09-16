@@ -18,6 +18,7 @@ import * as path from 'node:path';
 import { type ActionContext, type ActionInput, CARDS_ENV_VARS, resolveWorktreeDir } from '@cards.management/sdk';
 import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
 import { readCardStatus } from '@cards.management/sdk/bin/process-utils';
+import { resolveBranchCleanupWatcher } from '@cards.management/sdk/bin/resolve-branch-cleanup-watcher';
 import type { CardsClient } from '@cards.management/sdk/client';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { compiledHookScriptPaths } from '@cards.management/sdk/git-hooks';
@@ -1571,10 +1572,7 @@ export async function spawnClaudeSession(
         candidateBranches: candidates.map(([name]) => name)
       });
 
-      const { resolveInterimSelfWatcherPath, spawnBranchCleanupWatcher } = await import('./branch-cleanup-watcher.js');
-      // TODO(main-711/sdk-protocol Phase 3): pass the resolved installed
-      // binary path from `context.reportBranchCleanupRegistration(...)` once
-      // it lands, instead of this module's own interim self-invocation path.
+      const { spawnBranchCleanupWatcher } = await import('./branch-cleanup-watcher.js');
       await spawnBranchCleanupWatcher(
         {
           cardId: input.cardId,
@@ -1583,7 +1581,7 @@ export async function spawnClaudeSession(
           sessionId
         },
         context.logger,
-        resolveInterimSelfWatcherPath()
+        resolveBranchCleanupWatcher(path.join(input.extensionPath, 'dist', 'bin'))
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

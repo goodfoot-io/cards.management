@@ -25,6 +25,7 @@ import { randomUUID } from 'node:crypto';
 import { access, constants, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '@cards.management/sdk';
+import { resolveBranchCleanupWatcher } from '@cards.management/sdk/bin/resolve-branch-cleanup-watcher';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { type ActionContext, type ActionInput, CARDS_ENV_VARS } from '@cards.management/sdk/config';
 import {
@@ -33,7 +34,7 @@ import {
 } from '@cards.management/sdk/transcript-sync';
 import { createAntigravityTerminationController } from './antigravity-termination.js';
 import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
-import { resolveInterimSelfWatcherPath, spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
+import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import { cleanupMergedBranches, errorMessage, resolveBaseBranch, resolveOrCreateWorktree } from './claude-session.js';
 import { spawnAgentCli } from './spawn-cli.js';
 
@@ -601,9 +602,6 @@ export async function spawnAntigravitySession(
   // terminal closes immediately (the watcher calls the same
   // {@link cleanupMergedBranches} function).
   try {
-    // TODO(main-711/sdk-protocol Phase 3): pass the resolved installed
-    // binary path from `context.reportBranchCleanupRegistration(...)` once it
-    // lands, instead of this module's own interim self-invocation path.
     await spawnBranchCleanupWatcher(
       {
         cardId: input.cardId,
@@ -612,7 +610,7 @@ export async function spawnAntigravitySession(
         sessionId
       },
       context.logger,
-      resolveInterimSelfWatcherPath()
+      resolveBranchCleanupWatcher(join(input.extensionPath, 'dist', 'bin'))
     );
   } catch (error) {
     context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', {
