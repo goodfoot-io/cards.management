@@ -19,7 +19,7 @@ import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { applyCodexConfig } from './applyCodexConfig.js';
-import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
+import { resolveInterimSelfWatcherPath, spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import {
   cleanupMergedBranches,
   errorMessage,
@@ -1010,13 +1010,17 @@ export async function spawnCodexSession(
   // the same sweep inline before reporting completion.
   if (isInteractive) {
     try {
+      // TODO(main-711/sdk-protocol Phase 3): pass the resolved installed
+      // binary path from `context.reportBranchCleanupRegistration(...)` once
+      // it lands, instead of this module's own interim self-invocation path.
       await spawnBranchCleanupWatcher(
         {
           cardId: input.cardId,
           repoRoot: input.repoRoot,
           cardRepoPath: input.cardRepoPath
         },
-        context.logger
+        context.logger,
+        resolveInterimSelfWatcherPath()
       );
     } catch (error) {
       context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', {

@@ -53,7 +53,7 @@ import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
-import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
+import { resolveInterimSelfWatcherPath, spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import {
   cleanupMergedBranches,
   errorMessage,
@@ -1221,13 +1221,17 @@ export async function spawnOpencodeSession(
   // {@link cleanupMergedBranches} function).
   if (isInteractive) {
     try {
+      // TODO(main-711/sdk-protocol Phase 3): pass the resolved installed
+      // binary path from `context.reportBranchCleanupRegistration(...)` once
+      // it lands, instead of this module's own interim self-invocation path.
       await spawnBranchCleanupWatcher(
         {
           cardId: input.cardId,
           repoRoot: input.repoRoot,
           cardRepoPath: input.cardRepoPath
         },
-        context.logger
+        context.logger,
+        resolveInterimSelfWatcherPath()
       );
     } catch (error) {
       context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', {

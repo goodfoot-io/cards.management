@@ -98,7 +98,8 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 }));
 
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
+  spawnBranchCleanupWatcher: vi.fn(),
+  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
 }));
 
 const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
@@ -371,6 +372,7 @@ describe('launch action — antigravity branch', () => {
     const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
     expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
       { cardId: 'card-123', repoRoot: '/test/workspace', cardRepoPath: '/test/repo', sessionId: expect.any(String) },
+      expect.anything(),
       expect.anything()
     );
   });

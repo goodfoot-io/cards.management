@@ -63,6 +63,26 @@ export interface BranchCleanupParams {
 }
 
 /**
+ * Resolves this module's own file path for the interim self-invocation
+ * worker shim (see {@link spawnBranchCleanupWatcher}'s `watcherPath`
+ * parameter).
+ *
+ * TODO(main-711/sdk-protocol Phase 3): once `sdk-protocol` lands a resolved
+ * installed-binary path (analogous to `resolveStreamSyncWatcher`) via a
+ * `context.reportBranchCleanupRegistration(...)`-style round trip, callers
+ * should pass that resolved path instead of this module's own file — this
+ * function and its call sites can be deleted once no caller uses it.
+ *
+ * @returns This module's own absolute file path.
+ */
+export function resolveInterimSelfWatcherPath(): string {
+  // `fileURLToPath` (not `new URL(...).pathname`) so the path is a real OS path
+  // on win32: `new URL(import.meta.url).pathname` yields `/C:/Users/…`, which is
+  // not a spawnable script path. Mirrors wrapper.ts's spawnDetachedCleanup.
+  return fileURLToPath(import.meta.url);
+}
+
+/**
  * Spawns a detached Node.js process that calls {@link cleanupMergedBranches}
  * after receiving serialized parameters via stdin.
  *
@@ -98,15 +118,17 @@ export interface BranchCleanupParams {
  *
  * @param params - Parameters for the cleanup run.
  * @param logger - Logger used for spawn/exit lifecycle diagnostics.
+ * @param watcherPath - Absolute path to the worker program to spawn. Callers
+ *   currently pass {@link resolveInterimSelfWatcherPath}'s result (this
+ *   module invoking itself); once `sdk-protocol` exposes the installed
+ *   standalone binary this becomes that resolved path instead — this
+ *   function no longer derives it internally via `import.meta.url`.
  */
 export async function spawnBranchCleanupWatcher(
   params: BranchCleanupParams,
-  logger: ActionContext['logger']
+  logger: ActionContext['logger'],
+  watcherPath: string
 ): Promise<void> {
-  // `fileURLToPath` (not `new URL(...).pathname`) so the path is a real OS path
-  // on win32: `new URL(import.meta.url).pathname` yields `/C:/Users/…`, which is
-  // not a spawnable script path. Mirrors wrapper.ts's spawnDetachedCleanup.
-  const selfPath = fileURLToPath(import.meta.url);
   const nodeBin = process.execPath;
 
   // Resolve to the exact file the parent's own singleton Logger writes to
@@ -128,7 +150,9 @@ export async function spawnBranchCleanupWatcher(
     });
   }
   const capturePath = capture.ok ? capture.path : null;
-  const childArgs = capture.ok ? [capture.preloadArg, selfPath, '--branch-cleanup'] : [selfPath, '--branch-cleanup'];
+  const childArgs = capture.ok
+    ? [capture.preloadArg, watcherPath, '--branch-cleanup']
+    : [watcherPath, '--branch-cleanup'];
   const outputSink = capture.ok ? capture.fd : 'ignore';
 
   let child: ChildProcess;
@@ -443,9 +467,94 @@ async function removeCleanupMarker(markerPath: string, logger: ILogger): Promise
 }
 
 /**
+ * Runs branch cleanup for one already-parsed set of parameters: the real
+ * worker logic shared by this module's own detached self-invocation
+ * ({@link runDetachedCleanup}) and, once it lands, `sdk-protocol`'s
+ * standalone `dist/bin/branch-cleanup-watcher` CLI entry — whatever reads
+ * the parameters off the wire, this is what actually does the work.
+ *
+ * Runs {@link cleanupMergedBranches} under {@link runCleanupWithDeadline},
+ * then removes the cleanup-attempt marker (see {@link writeCleanupMarker})
+ * in a `finally` regardless of outcome — a marker left behind after this
+ * settles would be indistinguishable from a cleanup that never got the
+ * chance to report anything.
+ *
+ * @param params - The parsed cleanup parameters.
+ * @param logger - Logger for diagnostics; this function does not construct
+ *   or close one itself.
+ * @param options - Forwarded to {@link runCleanupWithDeadline} (deadline,
+ *   descendant escalation windows, and an injectable authority for tests).
+ * @returns `0` on success, `1` on any failure (discovery failure, cleanup
+ *   failure, or deadline timeout).
+ */
+export async function runBranchCleanupWorker(
+  params: BranchCleanupParams,
+  logger: ILogger,
+  options: Parameters<typeof runCleanupWithDeadline>[4] = {}
+): Promise<number> {
+  const { cardId, repoRoot, cardRepoPath, sessionId } = params;
+  const input = { cardId, repoRoot };
+  logger.info('Branch-cleanup watcher started', { cardId, sessionId });
+
+  // Recomputed rather than passed over stdin: the marker path is a
+  // deterministic function of cardId/sessionId, and the marker itself was
+  // already written by the parent in spawnBranchCleanupWatcher() before this
+  // child could have logged anything.
+  const markerPath = cleanupMarkerPath(cardId, sessionId);
+  try {
+    const client = await createCardsClient();
+    if (!client) {
+      throw new Error('Cards API discovery failed — cannot run branch cleanup');
+    }
+
+    const startedAt = performance.now();
+    const outcome = await runCleanupWithDeadline(input, cardRepoPath, logger, sessionId, options);
+    logger.info('Branch-cleanup watcher completed', {
+      cardId,
+      sessionId,
+      outcome,
+      elapsedMs: Math.round(performance.now() - startedAt)
+    });
+    return outcome === 'completed' ? 0 : 1;
+  } catch (error) {
+    const message = errorMessage(error);
+    logger.error('Branch-cleanup watcher failed', { error: message, cardId, sessionId });
+    return 1;
+  } finally {
+    await removeCleanupMarker(markerPath, logger);
+  }
+}
+
+/**
+ * Reads back the cleanup-attempt marker {@link writeCleanupMarker} wrote,
+ * for an external observer (e.g. the extension's in-doubt reconcile path)
+ * that needs to know whether this worker's cleanup decision has settled —
+ * without reaching into this module's private marker-path logic.
+ *
+ * A present marker means a cleanup attempt started and has not yet removed
+ * it (still running, or the process died before it could); an absent marker
+ * means either cleanup never started for this card/session, or it already
+ * ran to completion (success or failure) and removed it in
+ * {@link runBranchCleanupWorker}'s `finally`.
+ *
+ * @param cardId - The card ID for the session being cleaned up.
+ * @param sessionId - Optional session ID for correlation.
+ * @returns `true` once the marker is gone (settled or never started),
+ *   `false` while a cleanup attempt's marker is still present.
+ */
+export async function isBranchCleanupSettled(cardId: string, sessionId: string | undefined): Promise<boolean> {
+  try {
+    await fs.access(cleanupMarkerPath(cardId, sessionId));
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Runs the detached branch-cleanup entry point: reads serialized
- * {@link BranchCleanupParams} from `stdin`, then calls
- * {@link cleanupMergedBranches}.
+ * {@link BranchCleanupParams} from `stdin`, then delegates to
+ * {@link runBranchCleanupWorker}.
  *
  * Constructs its `Logger` immediately — before touching `stdin` at all — so
  * every failure mode between process start and cleanup completion leaves a
@@ -517,36 +626,9 @@ export async function runDetachedCleanup(stdin: NodeJS.ReadableStream = process.
         // an unset `params`.
         if (params === undefined) return;
 
-        const { cardId, repoRoot, cardRepoPath, sessionId } = params;
-        const input = { cardId, repoRoot };
-        logger.info('Branch-cleanup watcher started', { cardId, sessionId });
-
-        // Recomputed rather than passed over stdin: the marker path is a
-        // deterministic function of cardId/sessionId, and the marker itself
-        // was already written by the parent in spawnBranchCleanupWatcher()
-        // before this child could have logged anything.
-        const markerPath = cleanupMarkerPath(cardId, sessionId);
         try {
-          const client = await createCardsClient();
-          if (!client) {
-            throw new Error('Cards API discovery failed — cannot run branch cleanup');
-          }
-
-          const startedAt = performance.now();
-          const outcome = await runCleanupWithDeadline(input, cardRepoPath, logger, sessionId);
-          logger.info('Branch-cleanup watcher completed', {
-            cardId,
-            sessionId,
-            outcome,
-            elapsedMs: Math.round(performance.now() - startedAt)
-          });
-          resolve(outcome === 'completed' ? 0 : 1);
-        } catch (error) {
-          const message = errorMessage(error);
-          logger.error('Branch-cleanup watcher failed', { error: message, cardId, sessionId });
-          resolve(1);
+          resolve(await runBranchCleanupWorker(params, logger));
         } finally {
-          await removeCleanupMarker(markerPath, logger);
           logger.close();
         }
       })();

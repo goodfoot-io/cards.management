@@ -127,7 +127,8 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 }));
 
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
+  spawnBranchCleanupWatcher: vi.fn(),
+  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
 }));
 
 const originalFetch = globalThis.fetch;
@@ -619,6 +620,7 @@ describe('launch action — codex branch', () => {
         repoRoot: '/test/workspace',
         cardRepoPath: '/test/repo'
       },
+      expect.anything(),
       expect.anything()
     );
 

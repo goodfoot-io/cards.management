@@ -133,6 +133,7 @@ describe('spawnBranchCleanupWatcher', () => {
     cardRepoPath: '/test/repo',
     sessionId: 'session-abc'
   };
+  const watcherPath = '/resolved/dist/bin/branch-cleanup-watcher.js';
 
   afterEach(() => {
     vi.useRealTimers();
@@ -155,7 +156,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
     child.emit('exit', 0, null);
     await promise;
 
@@ -194,7 +195,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
     child.emit('exit', 0, null);
     await promise;
 
@@ -223,7 +224,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
     child.emit('exit', 0, null);
     await promise;
 
@@ -255,7 +256,7 @@ describe('spawnBranchCleanupWatcher', () => {
       vi.mocked(spawn).mockReturnValue(child);
 
       const logger = createSpyLogger();
-      const promise = spawnBranchCleanupWatcher(baseParams, logger);
+      const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
       child.emit('exit', 0, null);
       await promise;
 
@@ -286,7 +287,7 @@ describe('spawnBranchCleanupWatcher', () => {
       vi.mocked(spawn).mockReturnValue(child);
 
       const logger = createSpyLogger();
-      const promise = spawnBranchCleanupWatcher(baseParams, logger);
+      const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
       child.emit('exit', 0, null);
       await promise;
 
@@ -307,7 +308,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
     child.emit('exit', 0, null);
     await promise;
 
@@ -333,7 +334,7 @@ describe('spawnBranchCleanupWatcher', () => {
     });
 
     const logger = createSpyLogger();
-    await expect(spawnBranchCleanupWatcher(baseParams, logger)).resolves.toBeUndefined();
+    await expect(spawnBranchCleanupWatcher(baseParams, logger, watcherPath)).resolves.toBeUndefined();
 
     expect(logger.error).toHaveBeenCalledWith(
       'Branch-cleanup watcher failed to spawn',
@@ -355,7 +356,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
 
     (child as unknown as { emit: (event: string, ...args: unknown[]) => void }).emit('exit', 0, null);
     await promise;
@@ -374,7 +375,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
 
     (child.stdin as unknown as { emit: (event: string, ...args: unknown[]) => void }).emit('error', new Error('EPIPE'));
     child.emit('exit', 0, null);
@@ -401,7 +402,7 @@ describe('spawnBranchCleanupWatcher', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const logger = createSpyLogger();
-    const promise = spawnBranchCleanupWatcher(baseParams, logger);
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
     child.emit('exit', 0, null);
 
     // The promise must resolve purely from the exit event — the fake timer is
@@ -426,7 +427,7 @@ describe('spawnBranchCleanupWatcher', () => {
 
     const logger = createSpyLogger();
     let resolved = false;
-    const promise = spawnBranchCleanupWatcher(baseParams, logger).then(() => {
+    const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath).then(() => {
       resolved = true;
     });
 
@@ -476,7 +477,7 @@ describe('spawnBranchCleanupWatcher', () => {
       vi.mocked(spawn).mockReturnValue(child);
 
       const logger = createSpyLogger();
-      const promise = spawnBranchCleanupWatcher(baseParams, logger);
+      const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
       child.emit('exit', 0, null);
       await promise;
 
@@ -504,7 +505,7 @@ describe('spawnBranchCleanupWatcher', () => {
       vi.mocked(spawn).mockReturnValue(child);
 
       const logger = createSpyLogger();
-      const promise = spawnBranchCleanupWatcher(baseParams, logger);
+      const promise = spawnBranchCleanupWatcher(baseParams, logger, watcherPath);
       child.emit('exit', 0, null);
       await promise;
 

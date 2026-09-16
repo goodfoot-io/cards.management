@@ -62,7 +62,8 @@ vi.mock('node:child_process', () => ({
 
 // Detached-watcher spawns are out of scope here; lock only the wiring.
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn().mockResolvedValue(undefined)
+  spawnBranchCleanupWatcher: vi.fn().mockResolvedValue(undefined),
+  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
 }));
 
 vi.mock('node:fs', () => ({
@@ -794,6 +795,7 @@ describe('opencode-session library', () => {
       const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
       expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
         { cardId: 'card-123', repoRoot: '/test/workspace', cardRepoPath: '/test/repo' },
+        expect.anything(),
         expect.anything()
       );
 

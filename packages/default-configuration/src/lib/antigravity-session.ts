@@ -33,7 +33,7 @@ import {
 } from '@cards.management/sdk/transcript-sync';
 import { createAntigravityTerminationController } from './antigravity-termination.js';
 import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
-import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
+import { resolveInterimSelfWatcherPath, spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import { cleanupMergedBranches, errorMessage, resolveBaseBranch, resolveOrCreateWorktree } from './claude-session.js';
 import { spawnAgentCli } from './spawn-cli.js';
 
@@ -601,6 +601,9 @@ export async function spawnAntigravitySession(
   // terminal closes immediately (the watcher calls the same
   // {@link cleanupMergedBranches} function).
   try {
+    // TODO(main-711/sdk-protocol Phase 3): pass the resolved installed
+    // binary path from `context.reportBranchCleanupRegistration(...)` once it
+    // lands, instead of this module's own interim self-invocation path.
     await spawnBranchCleanupWatcher(
       {
         cardId: input.cardId,
@@ -608,7 +611,8 @@ export async function spawnAntigravitySession(
         cardRepoPath: input.cardRepoPath,
         sessionId
       },
-      context.logger
+      context.logger,
+      resolveInterimSelfWatcherPath()
     );
   } catch (error) {
     context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', {

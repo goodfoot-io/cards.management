@@ -1571,7 +1571,10 @@ export async function spawnClaudeSession(
         candidateBranches: candidates.map(([name]) => name)
       });
 
-      const { spawnBranchCleanupWatcher } = await import('./branch-cleanup-watcher.js');
+      const { resolveInterimSelfWatcherPath, spawnBranchCleanupWatcher } = await import('./branch-cleanup-watcher.js');
+      // TODO(main-711/sdk-protocol Phase 3): pass the resolved installed
+      // binary path from `context.reportBranchCleanupRegistration(...)` once
+      // it lands, instead of this module's own interim self-invocation path.
       await spawnBranchCleanupWatcher(
         {
           cardId: input.cardId,
@@ -1579,7 +1582,8 @@ export async function spawnClaudeSession(
           cardRepoPath: input.cardRepoPath,
           sessionId
         },
-        context.logger
+        context.logger,
+        resolveInterimSelfWatcherPath()
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

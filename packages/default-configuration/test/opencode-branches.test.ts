@@ -103,7 +103,8 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 }));
 
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
+  spawnBranchCleanupWatcher: vi.fn(),
+  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
 }));
 
 const originalFetch = globalThis.fetch;
@@ -356,6 +357,7 @@ describe('launch action — opencode branch', () => {
     const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
     expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
       { cardId: 'card-123', repoRoot: '/test/workspace', cardRepoPath: '/test/repo' },
+      expect.anything(),
       expect.anything()
     );
   });

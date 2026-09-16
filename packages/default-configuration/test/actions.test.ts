@@ -92,7 +92,8 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 }));
 
 vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
+  spawnBranchCleanupWatcher: vi.fn(),
+  resolveInterimSelfWatcherPath: vi.fn(() => '/resolved/interim/branch-cleanup-watcher.js')
 }));
 
 const originalFetch = globalThis.fetch;
@@ -770,6 +771,7 @@ describe('Default Actions', () => {
             cardRepoPath: '/test/repo',
             sessionId: 'test-uuid-1234'
           },
+          expect.anything(),
           expect.anything()
         );
       });
