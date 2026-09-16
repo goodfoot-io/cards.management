@@ -121,6 +121,91 @@ export function createProcessTreeAuthority(): ProcessTreeAuthority {
 }
 
 /**
+ * TERM's, then (after a grace window) KILL's every member of `members`
+ * individually — never a single group-wide signal — rescanning group
+ * membership via `authority.members` before the force phase so a late fork
+ * during the graceful window isn't missed.
+ *
+ * Shared by {@link createOwnedTreeTerminator} (action-tree cleanup) and the
+ * branch-cleanup worker's own deadline enforcement over its git descendants,
+ * so both use the same identity-checked TERM/KILL discipline instead of a
+ * bare `setTimeout`/promise-race abandonment.
+ *
+ * @param members - Identity-verified members to signal. Must not include a
+ *   process the caller wants left alone (e.g. its own control identity) —
+ *   this signals every member passed in.
+ * @param authority - Identity and signaling authority.
+ * @param options - Escalation deadlines, plus an optional process id to keep
+ *   excluded from the force-phase rescan (the rescan walks the whole process
+ *   group again, which would otherwise reintroduce a caller's own live,
+ *   deliberately-excluded identity).
+ * @returns The outcome of the escalation.
+ */
+export async function terminateProcessMembers(
+  members: readonly OwnedProcessIdentity[],
+  authority: ProcessTreeAuthority,
+  options: Pick<OwnedTreeTerminationOptions, 'gracefulTimeoutMs' | 'forceTimeoutMs'> & {
+    readonly excludeProcessId?: number;
+  }
+): Promise<OwnedTreeTerminationResult> {
+  if (members.length === 0) return 'graceful';
+  // Never a single group-wide signal: every member is its own verified PID,
+  // so each is TERM'd/KILL'd individually and a refusal on any one of them
+  // fails the whole operation closed.
+  const signalMembers = async (
+    targets: readonly OwnedProcessIdentity[],
+    signal: NodeJS.Signals
+  ): Promise<'sent' | 'exited' | 'refused'> => {
+    let allExited = true;
+    for (const target of targets) {
+      const outcome = await authority.signal(target, signal);
+      if (outcome === 'refused') return 'refused';
+      if (outcome !== 'exited') allExited = false;
+    }
+    return allExited ? 'exited' : 'sent';
+  };
+  const waitForMembers = async (
+    targets: readonly OwnedProcessIdentity[],
+    timeoutMs: number
+  ): Promise<'exited' | 'active' | 'unknown'> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() <= deadline) {
+      let active = false;
+      for (const member of targets) {
+        const observed = await authority.identify(member.processId);
+        if (observed === null) continue;
+        if (observed.bootId !== member.bootId || observed.startedAtToken !== member.startedAtToken) return 'unknown';
+        active = true;
+      }
+      if (!active) return 'exited';
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await delay(Math.min(10, remaining));
+    }
+    return 'active';
+  };
+  const graceful = await signalMembers(members, 'SIGTERM');
+  if (graceful === 'refused') return 'failed';
+  if (graceful === 'exited' || (await waitForMembers(members, options.gracefulTimeoutMs)) === 'exited') {
+    return 'graceful';
+  }
+  // Rescan before force: the graceful window may have let the tree gain or
+  // lose members (e.g. a late fork), so force must not act on a stale set.
+  const rescanned = authority.members ? await authority.members(members[0] as OwnedProcessIdentity) : members;
+  if (rescanned === null || rescanned.length === 0) return 'failed';
+  const forceMembers =
+    options.excludeProcessId === undefined
+      ? rescanned
+      : rescanned.filter((member) => member.processId !== options.excludeProcessId);
+  if (forceMembers.length === 0) return 'graceful';
+  const forced = await signalMembers(forceMembers, 'SIGKILL');
+  if (forced === 'refused') return 'failed';
+  return forced === 'exited' || (await waitForMembers(forceMembers, options.forceTimeoutMs)) === 'exited'
+    ? 'forced'
+    : 'failed';
+}
+
+/**
  * Captures identity immediately and returns one idempotent, bounded terminator.
  * @param processId - Spawned root process id.
  * @param options - Identity authority and escalation deadlines.
@@ -143,56 +228,7 @@ export function createOwnedTreeTerminator(
       if (current.bootId !== owned.bootId || current.startedAtToken !== owned.startedAtToken) return 'failed';
       const members = authority.members ? await authority.members(owned) : [owned];
       if (members === null || members.length === 0) return 'failed';
-      // Never a single group-wide signal: every member is its own verified PID,
-      // so each is TERM'd/KILL'd individually and a refusal on any one of them
-      // fails the whole operation closed.
-      const signalMembers = async (
-        targets: readonly OwnedProcessIdentity[],
-        signal: NodeJS.Signals
-      ): Promise<'sent' | 'exited' | 'refused'> => {
-        let allExited = true;
-        for (const target of targets) {
-          const outcome = await authority.signal(target, signal);
-          if (outcome === 'refused') return 'refused';
-          if (outcome !== 'exited') allExited = false;
-        }
-        return allExited ? 'exited' : 'sent';
-      };
-      const waitForMembers = async (
-        targets: readonly OwnedProcessIdentity[],
-        timeoutMs: number
-      ): Promise<'exited' | 'active' | 'unknown'> => {
-        const deadline = Date.now() + timeoutMs;
-        while (Date.now() <= deadline) {
-          let active = false;
-          for (const member of targets) {
-            const observed = await authority.identify(member.processId);
-            if (observed === null) continue;
-            if (observed.bootId !== member.bootId || observed.startedAtToken !== member.startedAtToken)
-              return 'unknown';
-            active = true;
-          }
-          if (!active) return 'exited';
-          const remaining = deadline - Date.now();
-          if (remaining <= 0) break;
-          await delay(Math.min(10, remaining));
-        }
-        return 'active';
-      };
-      const graceful = await signalMembers(members, 'SIGTERM');
-      if (graceful === 'refused') return 'failed';
-      if (graceful === 'exited' || (await waitForMembers(members, options.gracefulTimeoutMs)) === 'exited') {
-        return 'graceful';
-      }
-      // Rescan before force: the graceful window may have let the tree gain or
-      // lose members (e.g. a late fork), so force must not act on a stale set.
-      const forceMembers = authority.members ? await authority.members(owned) : members;
-      if (forceMembers === null || forceMembers.length === 0) return 'failed';
-      const forced = await signalMembers(forceMembers, 'SIGKILL');
-      if (forced === 'refused') return 'failed';
-      return forced === 'exited' || (await waitForMembers(forceMembers, options.forceTimeoutMs)) === 'exited'
-        ? 'forced'
-        : 'failed';
+      return terminateProcessMembers(members, authority, options);
     })();
     return termination;
   };

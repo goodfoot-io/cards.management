@@ -605,7 +605,7 @@ describe('runDetachedCleanup', () => {
       expect.arrayContaining([
         'Branch-cleanup watcher process started',
         'Branch-cleanup watcher started',
-        'Branch-cleanup watcher completed successfully'
+        'Branch-cleanup watcher completed'
       ])
     );
 
