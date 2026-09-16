@@ -39,6 +39,7 @@
     "./symlink-capability": "./src/symlink-capability.ts",
     "./timer": "./src/timer.ts",
     "./bin/spawn-stream-sync-watcher": "./src/bin/spawn-stream-sync-watcher.ts",
+    "./bin/resolve-branch-cleanup-watcher": "./src/bin/resolve-branch-cleanup-watcher.ts",
     "./bin/spawn-adhoc-cleanup": "./src/bin/spawn-adhoc-cleanup.ts",
     "./bin/spawn-adhoc-attribution": "./src/bin/spawnAdhocAttribution.ts",
     "./bin/process-utils": "./src/bin/process-utils.ts",
