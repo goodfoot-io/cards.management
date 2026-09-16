@@ -14,11 +14,6 @@ import { addActiveSubagent, removeActiveSubagent } from '@cards.management/sessi
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { isSessionIdle } from '../../src/shared/session-idle.js';
 
-vi.mock('@cards.management/sdk/process-tree', () => ({
-  findAgentPid: vi.fn(async () => 100),
-  isAgentProcessTreeDrained: vi.fn(async () => true)
-}));
-
 /** Directory where per-session subagent files are stored (documented contract). */
 const SUBAGENTS_DIR = join(homedir(), '.cards', 'card-repo-commits');
 
@@ -50,23 +45,6 @@ describe('isSessionIdle', () => {
       sessionIds.push(sessionId);
 
       expect(isSessionIdle(sessionId)).toBe(true);
-    });
-  });
-
-  describe('strict authority', () => {
-    it('returns true only when subagent and owned-process authorities are drained', async () => {
-      const sessionId = uniqueSessionId();
-      sessionIds.push(sessionId);
-      await expect(isSessionIdle(sessionId, { strict: true })).resolves.toBe(true);
-    });
-
-    it('fails closed when subagent tracking cannot be read', async () => {
-      const sessionId = uniqueSessionId();
-      sessionIds.push(sessionId);
-      mkdirSync(subagentsPath(sessionId), { recursive: true });
-      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-      await expect(isSessionIdle(sessionId, { strict: true })).resolves.toBe(false);
-      warn.mockRestore();
     });
   });
 

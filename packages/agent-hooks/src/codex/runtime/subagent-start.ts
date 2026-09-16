@@ -11,17 +11,12 @@ import { extractActionInput } from '@cards.management/sdk/config';
 import { addActiveSubagent } from '@cards.management/sessions/card-repo';
 import { subagentStartHook, subagentStartOutput } from '@goodfoot/agent-hooks/codex';
 import { buildAdditionalContext, CardRepoAccessError } from '../../shared/context.js';
-import type { WorkAuthority } from '../../shared/work-authority.js';
-import { createHookWorkAuthority } from '../../shared/work-authority.js';
 
 /**
- * Builds the shipped Codex child-start gate.
- * @param authorityFactory - Injected authority factory.
- * @returns A hook that blocks child startup until durable admission.
+ * Builds the shipped Codex child-start hook.
+ * @returns A hook that injects card context for a starting subagent.
  */
-export function createCodexSubagentStartHandler(
-  authorityFactory: () => WorkAuthority = createHookWorkAuthority
-): Parameters<typeof subagentStartHook>[1] {
+export function createCodexSubagentStartHandler(): Parameters<typeof subagentStartHook>[1] {
   return async (_input, { logger }) => {
     let actionInput: ReturnType<typeof extractActionInput>;
     try {
@@ -31,16 +26,6 @@ export function createCodexSubagentStartHandler(
       logger.error('Not running inside an action subprocess', { error: message });
       return subagentStartOutput({
         systemMessage: 'SubagentStart hook: not running inside an action subprocess.'
-      });
-    }
-
-    const hostBoundaryId = `codex:child:${_input.session_id}:${_input.turn_id}:${_input.agent_id}`;
-    try {
-      await authorityFactory().admit({ cause: 'childTask', messageId: hostBoundaryId, requestId: hostBoundaryId });
-    } catch (error) {
-      return subagentStartOutput({
-        continue: false,
-        systemMessage: `Cards child admission failed: ${error instanceof Error ? error.message : String(error)}`
       });
     }
 

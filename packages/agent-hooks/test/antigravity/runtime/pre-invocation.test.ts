@@ -8,7 +8,7 @@
 
 import { existsSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AntigravityHandlerDeps } from '../../../src/antigravity/internal/deps.js';
 import { type HandlerFailure, handlePreInvocation } from '../../../src/antigravity/internal/handlers.js';
 import { defaultAntigravityIo } from '../../../src/antigravity/internal/io.js';
@@ -77,28 +77,6 @@ async function run(
 }
 
 describe('PreInvocation success contract', () => {
-  it('admits the root invocation before registration and watcher work', async () => {
-    const admit = vi.fn(async () => ({ workRevision: 1 }));
-    const { failure } = await run({ workAuthority: { admit, observeRevision: async () => 0 } });
-    expect(failure).toBeNull();
-    expect(admit).toHaveBeenCalledWith(
-      expect.objectContaining({ cause: 'turn', requestId: `antigravity:turn:${CONVERSATION_ID}:0` })
-    );
-  });
-
-  it('fails closed before setup when root admission is rejected', async () => {
-    const { failure, recorders } = await run({
-      workAuthority: {
-        admit: async () => {
-          throw new Error('drain barrier held');
-        },
-        observeRevision: async () => 0
-      }
-    });
-    expect(failure?.reason).toContain('drain barrier held');
-    expect(recorders.watcherSpawns).toEqual([]);
-  });
-
   it('returns no message and writes the ready marker on the host 0-indexed first invocation', async () => {
     const { result } = await run();
     expect(result?.output).toEqual({});

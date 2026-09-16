@@ -31,19 +31,6 @@ export interface PostInvocationOutput {
   injectSteps?: EphemeralStep[];
 }
 
-/** Decision returned synchronously before a matched tool executes. */
-export type PreToolUseOutput = { readonly decision: 'allow' } | { readonly decision: 'deny'; readonly reason: string };
-
-/**
- * Builds the host's deny-capable `PreToolUse` response.
- *
- * @param decision - Allow after admission, or deny with a reason.
- * @returns Exact host decision document.
- */
-export function preToolUseOutput(decision: PreToolUseOutput): PreToolUseOutput {
-  return decision;
-}
-
 /**
  * Builds the `PreInvocation` stdout payload.
  *

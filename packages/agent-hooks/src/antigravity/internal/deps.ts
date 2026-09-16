@@ -24,14 +24,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnStreamSyncWatcher } from '@cards.management/sdk/bin/spawn-stream-sync-watcher';
 import { resolveGlobalCardsConfigDir } from '@cards.management/sdk/cards-config';
-import {
-  type ActionInput,
-  clearPendingShutdownRequest,
-  extractActionInput,
-  type PendingShutdownRequest,
-  readPendingShutdownRequest
-} from '@cards.management/sdk/config';
-import { findAgentPid, isAgentProcessTreeDrained } from '@cards.management/sdk/process-tree';
+import { type ActionInput, extractActionInput } from '@cards.management/sdk/config';
+import { findAgentPid } from '@cards.management/sdk/process-tree';
 import type { SessionSyncManifest } from '@cards.management/sdk/transcript-sync';
 import {
   ANTIGRAVITY_STREAM_TYPE,
@@ -50,9 +44,6 @@ import {
   removeSessionHeadSha,
   removeSessionRouteNudge
 } from '@cards.management/sessions/card-repo';
-import { deliverShutdownReadiness } from '../../shared/shutdown-drain.js';
-import type { WorkAuthority } from '../../shared/work-authority.js';
-import { createHookWorkAuthority } from '../../shared/work-authority.js';
 import { canonicalConversationDbPath, resolveCardsSessionId } from './inputs.js';
 import type { AntigravityIo } from './io.js';
 import { defaultAntigravityIo } from './io.js';
@@ -91,8 +82,6 @@ export { ANTIGRAVITY_STREAM_TYPE };
  * @summary Overridable edges for Antigravity runtime handlers
  */
 export interface AntigravityHandlerDeps {
-  /** Authenticated authority gating root and child work boundaries. */
-  workAuthority: WorkAuthority;
   /** Filesystem seam backing the marker store and cleanup steps. */
   io: AntigravityIo;
   /** Cards global configuration directory (honors `$CARDS_HOME`). */
@@ -132,14 +121,6 @@ export interface AntigravityHandlerDeps {
   unmergedCommitCount(workspacePath: string, baseBranch: string, workspaceBranch: string): number;
   /** Reads and parses CARD.meta.json for the route decision. */
   readCardMeta(cardRepoPath: string): AntigravityCardMeta;
-  /** Loads the session's pending shutdown request, when one exists. */
-  readPendingShutdownRequest(sessionId: string): PendingShutdownRequest | undefined;
-  /** Sends readiness through the authenticated runtime authority. */
-  deliverShutdownReadiness(sessionId: string, request: PendingShutdownRequest): Promise<void>;
-  /** Clears the session's pending shutdown request after acknowledgement. */
-  clearPendingShutdownRequest(sessionId: string, requestId: string): void;
-  /** Proves the agent's process tree holds no work outside the hook branch. */
-  isAgentProcessTreeDrained(agentPid: number): Promise<boolean | null>;
   /** Absolute path of the installed merge runbook (`card` skill references). */
   mergeRunbookPath(): string;
   /** Absolute path of the installed shutdown runbook (`card` skill references). */
@@ -180,10 +161,6 @@ export function resolveRunbookFrom(fromUrl: string, relative: string): string {
  */
 export function defaultAntigravityHandlerDeps(): AntigravityHandlerDeps {
   return {
-    workAuthority: {
-      admit: async (boundary) => createHookWorkAuthority().admit(boundary),
-      observeRevision: async () => createHookWorkAuthority().observeRevision()
-    },
     io: defaultAntigravityIo,
     cardsConfigDir: () => resolveGlobalCardsConfigDir(),
     loadActionInput: () => {
@@ -229,14 +206,6 @@ export function defaultAntigravityHandlerDeps(): AntigravityHandlerDeps {
       return Number.parseInt(output.trim(), 10);
     },
     readCardMeta: (cardRepoPath) => JSON.parse(readFileSync(join(cardRepoPath, 'CARD.meta.json'), 'utf-8')),
-    readPendingShutdownRequest: (sessionId) => readPendingShutdownRequest(sessionId),
-    deliverShutdownReadiness: async (sessionId, request) => {
-      await deliverShutdownReadiness(sessionId, request);
-    },
-    clearPendingShutdownRequest: (sessionId, requestId) => {
-      clearPendingShutdownRequest(sessionId, requestId);
-    },
-    isAgentProcessTreeDrained: async (agentPid) => isAgentProcessTreeDrained(agentPid),
     mergeRunbookPath: () => resolveRunbook('merge.md'),
     shutdownRunbookPath: () => resolveRunbook('shutdown.md'),
     cleanupSessionArtifacts: (sessionId) => cleanupSessionArtifacts(sessionId)

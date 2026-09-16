@@ -1,7 +1,7 @@
 /**
  * Tests for the Antigravity PostInvocation handler contract: the
- * idle/route/merge/shutdown decision, at-most-once injection, the durable
- * decision/idle markers, and the pending-shutdown acknowledgement.
+ * idle/route/merge/shutdown decision, at-most-once injection, and the
+ * durable decision/idle markers.
  *
  * @summary Tests for the Antigravity PostInvocation handler
  */
@@ -196,45 +196,6 @@ describe('PostInvocation shutdown route', () => {
   it('stays silent when exit-when-done is disabled', async () => {
     const { result } = await run({});
     expect(result?.output).toEqual({});
-  });
-});
-
-describe('PostInvocation pending-shutdown acknowledgement', () => {
-  const pendingRequest = {
-    version: 1 as const,
-    requestId: 'req-453',
-    messageId: 'msg-453',
-    outcome: 'success' as const
-  };
-
-  it('acknowledges drain readiness instead of injecting a step', async () => {
-    const { result, recorders } = await run({
-      readPendingShutdownRequest: () => pendingRequest,
-      loadActionInput: () => makeActionInput(root, { exitWhenDone: true }),
-      unmergedCommitCount: () => 3
-    });
-    expect(recorders.shutdownAcks).toEqual([{ transport: 'runtime', requestId: pendingRequest.requestId }]);
-    expect(result?.output).toEqual({});
-    expect(defaultAntigravityIo.existsSync(marker('idle'))).toBe(true);
-  });
-
-  it('waits without acknowledging while the process tree is not drained', async () => {
-    const { result, recorders } = await run({
-      readPendingShutdownRequest: () => pendingRequest,
-      isAgentProcessTreeDrained: async () => false
-    });
-    expect(recorders.shutdownAcks).toEqual([]);
-    expect(result?.output).toEqual({});
-  });
-
-  it('fails closed when the drain state cannot be proven', async () => {
-    const { failure, recorders } = await run({
-      readPendingShutdownRequest: () => pendingRequest,
-      isAgentProcessTreeDrained: async () => null
-    });
-    expect(failure?.stage).toBe('decision');
-    expect(recorders.shutdownAcks).toEqual([]);
-    expect(defaultAntigravityIo.existsSync(marker('failure'))).toBe(true);
   });
 });
 

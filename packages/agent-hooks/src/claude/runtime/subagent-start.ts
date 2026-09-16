@@ -11,17 +11,12 @@
 import { extractActionInput } from '@cards.management/sdk/config';
 import { subagentStartHook, subagentStartOutput } from '@goodfoot/agent-hooks/claude-code';
 import { buildAdditionalContext, CardRepoAccessError } from '../../shared/context.js';
-import type { WorkAuthority } from '../../shared/work-authority.js';
-import { createHookWorkAuthority } from '../../shared/work-authority.js';
 
 /**
- * Builds the shipped Claude child-start gate.
- * @param authorityFactory - Injected authority factory.
- * @returns A hook that blocks child startup until durable admission.
+ * Builds the shipped Claude child-start hook.
+ * @returns A hook that injects card context for a starting subagent.
  */
-export function createClaudeSubagentStartHandler(
-  authorityFactory: () => WorkAuthority = createHookWorkAuthority
-): Parameters<typeof subagentStartHook>[1] {
+export function createClaudeSubagentStartHandler(): Parameters<typeof subagentStartHook>[1] {
   return async (_input, { logger }) => {
     let actionInput: ReturnType<typeof extractActionInput>;
     try {
@@ -31,16 +26,6 @@ export function createClaudeSubagentStartHandler(
       logger.error('Not running inside an action subprocess', { error: message });
       return subagentStartOutput({
         systemMessage: 'SubagentStart hook: not running inside an action subprocess.'
-      });
-    }
-
-    const hostBoundaryId = `claude:child:${_input.session_id}:${_input.agent_id}`;
-    try {
-      await authorityFactory().admit({ cause: 'childTask', messageId: hostBoundaryId, requestId: hostBoundaryId });
-    } catch (error) {
-      return subagentStartOutput({
-        continue: false,
-        systemMessage: `Cards child admission failed: ${error instanceof Error ? error.message : String(error)}`
       });
     }
 

@@ -1,7 +1,6 @@
 /**
  * Tests for the Antigravity Stop handler contract: idempotent drain and
- * cleanup, the drain-ready marker, the pending-shutdown acknowledgement, and
- * the no-continue output invariant.
+ * cleanup, the drain-ready marker, and the no-continue output invariant.
  *
  * @summary Tests for the Antigravity Stop handler
  */
@@ -135,14 +134,13 @@ describe('Cards Assistant Stop contract', () => {
     process.env['CARDS_ASSISTANT_WINDOW_ID'] = 'window-453';
     const cleaned: string[] = [];
 
-    const { failure, recorders } = await run({
+    const { failure } = await run({
       loadActionInput: () => null,
       cleanupSessionArtifacts: (sessionId) => cleaned.push(sessionId)
     });
 
     expect(failure).toBeNull();
     expect(cleaned).toEqual([SESSION_ID]);
-    expect(recorders.shutdownAcks).toEqual([]);
     expect(defaultAntigravityIo.existsSync(drainReadyMarker())).toBe(true);
     expect(defaultAntigravityIo.existsSync(join(root, 'cards', 'main-453', 'streams'))).toBe(false);
   });
@@ -161,68 +159,6 @@ describe('Cards Assistant Stop contract', () => {
 
     expect(failure?.stage).toBe('session-cleanup');
     expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
-    expect(defaultAntigravityIo.existsSync(drainReadyMarker())).toBe(false);
-  });
-});
-
-describe('Stop pending-shutdown handshake', () => {
-  const pendingRequest = {
-    version: 1 as const,
-    requestId: 'req-453',
-    messageId: 'msg-453',
-    outcome: 'success' as const
-  };
-
-  it('acknowledges the pending request after proving the tree drained', async () => {
-    const { failure, recorders } = await run({ readPendingShutdownRequest: () => pendingRequest });
-    expect(failure).toBeNull();
-    expect(recorders.shutdownAcks).toEqual([{ transport: 'runtime', requestId: pendingRequest.requestId }]);
-    expect(defaultAntigravityIo.existsSync(drainReadyMarker())).toBe(true);
-  });
-
-  it('clears the acknowledged request so a later Stop finds none', async () => {
-    let pending: typeof pendingRequest | undefined = { ...pendingRequest };
-    const cleared: string[] = [];
-    const { failure } = await run({
-      readPendingShutdownRequest: () => pending,
-      clearPendingShutdownRequest: (sessionId, requestId) => {
-        if (sessionId === SESSION_ID && requestId === pending?.requestId) {
-          pending = undefined;
-          cleared.push(requestId);
-        }
-      }
-    });
-    expect(failure).toBeNull();
-    expect(cleared).toEqual([pendingRequest.requestId]);
-  });
-
-  it('withholds the acknowledgement while subagents are active', async () => {
-    const { deps, recorders } = makeDeps(root, { readPendingShutdownRequest: () => pendingRequest });
-    recorders.markers.subagentCounts.set(SESSION_ID, 1);
-    const result = await handleStop(makeCommonInput(root), { deps, logger: new Logger() });
-    expect(result.output).toEqual({});
-    expect(recorders.shutdownAcks).toEqual([]);
-    expect(defaultAntigravityIo.existsSync(drainReadyMarker())).toBe(true);
-  });
-
-  it('fails closed without drain readiness when the acknowledgement fails', async () => {
-    const { failure } = await run({
-      readPendingShutdownRequest: () => pendingRequest,
-      deliverShutdownReadiness: async () => {
-        throw new Error('runtime authority unavailable');
-      }
-    });
-    expect(failure?.stage).toBe('drain-ack');
-    expect(defaultAntigravityIo.existsSync(drainReadyMarker())).toBe(false);
-    expect(defaultAntigravityIo.existsSync(failureMarker())).toBe(true);
-  });
-
-  it('fails closed without drain readiness when drain cannot be proven', async () => {
-    const { failure } = await run({
-      readPendingShutdownRequest: () => pendingRequest,
-      isAgentProcessTreeDrained: async () => null
-    });
-    expect(failure?.stage).toBe('drain-ack');
     expect(defaultAntigravityIo.existsSync(drainReadyMarker())).toBe(false);
   });
 });

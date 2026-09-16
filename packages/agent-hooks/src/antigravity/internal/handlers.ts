@@ -17,14 +17,12 @@
  * @module internal/handlers
  */
 
-import { createHash } from 'node:crypto';
 import { join } from 'node:path';
-import type { ActionInput, PendingShutdownRequest } from '@cards.management/sdk/config';
+import type { ActionInput } from '@cards.management/sdk/config';
 import { getBaseBranch, getWorkspaceBranch, getWorkspacePath } from '@cards.management/sdk/config';
 import type { SessionSyncManifest } from '@cards.management/sdk/transcript-sync';
 import type { Logger } from '@goodfoot/agent-hooks';
 import { buildAdditionalContext } from '../../shared/context.js';
-import type { WorkAuthority } from '../../shared/work-authority.js';
 import { ANTIGRAVITY_STREAM_TYPE, type AntigravityCardMeta, type AntigravityHandlerDeps } from './deps.js';
 import {
   type AntigravityInvocationInput,
@@ -33,11 +31,10 @@ import {
   isCardsActionSession,
   parseCommonInput,
   parseInvocationInput,
-  parsePreToolUseInput,
   peekConversationId
 } from './inputs.js';
 import { markerPath, type ReadyMarkerPayload, type RouteMarkerPayload, writeMarker } from './markers.js';
-import { postInvocationOutput, preInvocationOutput, preToolUseOutput, stopOutput } from './outputs.js';
+import { postInvocationOutput, preInvocationOutput, stopOutput } from './outputs.js';
 
 /**
  * The contract stage a {@link HandlerFailure} occurred at, recorded in the
@@ -53,7 +50,6 @@ export type HandlerFailureStage =
   | 'watcher-setup'
   | 'ready-marker'
   | 'decision'
-  | 'drain-ack'
   | 'drain-marker'
   | 'unexpected';
 
@@ -81,59 +77,6 @@ export class HandlerFailure extends Error {
 export interface AntigravityHandlerResult {
   /** JSON value written to stdout; `undefined` writes nothing. */
   output?: unknown;
-}
-
-/** Dependencies of the before-subagent admission gate. */
-export interface AntigravityPreToolUseDeps {
-  /** Authenticated durable authority injected by the entrypoint. */
-  readonly workAuthority: WorkAuthority;
-}
-
-/**
- * Gates `invoke_subagent` before child work starts.
- *
- * @param raw - Host `PreToolUse` payload.
- * @param deps - Injected durable work authority.
- * @returns Allow only after admission; otherwise deny.
- */
-export async function handlePreToolUse(
-  raw: unknown,
-  deps: AntigravityPreToolUseDeps
-): Promise<AntigravityHandlerResult> {
-  if (!isCardsActionSession()) return { output: preToolUseOutput({ decision: 'allow' }) };
-  const input = parsePreToolUseInput(raw);
-  const normalize = (value: unknown): unknown => {
-    if (Array.isArray(value)) return value.map(normalize);
-    if (typeof value !== 'object' || value === null) return value;
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>)
-        .sort(([left], [right]) => left.localeCompare(right))
-        .map(([key, entry]) => [key, normalize(entry)])
-    );
-  };
-  const digest = createHash('sha256')
-    .update(
-      JSON.stringify(
-        normalize({
-          conversationId: input.conversationId,
-          stepIdx: input.stepIdx,
-          toolCall: input.toolCall
-        })
-      )
-    )
-    .digest('hex');
-  const identity = `antigravity:${input.conversationId}:${input.stepIdx}:${digest}`;
-  try {
-    await deps.workAuthority.admit({ cause: 'childTask', messageId: identity, requestId: identity });
-    return { output: preToolUseOutput({ decision: 'allow' }) };
-  } catch (error) {
-    return {
-      output: preToolUseOutput({
-        decision: 'deny',
-        reason: `Cards durable child admission failed: ${error instanceof Error ? error.message : String(error)}`
-      })
-    };
-  }
 }
 
 /** Durable workspace/window registration emitted for Cards Assistant. */
@@ -389,17 +332,6 @@ export async function handlePreInvocation(raw: unknown, ctx: HandlerContext): Pr
 
   const input = parseInvocationOrThrow(raw);
   const sessionId = requireSessionId(deps, input.conversationId);
-  const hostBoundaryId = `antigravity:turn:${input.conversationId}:${input.invocationNum}`;
-  try {
-    await deps.workAuthority.admit({ cause: 'turn', messageId: hostBoundaryId, requestId: hostBoundaryId });
-  } catch (error) {
-    throw new HandlerFailure(
-      'decision',
-      `work admission failed: ${error instanceof Error ? error.message : String(error)}`,
-      input.conversationId
-    );
-  }
-
   const actionInput = requireActionInput(deps, input.conversationId);
   requireCardContext(actionInput, input.conversationId);
   const conversationDbPath = deps.conversationDbPath(input.conversationId);
@@ -467,55 +399,6 @@ export async function handlePreInvocation(raw: unknown, ctx: HandlerContext): Pr
 
   logger.info('Antigravity session ready', { sessionId, conversationId: input.conversationId });
   return { output: preInvocationOutput() };
-}
-
-/**
- * Runs the strict, fail-closed drain authority for the shutdown handshake:
- * no tracked subagents plus a drained owned process tree.
- *
- * @param sessionId - Session to prove drained.
- * @param deps - Handler dependencies.
- * @param conversationId - Conversation id for the failure marker scope.
- * @returns `true` only when both proofs hold.
- * @throws {HandlerFailure} At the `decision` stage when the drain state
- *   cannot be proven.
- */
-async function isSessionStrictlyDrained(
-  sessionId: string,
-  deps: AntigravityHandlerDeps,
-  conversationId: string | null
-): Promise<boolean> {
-  let subagentCount: number;
-  try {
-    subagentCount = deps.sessionMarkers.getActiveSubagentCount(sessionId);
-  } catch (error) {
-    throw new HandlerFailure(
-      'decision',
-      `could not read subagent tracking: ${error instanceof Error ? error.message : String(error)}`,
-      conversationId
-    );
-  }
-  if (subagentCount !== 0) {
-    return false;
-  }
-  const agentPid = await deps.findMonitorPid();
-  if (agentPid === null) {
-    throw new HandlerFailure('decision', 'could not identify the agent PID for the drain proof', conversationId);
-  }
-  let drained: boolean | null;
-  try {
-    drained = await deps.isAgentProcessTreeDrained(agentPid);
-  } catch (error) {
-    throw new HandlerFailure(
-      'decision',
-      `drain proof failed: ${error instanceof Error ? error.message : String(error)}`,
-      conversationId
-    );
-  }
-  if (drained === null) {
-    throw new HandlerFailure('decision', 'the process tree drain state could not be proven', conversationId);
-  }
-  return drained;
 }
 
 /**
@@ -619,21 +502,7 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
   const actionInput = requireActionInput(deps, input.conversationId);
 
   try {
-    // 1. Pending-shutdown handshake: a `cards shutdown` request always wins —
-    // after acknowledgement the next step is termination, not more routing.
-    const pendingRequest = deps.readPendingShutdownRequest(sessionId);
-    if (pendingRequest !== undefined) {
-      const drained = await isSessionStrictlyDrained(sessionId, deps, input.conversationId);
-      if (drained) {
-        await deps.deliverShutdownReadiness(sessionId, pendingRequest);
-        deps.clearPendingShutdownRequest(sessionId, pendingRequest.requestId);
-        logger.info('Acknowledged shutdown readiness', { sessionId });
-      }
-      writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'idle'));
-      return { output: postInvocationOutput() };
-    }
-
-    // 2. Merge route: the workspace branch has commits to merge, the card is
+    // 1. Merge route: the workspace branch has commits to merge, the card is
     // not blocked, and merge is ungated or already approved. At most once
     // per session via the shared route marker.
     let mergeDecision: { count: number; baseBranch: string; workspaceBranch: string } | null = null;
@@ -679,7 +548,7 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
       };
     }
 
-    // 3. Shutdown route: an idle exit-when-done session whose work is done
+    // 2. Shutdown route: an idle exit-when-done session whose work is done
     // should run the shutdown verb. At most once per session.
     if (actionInput.exitWhenDone && !deps.sessionMarkers.hasExitWhenDoneFired(sessionId)) {
       deps.sessionMarkers.markExitWhenDoneFired(sessionId);
@@ -704,7 +573,7 @@ export async function handlePostInvocation(raw: unknown, ctx: HandlerContext): P
       };
     }
 
-    // 4. Idle: the decision machinery ran and required no next step. The
+    // 3. Idle: the decision machinery ran and required no next step. The
     // durable marker — not hook exit zero — is what action settlement reads.
     writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'idle'));
     return { output: postInvocationOutput() };
@@ -734,13 +603,9 @@ function writeFlushSentinel(deps: AntigravityHandlerDeps, cardRepoPath: string, 
  *
  * Contract: requires `conversationId` plus the pinned common host fields;
  * returns no `continue` decision. Cleanup is idempotent and records drain
- * readiness; a missing acknowledgement blocks Cards settlement. It never
- * uses `decision: "continue"` to turn cleanup failure into another model
- * turn.
+ * readiness. It never uses `decision: "continue"` to turn cleanup failure
+ * into another model turn.
  *
- * The pending-shutdown acknowledgement is settlement-critical: a failure
- * there (or an unprovable drain state) writes the failure marker and
- * withholds drain readiness, so the launcher's bounded wait fails closed.
  * The flush sentinel and session-artifact cleanup are best-effort — the
  * watcher provides crash resilience, and leftover artifacts are harmless.
  *
@@ -763,45 +628,7 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
   const sessionId = requireSessionId(deps, input.conversationId);
   const actionInput = requireActionInput(deps, input.conversationId);
 
-  // 1. Pending-shutdown handshake under the strict drain authority. A
-  // failed acknowledgement must block settlement: throw before the
-  // drain-ready marker exists.
-  let pendingRequest: PendingShutdownRequest | undefined;
-  try {
-    pendingRequest = deps.readPendingShutdownRequest(sessionId);
-  } catch (error) {
-    throw new HandlerFailure(
-      'drain-ack',
-      `failed to read the pending shutdown request: ${error instanceof Error ? error.message : String(error)}`,
-      input.conversationId
-    );
-  }
-  if (pendingRequest !== undefined) {
-    let drained: boolean;
-    try {
-      drained = await isSessionStrictlyDrained(sessionId, deps, input.conversationId);
-    } catch (error) {
-      if (error instanceof HandlerFailure) {
-        throw new HandlerFailure('drain-ack', error.reason, error.conversationId);
-      }
-      throw error;
-    }
-    if (drained) {
-      try {
-        await deps.deliverShutdownReadiness(sessionId, pendingRequest);
-        deps.clearPendingShutdownRequest(sessionId, pendingRequest.requestId);
-        logger.info('Acknowledged shutdown readiness', { sessionId });
-      } catch (error) {
-        throw new HandlerFailure(
-          'drain-ack',
-          `failed to acknowledge shutdown readiness: ${error instanceof Error ? error.message : String(error)}`,
-          input.conversationId
-        );
-      }
-    }
-  }
-
-  // 2. Flush sentinel for the stream-sync-watcher — best-effort.
+  // 1. Flush sentinel for the stream-sync-watcher — best-effort.
   try {
     writeFlushSentinel(deps, actionInput.cardRepoPath, sessionId);
   } catch (error) {
@@ -811,7 +638,7 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
     });
   }
 
-  // 3. Session artifact cleanup — best-effort, aggregate-tolerant.
+  // 2. Session artifact cleanup — best-effort, aggregate-tolerant.
   try {
     deps.cleanupSessionArtifacts(sessionId);
   } catch (error) {
@@ -821,7 +648,7 @@ export async function handleStop(raw: unknown, ctx: HandlerContext): Promise<Ant
     });
   }
 
-  // 4. Drain readiness: the idempotent acknowledgement the launcher waits for.
+  // 3. Drain readiness: the idempotent acknowledgement the launcher waits for.
   try {
     writeMarker(deps.io, markerPath(deps.cardsConfigDir(), sessionId, input.conversationId, 'drain-ready'));
   } catch (error) {

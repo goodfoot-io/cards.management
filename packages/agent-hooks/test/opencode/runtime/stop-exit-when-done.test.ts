@@ -6,10 +6,8 @@
 
 import { join } from 'node:path';
 import type { ActionInput } from '@cards.management/sdk/config';
-import { readPendingShutdownRequest, writePendingShutdownRequest } from '@cards.management/sdk/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStopExitWhenDonePlugin } from '../../../src/opencode/internal/runtime-handlers.js';
-import { deliverShutdownReadiness } from '../../../src/shared/shutdown-drain.js';
 import {
   type LogEntry,
   makeCardRepo,
@@ -26,8 +24,6 @@ let tempDir: string;
 let logEntries: LogEntry[];
 const stderrWrites: string[] = [];
 let stderrSpy: ReturnType<typeof vi.spyOn>;
-vi.mock('../../../src/shared/shutdown-drain.js', () => ({ deliverShutdownReadiness: vi.fn(async () => undefined) }));
-const mockDeliverShutdownReadiness = vi.mocked(deliverShutdownReadiness);
 
 beforeEach(() => {
   tempDir = makeTempDir('exit-done');
@@ -165,122 +161,5 @@ describe('CardsStopExitWhenDone (runtime)', () => {
         process.env['HOME'] = originalHome;
       }
     }
-  });
-
-  describe('pending shutdown drain acknowledgement', () => {
-    // The durable pending-request marker uses the redirected Cards home. Runtime
-    // readiness delivery is observed at the authenticated transport boundary.
-    let originalHome: string | undefined;
-    beforeEach(() => {
-      originalHome = process.env['HOME'];
-      process.env['HOME'] = tempDir;
-    });
-
-    afterEach(() => {
-      if (originalHome === undefined) {
-        delete process.env['HOME'];
-      } else {
-        process.env['HOME'] = originalHome;
-      }
-    });
-
-    it('submits durable runtime readiness once the idle session has no pending work', async () => {
-      // Bug reproduction: the OpenCode exit-when-done plugin only ever logs a
-      // nudge telling the model to run `cards shutdown` — it never reads the
-      // durable pending-request marker that verb writes, and never submits the
-      // current-revision readiness evidence the runtime authority
-      // (packages/extension/src/runtime/ActionDispatcher.ts) waits on before
-      // forwarding `agentShutdown`. Without this, OpenCode shutdowns can never
-      // clear the 30s readiness timeout, so the owned process tree is left
-      // running instead of being terminated.
-      writePendingShutdownRequest('ses-root', {
-        version: 1,
-        requestId: 'req-1',
-        messageId: 'msg-1',
-        outcome: 'success'
-      });
-
-      // Real `isAgentProcessTreeDrained` probe against the real `ps -e` table:
-      // point the owned-tree root at this actual test process (matching how
-      // OpenCode's in-process plugin roots the strict check at its own PID,
-      // not a subprocess-hook ancestor) so the probe can find it.
-      const { deps } = makeDeps(tempDir, {
-        loadActionInput: () => actionInput(true),
-        findMonitorPid: () => process.pid
-      });
-      const plugin = createStopExitWhenDonePlugin(deps);
-      const hooks = await plugin(makePluginInput(tempDir, makeClient(logEntries)));
-      await hooks.event?.(sessionCreatedEvent('ses-root'));
-      await hooks.event?.(sessionIdleEvent('ses-root'));
-
-      // The plugin's event handler awaits durable runtime acceptance before it
-      // clears the correlated request marker.
-      expect(mockDeliverShutdownReadiness).toHaveBeenCalledWith(
-        'ses-root',
-        expect.objectContaining({ requestId: 'req-1' })
-      );
-      expect(readPendingShutdownRequest('ses-root')).toBeUndefined();
-    });
-
-    it('submits runtime readiness even when EXIT_WHEN_DONE is false or absent (regression)', async () => {
-      // Bug: the drain-ack was gated behind `actionInput?.exitWhenDone`, so a
-      // plain `Chat`-launched session (which never sets EXIT_WHEN_DONE=true)
-      // could never acknowledge a pending `cards shutdown` request, no matter
-      // how long it sat idle. The drain-ack must be unconditional; only the
-      // separate exit-when-done nudge should depend on that flag.
-      writePendingShutdownRequest('ses-root', {
-        version: 1,
-        requestId: 'req-2',
-        messageId: 'msg-2',
-        outcome: 'success'
-      });
-
-      const { deps } = makeDeps(tempDir, {
-        // No loadActionInput override: defaults to `() => null`, matching a
-        // real Chat-launched session with no action input at all.
-        findMonitorPid: () => process.pid
-      });
-      const plugin = createStopExitWhenDonePlugin(deps);
-      const hooks = await plugin(makePluginInput(tempDir, makeClient(logEntries)));
-      await hooks.event?.(sessionCreatedEvent('ses-root'));
-      await hooks.event?.(sessionIdleEvent('ses-root'));
-
-      expect(mockDeliverShutdownReadiness).toHaveBeenCalledWith(
-        'ses-root',
-        expect.objectContaining({ requestId: 'req-2' })
-      );
-      expect(readPendingShutdownRequest('ses-root')).toBeUndefined();
-      // No exit-when-done nudge should have fired for this non-exit-when-done session.
-      expect(deps.markers.hasExitWhenDoneFired('ses-root')).toBe(false);
-    });
-
-    it('drains a pending request and still returns before the nudge when EXIT_WHEN_DONE is true', async () => {
-      // When both a pending request exists and exitWhenDone is true, the
-      // drain-ack still runs, and the function must not also fire the nudge
-      // on the same idle event (matches the existing early-return-after-
-      // pendingRequest-handling behavior).
-      writePendingShutdownRequest('ses-root', {
-        version: 1,
-        requestId: 'req-3',
-        messageId: 'msg-3',
-        outcome: 'success'
-      });
-
-      const { deps } = makeDeps(tempDir, {
-        loadActionInput: () => actionInput(true),
-        findMonitorPid: () => process.pid
-      });
-      const plugin = createStopExitWhenDonePlugin(deps);
-      const hooks = await plugin(makePluginInput(tempDir, makeClient(logEntries)));
-      await hooks.event?.(sessionCreatedEvent('ses-root'));
-      await hooks.event?.(sessionIdleEvent('ses-root'));
-
-      expect(mockDeliverShutdownReadiness).toHaveBeenCalledWith(
-        'ses-root',
-        expect.objectContaining({ requestId: 'req-3' })
-      );
-      expect(readPendingShutdownRequest('ses-root')).toBeUndefined();
-      expect(deps.markers.hasExitWhenDoneFired('ses-root')).toBe(false);
-    });
   });
 });

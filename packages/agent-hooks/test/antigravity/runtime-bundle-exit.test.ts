@@ -4,19 +4,18 @@
  * The leak signature from card main-707: every `PreInvocation` invocation left
  * one `node bin/runtime-pre-invocation.mjs` process behind, reparented to init,
  * idle at 0% CPU, surviving SIGTERM — hundreds of them until the box ran out
- * of memory. The defect lives in the seam the handler tests stub out
- * (`workAuthority`) and the compiled-output tests bypass (inert foreign
- * classification): a real Cards action session whose admission opens a real
- * runtime connection.
+ * of memory. The defect lived in a seam the handler tests stub out and the
+ * compiled-output tests bypass (inert foreign classification): a real Cards
+ * action session whose setup opened a real runtime connection.
  *
  * These tests run the real compiled bundle end-to-end against a standalone
  * loopback WebSocket server speaking the runtime protocol: a valid Cards
  * action environment, a minted runtime credential file, a discovery document,
- * and a valid invocation input. The handler deterministically completes
- * admission and then fails closed at watcher setup (the extension path does
- * not exist, so no watcher can spawn) — an exit the process must reach on its
- * own. A bundle that finishes its invocation and then lingers, holding open
- * whatever its work opened, is the leak this suite exists to catch.
+ * and a valid invocation input. The handler fails closed at watcher setup (the
+ * extension path does not exist, so no watcher can spawn) — an exit the
+ * process must reach on its own. A bundle that finishes its invocation and
+ * then lingers, holding open whatever its work opened, is the leak this suite
+ * exists to catch.
  *
  * @summary Compiled runtime bundles must terminate after their invocation
  */
@@ -200,7 +199,6 @@ describe('compiled runtime bundle process lifecycle', () => {
 
     const stderr = result.stderr ?? '';
     expect(stderr).toContain('[antigravity-cards-hooks] failure at');
-    expect(stderr).not.toContain('work admission failed');
     expect(
       existsSync(
         join(env['CARDS_HOME'] as string, 'antigravity', 'runtime', 'markers', SESSION_ID, `${CONVERSATION_ID}.failure`)

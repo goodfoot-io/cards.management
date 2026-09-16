@@ -10,14 +10,13 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { extractActionInput, readPendingShutdownRequest } from '@cards.management/sdk/config';
+import { extractActionInput } from '@cards.management/sdk/config';
 import {
   hasSessionExitWhenDoneNudgeFired,
   markSessionExitWhenDoneNudgeFired
 } from '@cards.management/sessions/card-repo';
 import { stopHook, stopOutput } from '@goodfoot/agent-hooks/codex';
 import { isSessionIdle } from '../../shared/session-idle.js';
-import { attemptShutdownDrain } from '../../shared/shutdown-drain.js';
 
 /**
  * Resolve against the compiled hook so installed plugins never depend on cwd.
@@ -40,21 +39,6 @@ export default stopHook({}, async (input, { logger }) => {
   }
 
   if (!actionInput.exitWhenDone) {
-    return undefined;
-  }
-
-  let pendingRequest: ReturnType<typeof readPendingShutdownRequest>;
-  try {
-    pendingRequest = readPendingShutdownRequest(input.session_id);
-  } catch (error) {
-    logger.warn('stop-exit-when-done: failed to read pending shutdown request', {
-      error: error instanceof Error ? error.message : String(error)
-    });
-    return undefined;
-  }
-
-  if (pendingRequest) {
-    await attemptShutdownDrain(input.session_id, logger, 'stop-exit-when-done');
     return undefined;
   }
 

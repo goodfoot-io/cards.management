@@ -81,22 +81,6 @@ export interface AntigravityInvocationInput extends AntigravityCommonInput {
   initialNumSteps: number;
 }
 
-/** Proposed tool call supplied to the deny-capable `PreToolUse` hook. */
-export interface AntigravityToolCall {
-  /** Canonical CLI tool name. */
-  name: string;
-  /** Complete arguments used to derive retry-stable identity. */
-  args: Record<string, unknown>;
-}
-
-/** Input supplied before Antigravity executes a tool call. */
-export interface AntigravityPreToolUseInput extends AntigravityCommonInput {
-  /** Proposed tool call. */
-  toolCall: AntigravityToolCall;
-  /** Zero-based trajectory step containing the call. */
-  stepIdx: number;
-}
-
 /**
  * Thrown by the input parsers when a pinned field is missing, mistyped, or
  * empty. Fail-closed by contract: the handler turns this into a failure
@@ -261,31 +245,5 @@ export function parseInvocationInput(raw: unknown): AntigravityInvocationInput {
     // disposable-host smoke witness) — negative values stay invalid.
     invocationNum: requireInteger(record, 'invocationNum', 0),
     initialNumSteps: requireInteger(record, 'initialNumSteps', 0)
-  };
-}
-
-/**
- * Parses the deny-capable `PreToolUse` payload.
- *
- * @param raw - JSON value supplied by the host.
- * @returns Strict common metadata plus tool-call and step identity.
- * @throws {InputValidationError} When a required field is invalid.
- */
-export function parsePreToolUseInput(raw: unknown): AntigravityPreToolUseInput {
-  const common = parseCommonInput(raw);
-  const record = raw as Record<string, unknown>;
-  const toolCall = record['toolCall'];
-  if (typeof toolCall !== 'object' || toolCall === null || Array.isArray(toolCall)) {
-    throw new InputValidationError('toolCall', 'must be an object');
-  }
-  const call = toolCall as Record<string, unknown>;
-  const args = call['args'];
-  if (typeof args !== 'object' || args === null || Array.isArray(args)) {
-    throw new InputValidationError('toolCall.args', 'must be an object');
-  }
-  return {
-    ...common,
-    toolCall: { name: requireNonEmptyString(call, 'name'), args: args as Record<string, unknown> },
-    stepIdx: requireInteger(record, 'stepIdx', 0)
   };
 }
