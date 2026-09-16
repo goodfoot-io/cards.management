@@ -352,12 +352,12 @@ describe('launch action — antigravity branch', () => {
     const opts = vi.mocked(spawn).mock.calls[0]![2] as {
       cwd: string;
       stdio: string;
-      detached: boolean;
+      detached?: boolean;
       env: Record<string, string | undefined>;
     };
     expect(opts.cwd).toBe(WORKTREE_PATH);
     expect(opts.stdio).toBe('inherit');
-    expect(opts.detached).toBe(process.platform !== 'win32');
+    expect(opts.detached).toBeUndefined();
     expect(opts.env['WORKSPACE_PATH']).toBe(WORKTREE_PATH);
     expect(opts.env['BASE_BRANCH']).toBe('main');
     expect(opts.env['PARENT_BRANCH']).toBe('main');

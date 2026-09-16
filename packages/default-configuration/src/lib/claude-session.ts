@@ -1425,7 +1425,6 @@ export async function spawnClaudeSession(
 
   const child: ChildProcess = spawnAgentCli(cliExecutable, args, {
     cwd,
-    detached: process.platform !== 'win32',
     stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
     // Background mode: the handler running this is console-less (spawned from the
     // GUI extension host via pipes), so cross-spawn's `cmd.exe /c claude.cmd` hop

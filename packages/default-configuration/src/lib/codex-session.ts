@@ -951,7 +951,6 @@ export async function spawnCodexSession(
 
   const child: ChildProcess = spawnAgentCli('codex', args, {
     cwd,
-    detached: process.platform !== 'win32',
     // `codex exec` is the CLI's non-interactive automation surface. Background
     // actions have no terminal reader, so discard stdin/stdout and retain stderr
     // for progress and diagnostics; interactive sessions keep direct terminal

@@ -1160,11 +1160,6 @@ export async function spawnOpencodeSession(
     // invisible on win32 — libuv ignores it when any fd is inherited, so the
     // interactive path must not set it.
     stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
-    // Detached on POSIX (matching spawnCodexSession) so `opencode` roots its
-    // own process group instead of sharing the extension host's: termination
-    // below signals -pid, which must stay inside a launcher-owned group or it
-    // would sweep sibling actions sharing the host's group.
-    detached: process.platform !== 'win32',
     ...(isInteractive ? {} : { windowsHide: true }),
     env: {
       ...process.env,

@@ -62,7 +62,13 @@ export function createProcessTreeAuthority(): ProcessTreeAuthority {
         const close = stat.lastIndexOf(')');
         const fields = stat.slice(close + 2).split(' ');
         if (fields[0] === 'Z' || !fields[19]) return null;
-        return { processId, bootId: bootId.trim(), startedAtToken: fields[19], groupId: processId };
+        // fields[2] is /proc's real `pgrp` column. Provider roots are no longer
+        // spawned detached, so they usually share their launcher's process
+        // group rather than leading their own — this must be the OS-reported
+        // group, never a synthesized value assumed equal to processId.
+        const groupId = Number(fields[2]);
+        if (!Number.isSafeInteger(groupId)) return null;
+        return { processId, bootId: bootId.trim(), startedAtToken: fields[19], groupId };
       } catch {
         return null;
       }
@@ -80,13 +86,16 @@ export function createProcessTreeAuthority(): ProcessTreeAuthority {
         ]);
         return result.failed ? 'refused' : 'sent';
       }
-      // -0 is this process's own group and -1 is every process we may signal,
-      // so neither names the tree this identity was captured for.
-      if (!Number.isSafeInteger(identity.groupId) || identity.groupId <= 1) {
+      // Providers may share their launcher's process group instead of leading
+      // their own, so a group-wide `-pgid` signal could reach the launcher and
+      // unrelated siblings in it. Signal only this individually
+      // identity-revalidated member PID; callers are responsible for walking
+      // every member of the owned tree.
+      if (!Number.isSafeInteger(identity.processId) || identity.processId <= 1) {
         return 'refused';
       }
       try {
-        process.kill(-identity.groupId, signal);
+        process.kill(identity.processId, signal);
         return 'sent';
       } catch (error) {
         return (error as NodeJS.ErrnoException).code === 'ESRCH' ? 'exited' : 'refused';
@@ -134,13 +143,29 @@ export function createOwnedTreeTerminator(
       if (current.bootId !== owned.bootId || current.startedAtToken !== owned.startedAtToken) return 'failed';
       const members = authority.members ? await authority.members(owned) : [owned];
       if (members === null || members.length === 0) return 'failed';
-      const graceful = await authority.signal(owned, 'SIGTERM');
-      if (graceful === 'refused') return 'failed';
-      const waitForMembers = async (timeoutMs: number): Promise<'exited' | 'active' | 'unknown'> => {
+      // Never a single group-wide signal: every member is its own verified PID,
+      // so each is TERM'd/KILL'd individually and a refusal on any one of them
+      // fails the whole operation closed.
+      const signalMembers = async (
+        targets: readonly OwnedProcessIdentity[],
+        signal: NodeJS.Signals
+      ): Promise<'sent' | 'exited' | 'refused'> => {
+        let allExited = true;
+        for (const target of targets) {
+          const outcome = await authority.signal(target, signal);
+          if (outcome === 'refused') return 'refused';
+          if (outcome !== 'exited') allExited = false;
+        }
+        return allExited ? 'exited' : 'sent';
+      };
+      const waitForMembers = async (
+        targets: readonly OwnedProcessIdentity[],
+        timeoutMs: number
+      ): Promise<'exited' | 'active' | 'unknown'> => {
         const deadline = Date.now() + timeoutMs;
         while (Date.now() <= deadline) {
           let active = false;
-          for (const member of members) {
+          for (const member of targets) {
             const observed = await authority.identify(member.processId);
             if (observed === null) continue;
             if (observed.bootId !== member.bootId || observed.startedAtToken !== member.startedAtToken)
@@ -154,19 +179,20 @@ export function createOwnedTreeTerminator(
         }
         return 'active';
       };
-      if (graceful === 'exited' || (await waitForMembers(options.gracefulTimeoutMs)) === 'exited') return 'graceful';
-      let forceAuthority: OwnedProcessIdentity | undefined;
-      for (const member of members) {
-        const observed = await authority.identify(member.processId);
-        if (observed?.bootId === member.bootId && observed.startedAtToken === member.startedAtToken) {
-          forceAuthority = member;
-          break;
-        }
+      const graceful = await signalMembers(members, 'SIGTERM');
+      if (graceful === 'refused') return 'failed';
+      if (graceful === 'exited' || (await waitForMembers(members, options.gracefulTimeoutMs)) === 'exited') {
+        return 'graceful';
       }
-      if (!forceAuthority) return 'failed';
-      const forced = await authority.signal(forceAuthority, 'SIGKILL');
+      // Rescan before force: the graceful window may have let the tree gain or
+      // lose members (e.g. a late fork), so force must not act on a stale set.
+      const forceMembers = authority.members ? await authority.members(owned) : members;
+      if (forceMembers === null || forceMembers.length === 0) return 'failed';
+      const forced = await signalMembers(forceMembers, 'SIGKILL');
       if (forced === 'refused') return 'failed';
-      return forced === 'exited' || (await waitForMembers(options.forceTimeoutMs)) === 'exited' ? 'forced' : 'failed';
+      return forced === 'exited' || (await waitForMembers(forceMembers, options.forceTimeoutMs)) === 'exited'
+        ? 'forced'
+        : 'failed';
     })();
     return termination;
   };

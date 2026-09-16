@@ -591,8 +591,8 @@ describe('launch action — codex branch', () => {
     const promise = action(baseInput(), context);
     await flushMicrotasks();
 
-    const spawnOptions = vi.mocked(spawn).mock.calls[0]![2];
-    expect(spawnOptions).toEqual(expect.objectContaining({ detached: process.platform !== 'win32' }));
+    const spawnOptions = vi.mocked(spawn).mock.calls[0]![2] as Record<string, unknown>;
+    expect(spawnOptions['detached']).toBeUndefined();
 
     const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
     await expect(onCancel()).resolves.toBeUndefined();

@@ -364,11 +364,6 @@ export async function spawnAntigravitySession(
 
   const child: ChildProcess = spawnAgentCli('agy', args, {
     cwd,
-    // Detached on POSIX (matching the other launchers) so `agy` roots its own
-    // process group instead of sharing the extension host's: the drain below
-    // signals -pid, which must stay inside a launcher-owned group or it would
-    // sweep sibling actions sharing the host's group.
-    detached: process.platform !== 'win32',
     // Interactive actions inherit stdio so the user gets direct terminal
     // control (terminal-owned `-i`). Background runs are console-less: stdout
     // is ignored — the parser that read the stream-json transcript is gone and
@@ -506,11 +501,11 @@ export async function spawnAntigravitySession(
   let primaryFailure: unknown;
   let hasPrimaryFailure = false;
   try {
-    // Root exit does not prove the detached process group is gone: surviving
-    // descendants can still own the worktree. Run the same bounded tree drain
-    // on every normal close before any success evidence or settlement. It runs
-    // ahead of the checks below, including the truncation latch, so a latched
-    // run is still drained rather than abandoned with its group alive.
+    // Root exit does not prove its process tree is gone: surviving descendants
+    // can still own the worktree. Run the same bounded tree drain on every
+    // normal close before any success evidence or settlement. It runs ahead of
+    // the checks below, including the truncation latch, so a latched run is
+    // still drained rather than abandoned with members alive.
     const normalDrain = await termination.terminate();
     if (outcome.signal) {
       throw new AntigravitySessionFailureError(
