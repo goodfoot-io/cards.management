@@ -1490,14 +1490,6 @@ export async function spawnClaudeSession(
     context.logger.info(`${input.actionName} cancellation termination completed`, { sessionId, result });
   });
 
-  context.onAgentShutdown(async () => {
-    cardsTerminationRequested = true;
-    context.logger.info(`${input.actionName} agent signalled shutdown, terminating claude`, { sessionId });
-    const result = await termination.terminate('shutdown');
-    context.logger.info(`${input.actionName} shutdown termination completed`, { sessionId, result });
-    return result;
-  });
-
   if (supportsSwitchToInteractive) {
     context.onSwitchToInteractive(() => {
       context.logger.info('Switching to interactive mode', { sessionId });

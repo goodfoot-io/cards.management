@@ -1186,13 +1186,6 @@ export async function spawnOpencodeSession(
     context.logger.info(`${input.actionName} cancellation termination completed`, { result });
   });
 
-  context.onAgentShutdown(async () => {
-    context.logger.info(`${input.actionName} agent signalled shutdown, terminating opencode`);
-    const result = await termination.terminate('shutdown');
-    context.logger.info(`${input.actionName} shutdown termination completed`, { result });
-    return result;
-  });
-
   // Background mode: capture stderr for diagnostic logging.
   if (!isInteractive) {
     child.stderr?.on('data', (chunk: Buffer) => {

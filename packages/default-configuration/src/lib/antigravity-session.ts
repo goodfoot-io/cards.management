@@ -401,9 +401,9 @@ export async function spawnAntigravitySession(
     return transcriptFinalization;
   };
 
-  // Set by the two termination paths Cards owns. The truncation latch reads it
-  // to tell an `agy` print timeout that interrupted a run Cards had already
-  // decided to end from one that silently truncated work still in progress.
+  // Set when Cards cancels the run. The truncation latch reads it to tell an
+  // `agy` print timeout that interrupted a run Cards had already decided to
+  // end from one that silently truncated work still in progress.
   let cardsTerminationRequested = false;
 
   context.onCancel(async () => {
@@ -420,23 +420,6 @@ export async function spawnAntigravitySession(
       result,
       transcriptFinalization: finalization
     });
-  });
-
-  context.onAgentShutdown(async () => {
-    cardsTerminationRequested = true;
-    context.logger.info(`${input.actionName} agent signalled shutdown, terminating agy`, { sessionId });
-    const result = await termination.terminate();
-    const finalization = await finalizeTranscript();
-    const log =
-      finalization.kind === 'flushed'
-        ? context.logger.info.bind(context.logger)
-        : context.logger.error.bind(context.logger);
-    log(`${input.actionName} shutdown termination completed`, {
-      sessionId,
-      result,
-      transcriptFinalization: finalization
-    });
-    return result;
   });
 
   // Background mode: stderr is the diagnostic channel and also the only one

@@ -181,7 +181,6 @@ function createMockContext(): ActionContext {
     cwd: process.cwd(),
     reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
     onCancel: vi.fn(),
-    onAgentShutdown: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
 }
@@ -1825,7 +1824,7 @@ describe('claude-session shared utilities', () => {
       await promise;
     });
 
-    it('registers owned-tree cancellation and reports the shared shutdown result', async () => {
+    it('registers owned-tree cancellation and reports the termination result', async () => {
       const { spawn } = await import('node:child_process');
       const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
 
@@ -1851,9 +1850,6 @@ describe('claude-session shared utilities', () => {
 
       const onCancel = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
       await expect(onCancel()).resolves.toBeUndefined();
-
-      const onAgentShutdown = vi.mocked(context.onAgentShutdown).mock.calls[0]![0] as () => Promise<string>;
-      await expect(onAgentShutdown()).resolves.toBe('graceful');
 
       child.emit('close', 0);
       await promise;
@@ -2264,8 +2260,8 @@ describe('claude-session shared utilities', () => {
       await flushMicrotasks();
 
       // Split the diagnostic across two stderr chunks, as observed in the
-      // remote logs, and never invoke onCancel/onAgentShutdown — this is an
-      // unrequested termination, not a Cards-initiated one.
+      // remote logs, and never invoke onCancel — this is an unrequested
+      // termination, not a Cards-initiated one.
       stderr.emit('Background tasks still running after 600s; term');
       stderr.emit('inating. Set CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 to wait indefinitely.');
 

@@ -599,7 +599,6 @@ describe('codex-session library', () => {
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),
-        onAgentShutdown: vi.fn(),
         onSwitchToInteractive: vi.fn()
       };
     }

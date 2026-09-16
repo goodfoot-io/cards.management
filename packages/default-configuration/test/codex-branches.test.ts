@@ -406,7 +406,6 @@ function createMockContext(): ActionContext {
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
-    onAgentShutdown: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
 }
@@ -581,7 +580,7 @@ describe('launch action — codex branch', () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it('registers owned-tree cancellation and reports the shared shutdown result', async () => {
+  it('registers owned-tree cancellation and reports the termination result', async () => {
     const { spawn } = await import('node:child_process');
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
@@ -596,9 +595,6 @@ describe('launch action — codex branch', () => {
 
     const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
     await expect(onCancel()).resolves.toBeUndefined();
-
-    const onAgentShutdown = vi.mocked(context.onAgentShutdown).mock.calls[0][0] as () => Promise<string>;
-    await expect(onAgentShutdown()).resolves.toBe('graceful');
 
     child.emit('close', 0);
     await promise;

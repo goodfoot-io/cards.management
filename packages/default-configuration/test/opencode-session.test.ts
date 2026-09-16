@@ -633,7 +633,6 @@ describe('opencode-session library', () => {
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),
-        onAgentShutdown: vi.fn(),
         onSwitchToInteractive: vi.fn()
       };
     }
@@ -799,40 +798,6 @@ describe('opencode-session library', () => {
       );
 
       killSpy.mockRestore();
-    });
-
-    it('registers onAgentShutdown that terminates the owned process tree and reports a terminal result', async () => {
-      // Bug reproduction: the card's Actual Behavior describes
-      // `runOpencodeSession()`'s onAgentShutdown handler (opencode-session.ts,
-      // around the immediate `child.kill('SIGTERM')` call below) as sending one
-      // SIGTERM with no drain handshake, deadline, escalation, or terminal-result
-      // reporting. The SDK runtime (public/packages/sdk/src/config/runtime.ts,
-      // handleAgentShutdownCommand) forwards whatever the callback resolves to as
-      // an `agentTermination` result over the socket so
-      // packages/extension/src/runtime/ActionDispatcher.ts can record whether
-      // shutdown was graceful, forced, or failed — but the current handler
-      // returns nothing (void), so the promise resolves `undefined` and no
-      // terminal result is ever reported, regardless of whether the child
-      // actually exits.
-      const { spawn } = await import('node:child_process');
-      const { spawnOpencodeSession } = await import('../src/lib/opencode-session.js');
-      const child = createMockChild();
-      vi.mocked(spawn).mockReturnValue(child);
-
-      const context = createMockContext();
-      const promise = spawnOpencodeSession(baseInput(), context, {});
-      await flushMicrotasks();
-
-      const onAgentShutdown = vi.mocked(context.onAgentShutdown).mock.calls[0][0] as () => Promise<
-        'graceful' | 'forced' | 'failed' | undefined
-      >;
-      const shutdownResult = onAgentShutdown();
-      // The child exits cooperatively right after the signal — this must
-      // resolve to a terminal result, not hang or resolve to undefined.
-      child.emit('close', 0);
-      await expect(shutdownResult).resolves.toBe('graceful');
-
-      await promise;
     });
 
     it('fails closed before staging when the opencode binary is absent', async () => {

@@ -979,13 +979,6 @@ export async function spawnCodexSession(
     context.logger.info(`${input.actionName} cancellation termination completed`, { result });
   });
 
-  context.onAgentShutdown(async () => {
-    context.logger.info(`${input.actionName} agent signalled shutdown, terminating codex`);
-    const result = await termination.terminate('shutdown');
-    context.logger.info(`${input.actionName} shutdown termination completed`, { result });
-    return result;
-  });
-
   if (!isInteractive) {
     child.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString().trim();
