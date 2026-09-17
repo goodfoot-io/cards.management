@@ -661,7 +661,10 @@ describe('EventSubscriber', () => {
 
       // Wait for the async discovery result to propagate
       await vi.waitFor(() => {
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Discovery failed'), 'server not ready');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Discovery failed'),
+          'Server discovery unavailable'
+        );
       });
 
       // No new WebSocket created
@@ -695,7 +698,10 @@ describe('EventSubscriber', () => {
 
       // Wait for the async discovery rejection to propagate
       await vi.waitFor(() => {
-        expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Discovery threw'), 'network unreachable');
+        expect(warnSpy).toHaveBeenCalledWith(
+          expect.stringContaining('Discovery threw'),
+          'WebSocket discovery failed or timed out'
+        );
       });
 
       // No new WebSocket created

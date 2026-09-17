@@ -396,7 +396,10 @@ export class CardsClient {
    * @returns Fully-qualified request URL string.
    */
   private buildUrl(path: string, params?: Record<string, unknown>): string {
-    const url = new URL(path, this.options.baseUrl);
+    const url = new URL(this.options.baseUrl);
+    const endpoint = new URL(path, 'http://cards.invalid');
+    url.pathname = `${url.pathname.replace(/\/$/, '')}/${endpoint.pathname.replace(/^\//, '')}`;
+    for (const [key, value] of endpoint.searchParams) url.searchParams.set(key, value);
     if (params) {
       for (const [key, value] of Object.entries(params)) {
         if (value !== undefined && value !== null) {

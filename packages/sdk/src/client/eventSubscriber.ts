@@ -103,6 +103,12 @@ export class EventSubscriber {
   private hasConnected: boolean = false;
   private readonly maxReconnectAttempts: number;
   private readonly logger: EventSubscriberLogger;
+  private readonly connectionTimeoutMs: number;
+  private readonly discoveryTimeoutMs: number;
+  /** Cancels the pending handshake without depending on a browser close/open event. */
+  private cancelPendingConnect: ((error: Error) => void) | null = null;
+  /** Cancels the current rediscovery deadline when the subscriber is retired. */
+  private cancelDiscovery: (() => void) | null = null;
   /**
    * Monotonically increasing counter incremented on every manual `connect()` call.
    * Each scheduled reconnect timer captures the generation at scheduling time and
@@ -110,6 +116,7 @@ export class EventSubscriber {
    * creating phantom sockets after a manual reconnect supersedes them.
    */
   private connectGeneration: number = 0;
+  private reconnectSequence = 0;
 
   // --- Heartbeat state ---
   /** App-level ping interval timer. Set after a successful connect, cleared on disconnect. */
@@ -153,6 +160,13 @@ export class EventSubscriber {
   constructor(private readonly options: EventSubscriberOptions) {
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? Infinity;
     this.logger = options.logger ?? { warn: (message, details) => console.warn(message, details) };
+    this.connectionTimeoutMs = options.connectionTimeoutMs ?? 10_000;
+    this.discoveryTimeoutMs = options.discoveryTimeoutMs ?? 5_000;
+    for (const duration of [this.connectionTimeoutMs, this.discoveryTimeoutMs]) {
+      if (!Number.isSafeInteger(duration) || duration <= 0 || duration > 2_147_483_647) {
+        throw new Error('Connection and discovery deadlines must be integer milliseconds between 1 and 2147483647');
+      }
+    }
   }
 
   /**
@@ -334,6 +348,7 @@ export class EventSubscriber {
     // before this call will bail out when they fire and find their captured
     // generation no longer matches.
     this.connectGeneration++;
+    this.cancelDiscovery?.();
 
     // Cancel any pending backoff timer so a manual connect() call does not race
     // with a scheduled reconnect that would create a second socket once the
@@ -364,76 +379,85 @@ export class EventSubscriber {
    * @returns Promise that resolves when the socket opens.
    */
   private async _openSocket(wsUrl: string, accessToken: string): Promise<void> {
-    const url = `${wsUrl}?token=${encodeURIComponent(accessToken)}`;
+    const url = new URL(wsUrl);
+    url.hash = '';
+    url.searchParams.set('token', accessToken);
 
-    // Close any existing socket before creating a new one to prevent parallel
-    // reconnect loops from orphaned sockets whose close handler still fires.
-    // Null this.ws BEFORE closing so the close handler's stale-socket guard
-    // (ws !== this.ws) suppresses connectionChange callbacks for the old socket.
+    // A replaced CONNECTING socket may never emit another event. Settle its
+    // caller before closing it, and detach it before any synchronous close event.
+    this.cancelPendingConnect?.(new Error('Superseded by a newer connect()'));
     this._stopHeartbeat();
     const oldWs = this.ws;
     this.ws = null;
-    if (oldWs) {
-      oldWs.close();
-    }
+    this.connected = false;
+    oldWs?.close();
 
-    this.ws = new globalThis.WebSocket(url);
+    const ws = new globalThis.WebSocket(url.toString());
+    this.ws = ws;
     this.shouldReconnect = true;
 
     return new Promise((resolve, reject) => {
-      if (!this.ws) {
-        reject(new Error('Failed to create WebSocket'));
-        return;
-      }
-
-      const ws = this.ws;
-
-      const cleanup = (): void => {
+      let settled = false;
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      const settle = (error?: Error): void => {
+        if (settled) return;
+        settled = true;
+        if (deadline !== undefined) clearTimeout(deadline);
         ws.removeEventListener('open', onOpen);
         ws.removeEventListener('error', onError);
+        if (this.cancelPendingConnect === cancel) this.cancelPendingConnect = null;
+        if (error) reject(error);
+        else resolve();
       };
-
+      const cancel = (error: Error): void => settle(error);
+      const fail = (error: Error): void => {
+        if (settled) return;
+        settle(error);
+        if (ws !== this.ws) return;
+        this.ws = null;
+        // Do not rely on a close event following error/timeout: browser and
+        // transport failures can leave that event pending indefinitely.
+        try {
+          ws.close();
+        } finally {
+          this._teardownConnection();
+        }
+      };
       const onOpen = (): void => {
-        // Ignore open events from a stale socket that has already been replaced
-        // by a concurrent connect() call. Reject this promise so the superseded
-        // caller does not hang; the newer connect()'s promise governs state.
         if (ws !== this.ws) {
-          cleanup();
-          reject(new Error('Superseded by a newer connect()'));
+          settle(new Error('Superseded by a newer connect()'));
           return;
         }
         this.connected = true;
         this.hasConnected = true;
         this.reconnectAttempts = 0;
-        cleanup();
         this._startHeartbeat();
-        // Re-subscribe every tracked card on each successful connection
-        // (initial connect and every reconnect) with its last known-good
-        // seq, so a drop resumes catch-up instead of silently going stale.
-        this._resubscribeAllCards();
-        // Snapshot before iterating: see _teardownConnection for why.
-        for (const cb of [...this.connectionChangeCallbacks]) {
-          cb(true);
+        try {
+          this._resubscribeAllCards();
+        } catch {
+          fail(new Error('WebSocket subscription initialization failed'));
+          return;
         }
-        resolve();
+        this.notifyConnectionChange(true);
+        settle();
       };
-
       const onError = (event: Event): void => {
-        cleanup();
-        reject(new Error(`WebSocket connection failed: ${event.type}`));
+        fail(new Error(`WebSocket connection failed: ${event.type}`));
       };
 
+      this.cancelPendingConnect = cancel;
+      deadline = setTimeout(() => {
+        fail(new Error('WebSocket connection timed out'));
+      }, this.connectionTimeoutMs);
       ws.addEventListener('open', onOpen);
       ws.addEventListener('error', onError);
       ws.addEventListener('close', () => {
-        // Ignore events from stale sockets that have already been replaced
-        // (e.g., by a concurrent connect() call). Only the current socket's
-        // close event should trigger state changes and reconnection.
+        settle(new Error('WebSocket closed before connection opened'));
         if (ws !== this.ws) return;
+        this.ws = null;
         this._teardownConnection();
       });
       ws.addEventListener('message', (event: MessageEvent) => {
-        // Ignore messages from a stale socket that has already been replaced.
         if (ws !== this.ws) return;
         this.handleMessage(event);
       });
@@ -448,6 +472,9 @@ export class EventSubscriber {
    */
   disconnect(): void {
     this.shouldReconnect = false;
+    this.connectGeneration++;
+    this.cancelDiscovery?.();
+    this.cancelPendingConnect?.(new Error('WebSocket disconnected before connection opened'));
 
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
@@ -456,11 +483,9 @@ export class EventSubscriber {
 
     this._stopHeartbeat();
 
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
-    }
-
+    const ws = this.ws;
+    this.ws = null;
+    ws?.close();
     this.connected = false;
   }
 
@@ -480,6 +505,65 @@ export class EventSubscriber {
   }
 
   /**
+   * Keeps diagnostics from becoming an unhandled rejection in a timer callback.
+   *
+   * @param message - Credential-free diagnostic message.
+   * @param details - Optional non-secret diagnostic detail.
+   */
+  private warn(message: string, details?: unknown): void {
+    try {
+      this.logger.warn(message, details);
+    } catch {
+      // Diagnostics are observational; they cannot own connection liveness.
+    }
+  }
+
+  /**
+   * Bounds rediscovery without letting a late result reopen a retired attempt.
+   *
+   * @returns The endpoint discovered within this attempt's deadline.
+   */
+  private discoverWithDeadline(): Promise<DiscoverResult> {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (result: DiscoverResult | Error): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(deadline);
+        if (this.cancelDiscovery === cancel) this.cancelDiscovery = null;
+        if (result instanceof Error) reject(result);
+        else resolve(result);
+      };
+      const cancel = (): void => finish(new Error('WebSocket discovery cancelled'));
+      const deadline = setTimeout(() => finish(new Error('WebSocket discovery timed out')), this.discoveryTimeoutMs);
+      this.cancelDiscovery = cancel;
+      try {
+        this.options.discover().then(
+          (result) => finish(result),
+          () => finish(new Error('WebSocket discovery failed'))
+        );
+      } catch {
+        finish(new Error('WebSocket discovery failed'));
+      }
+    });
+  }
+
+  /**
+   * Isolates consumer callbacks so one broken panel cannot stop reconnection.
+   *
+   * @param connected - Whether the active socket is open.
+   */
+  private notifyConnectionChange(connected: boolean): void {
+    for (const callback of [...this.connectionChangeCallbacks]) {
+      try {
+        callback(connected);
+      } catch {
+        this.warn('[EventSubscriber] Connection observer failed');
+      }
+    }
+  }
+
+  /**
    * Schedules a reconnection attempt with exponential backoff.
    *
    * Before connecting, calls `discover()` to resolve the current server URL and
@@ -489,60 +573,64 @@ export class EventSubscriber {
   private scheduleReconnect(): void {
     if (this.reconnectTimeout) {
       clearTimeout(this.reconnectTimeout);
+      this.reconnectTimeout = null;
     }
-
-    // Check if we've exhausted reconnection attempts
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       this.shouldReconnect = false;
       return;
     }
 
-    const backoffMs = calculateBackoffMs(this.reconnectAttempts);
-    this.reconnectAttempts++;
-
-    // Capture the current generation so the callback can detect whether a
-    // manual connect() call has superseded this scheduled attempt.
+    const backoffMs = calculateBackoffMs(this.reconnectAttempts++);
     const generation = this.connectGeneration;
+    const sequence = ++this.reconnectSequence;
+    const current = (): boolean =>
+      this.shouldReconnect && this.connectGeneration === generation && this.reconnectSequence === sequence;
 
-    this.reconnectTimeout = setTimeout(() => {
+    const timer = setTimeout(async () => {
+      // A callback already queued when cancelled must not start another discovery.
+      if (this.reconnectTimeout !== timer) return;
+      clearTimeout(timer);
       this.reconnectTimeout = null;
-      if (!this.shouldReconnect || this.connectGeneration !== generation) {
+      if (!current()) return;
+
+      let result: DiscoverResult;
+      try {
+        result = await this.discoverWithDeadline();
+      } catch {
+        if (!current()) return;
+        this.warn(
+          `[EventSubscriber] Discovery threw before reconnect attempt ${this.reconnectAttempts}:`,
+          'WebSocket discovery failed or timed out'
+        );
+        this.scheduleReconnect();
         return;
       }
-
-      this.options
-        .discover()
-        .then((result: DiscoverResult) => {
-          if (!this.shouldReconnect || this.connectGeneration !== generation) {
-            return;
-          }
-          if ('error' in result) {
-            this.logger.warn(
-              `[EventSubscriber] Discovery failed before reconnect attempt ${this.reconnectAttempts}:`,
-              result.error
-            );
-            this.scheduleReconnect();
-            return;
-          }
-          // Connection failure triggers close handler which calls scheduleReconnect
-          this._openSocket(result.wsUrl, result.accessToken).catch((err) => {
-            this.logger.warn(
-              `[EventSubscriber] Reconnection attempt ${this.reconnectAttempts} failed:`,
-              err instanceof Error ? err.message : String(err)
-            );
-          });
-        })
-        .catch((err: unknown) => {
-          if (!this.shouldReconnect || this.connectGeneration !== generation) {
-            return;
-          }
-          this.logger.warn(
-            `[EventSubscriber] Discovery threw before reconnect attempt ${this.reconnectAttempts}:`,
-            err instanceof Error ? err.message : String(err)
-          );
-          this.scheduleReconnect();
-        });
+      if (!current()) return;
+      if (
+        typeof result !== 'object' ||
+        result === null ||
+        'error' in result ||
+        typeof result.wsUrl !== 'string' ||
+        typeof result.accessToken !== 'string'
+      ) {
+        this.warn(
+          `[EventSubscriber] Discovery failed before reconnect attempt ${this.reconnectAttempts}:`,
+          'Server discovery unavailable'
+        );
+        this.scheduleReconnect();
+        return;
+      }
+      try {
+        await this._openSocket(result.wsUrl, result.accessToken);
+      } catch {
+        // A close/error may have already scheduled the next attempt. Sequence,
+        // not just connect generation, prevents this older catch from duplicating it.
+        if (!current()) return;
+        this.warn(`[EventSubscriber] Reconnection attempt ${this.reconnectAttempts} failed`);
+        this.scheduleReconnect();
+      }
     }, backoffMs);
+    this.reconnectTimeout = timer;
   }
 
   /**
@@ -562,9 +650,7 @@ export class EventSubscriber {
       // onConnectionChange unsubscribe function for another callback during
       // this dispatch must not cause that callback to be skipped for this
       // notification.
-      for (const cb of [...this.connectionChangeCallbacks]) {
-        cb(false);
-      }
+      this.notifyConnectionChange(false);
     }
     if (this.shouldReconnect) {
       this.scheduleReconnect();
@@ -591,7 +677,7 @@ export class EventSubscriber {
       if (!this.isConnected()) return;
       this.missedPongs++;
       if (this.missedPongs >= EventSubscriber.MISSED_PONG_LIMIT) {
-        this.logger.warn(`[EventSubscriber] Missed ${this.missedPongs} pongs — closing connection for reconnect`);
+        this.warn(`[EventSubscriber] Missed ${this.missedPongs} pongs — closing connection for reconnect`);
         if (this.ws) {
           this.ws.close();
           this.ws = null;
@@ -605,7 +691,7 @@ export class EventSubscriber {
         // send() throws when not connected — possible race between
         // isConnected() check and a socket close. The missed-pong
         // counter above will trigger reconnect naturally.
-        this.logger.warn('[EventSubscriber] heartbeat ping failed:', err);
+        this.warn('[EventSubscriber] heartbeat ping failed:', err);
       }
     }, EventSubscriber.HEARTBEAT_INTERVAL_MS);
   }
@@ -659,7 +745,7 @@ export class EventSubscriber {
    */
   private _isValidJournalEnvelope(message: { type: string; [key: string]: unknown }): boolean {
     const reject = (detail: string): boolean => {
-      this.logger.warn(
+      this.warn(
         `[EventSubscriber] Dropping malformed '${message.type}' for card ${String(message['cardId'])}: ${detail}`
       );
       return false;
@@ -722,7 +808,7 @@ export class EventSubscriber {
     } catch (error) {
       // Parse failures are a distinct path from callback failures: a malformed
       // payload yields no message to dispatch, so log it accurately and stop.
-      this.logger.warn('Failed to parse WebSocket message:', error);
+      this.warn('Failed to parse WebSocket message:', error);
       return;
     }
 
@@ -799,7 +885,7 @@ export class EventSubscriber {
       try {
         (callback as (event: unknown) => void)(message);
       } catch (error) {
-        this.logger.warn(`Event callback for '${String(message.type)}' threw:`, error);
+        this.warn(`Event callback for '${String(message.type)}' threw:`, error);
       }
     }
   }
@@ -864,7 +950,7 @@ export class EventSubscriber {
   private _handleCardJournalEvent(message: CardJournalEventMessage): void {
     const expected = (this.cardSeq.get(message.cardId) ?? 0) + 1;
     if (message.seq !== expected) {
-      this.logger.warn(
+      this.warn(
         `[EventSubscriber] seq gap for card ${message.cardId}: expected ${expected}, got ${message.seq} — re-subscribing`
       );
       this._sendCardSubscribe(message.cardId);

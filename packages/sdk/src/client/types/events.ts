@@ -85,6 +85,10 @@ export interface EventSubscriberOptions {
    * and access token. Required to handle server restarts on new ports.
    */
   discover: () => Promise<DiscoverResult>;
+  /** Absolute deadline for each WebSocket handshake, in milliseconds (default 10000). */
+  connectionTimeoutMs?: number;
+  /** Absolute deadline for each rediscovery attempt, in milliseconds (default 5000). */
+  discoveryTimeoutMs?: number;
   /** Maximum reconnection attempts before giving up (default Infinity). */
   maxReconnectAttempts?: number;
   /**

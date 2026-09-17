@@ -13,6 +13,19 @@
  * @module
  */
 
+export type {
+  ApiServerHandoffRequest,
+  ApiServerIdentity,
+  ApiServerReadiness,
+  ProtocolCompatibility
+} from './types/apiHandoff.js';
+// API ownership and authenticated handoff identity (browser-safe).
+export {
+  apiServerIdentityEquals,
+  CURRENT_API_PROTOCOL_VERSION,
+  classifyProtocol,
+  isApiServerIdentity
+} from './types/apiHandoff.js';
 export { UpdateBranchOwnerRequestSchema } from './types/branch.js';
 export type {
   Action,
