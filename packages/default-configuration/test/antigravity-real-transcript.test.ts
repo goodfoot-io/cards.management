@@ -106,10 +106,6 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
   createWorktreeForCard: vi.fn()
 }));
 
-vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
-}));
-
 const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
 const AGENT = 'antigravity-cli';
 const ANTIGRAVITY_HOME = '/test/antigravity-cli';
@@ -266,6 +262,7 @@ afterEach(() => {
 function createMockContext(): ActionContext {
   return {
     reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -386,15 +383,15 @@ describe('background launch outcome — real agy captures', () => {
     const transcript = await readFixture('captured-stream-json-success.jsonl');
 
     const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput(), createMockContext());
+    const context = createMockContext();
+    const promise = action(baseInput(), context);
     await flushMicrotasks();
 
     child.stdout?.emit('data', Buffer.from(transcript));
     child.emit('close', 0);
     await expect(promise).resolves.toBeUndefined();
 
-    const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
+    expect(context.reportBranchCleanupRegistration).not.toHaveBeenCalled();
   });
 
   it('settles as a named failure when driven with the committed print-timeout capture', async () => {

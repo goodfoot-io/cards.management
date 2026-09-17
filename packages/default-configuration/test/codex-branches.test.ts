@@ -126,14 +126,6 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
   createWorktreeForCard: vi.fn()
 }));
 
-vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
-}));
-
-vi.mock('@cards.management/sdk/bin/resolve-branch-cleanup-watcher', () => ({
-  resolveBranchCleanupWatcher: vi.fn(() => '/resolved/dist/bin/branch-cleanup-watcher')
-}));
-
 const originalFetch = globalThis.fetch;
 
 beforeEach(async () => {
@@ -407,6 +399,7 @@ afterEach(() => {
 function createMockContext(): ActionContext {
   return {
     reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -604,28 +597,20 @@ describe('launch action — codex branch', () => {
     await promise;
   });
 
-  it('calls spawnBranchCleanupWatcher after session exits', async () => {
+  it('registers branch cleanup after session exits', async () => {
     const { spawn, execFile } = await import('node:child_process');
     const child = createMockChild();
     vi.mocked(spawn).mockReturnValue(child);
 
     const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput(), createMockContext());
+    const context = createMockContext();
+    const promise = action(baseInput(), context);
     await flushMicrotasks();
 
     child.emit('close', 0);
     await promise;
 
-    const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
-      {
-        cardId: 'card-123',
-        repoRoot: '/test/workspace',
-        cardRepoPath: '/test/repo'
-      },
-      expect.anything(),
-      expect.anything()
-    );
+    expect(context.reportBranchCleanupRegistration).toHaveBeenCalledWith({});
 
     const execCalls = vi.mocked(execFile).mock.calls;
     const mergeBaseCall = execCalls.find((call) => (call[1] as string[])?.includes('merge-base'));
@@ -660,8 +645,7 @@ describe('launch action — codex branch', () => {
     child.emit('close', 0);
     await promise;
 
-    const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
+    expect(context.reportBranchCleanupRegistration).not.toHaveBeenCalled();
   });
 });
 

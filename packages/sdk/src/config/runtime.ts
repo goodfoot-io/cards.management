@@ -345,6 +345,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
           | 'execution.interactiveHandoff'
           | 'execution.commandEffectResult'
           | 'execution.worktreeAssignmentResult'
+          | 'execution.branchCleanupRegistration'
       >(
         type: T,
         payload: RuntimePayload<T>,
@@ -373,6 +374,14 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
             `${loaded.execution.executionId}:worktree-assignment`
           );
           if (!accepted) throw new Error('Runtime authority did not accept the worktree assignment');
+        },
+        reportBranchCleanupRegistration: async (registration) => {
+          const accepted = await sendDurable(
+            'execution.branchCleanupRegistration',
+            registration,
+            `${loaded.execution.executionId}:branch-cleanup-registration`
+          );
+          if (!accepted) throw new Error('Runtime authority did not accept the branch-cleanup registration');
         },
         onCancel: (callback) => {
           cancelCallback = callback;

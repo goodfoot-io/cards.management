@@ -60,15 +60,6 @@ vi.mock('node:child_process', () => ({
   execFileSync: vi.fn()
 }));
 
-// Detached-watcher spawns are out of scope here; lock only the wiring.
-vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn().mockResolvedValue(undefined)
-}));
-
-vi.mock('@cards.management/sdk/bin/resolve-branch-cleanup-watcher', () => ({
-  resolveBranchCleanupWatcher: vi.fn(() => '/resolved/dist/bin/branch-cleanup-watcher')
-}));
-
 vi.mock('node:fs', () => ({
   readdirSync: vi.fn(),
   readFileSync: vi.fn(),
@@ -634,6 +625,7 @@ describe('opencode-session library', () => {
     function createMockContext(): ActionContext {
       return {
         reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+        reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),
@@ -795,12 +787,7 @@ describe('opencode-session library', () => {
       child.emit('close', 0);
       await promise;
 
-      const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-      expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
-        { cardId: 'card-123', repoRoot: '/test/workspace', cardRepoPath: '/test/repo' },
-        expect.anything(),
-        expect.anything()
-      );
+      expect(context.reportBranchCleanupRegistration).toHaveBeenCalledWith({});
 
       killSpy.mockRestore();
     });

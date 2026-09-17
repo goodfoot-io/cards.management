@@ -97,14 +97,6 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
   createWorktreeForCard: vi.fn()
 }));
 
-vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
-}));
-
-vi.mock('@cards.management/sdk/bin/resolve-branch-cleanup-watcher', () => ({
-  resolveBranchCleanupWatcher: vi.fn(() => '/resolved/dist/bin/branch-cleanup-watcher')
-}));
-
 const WORKTREE_PATH = '/test/workspace/.worktrees/cards/card-123/1';
 const AGENT = 'antigravity-cli';
 const ANTIGRAVITY_HOME = '/test/antigravity-cli';
@@ -245,6 +237,7 @@ afterEach(() => {
 function createMockContext(): ActionContext {
   return {
     reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -341,7 +334,8 @@ describe('launch action — antigravity branch', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput(), createMockContext());
+    const context = createMockContext();
+    const promise = action(baseInput(), context);
     await flushMicrotasks();
 
     expect(vi.mocked(spawn).mock.calls).toHaveLength(1);
@@ -372,12 +366,7 @@ describe('launch action — antigravity branch', () => {
     child.emit('close', 0);
     await promise;
 
-    const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    expect(spawnBranchCleanupWatcher).toHaveBeenCalledWith(
-      { cardId: 'card-123', repoRoot: '/test/workspace', cardRepoPath: '/test/repo', sessionId: expect.any(String) },
-      expect.anything(),
-      expect.anything()
-    );
+    expect(context.reportBranchCleanupRegistration).toHaveBeenCalledWith({ sessionId: expect.any(String) });
   });
 
   it('does not settle a successful child exit before the launcher-owned final poll settles', async () => {
@@ -871,7 +860,8 @@ describe('launch action — antigravity branch', () => {
     vi.mocked(spawn).mockReturnValue(child);
 
     const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
+    const context = createMockContext();
+    const promise = action(baseInput({ executionMode: 'background' }), context);
     await flushMicrotasks();
 
     const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
@@ -892,9 +882,8 @@ describe('launch action — antigravity branch', () => {
     child.emit('close', 0);
     await promise;
 
-    // Inline cleanup only — no detached watcher behind a headless run.
-    const { spawnBranchCleanupWatcher } = await import('../src/lib/branch-cleanup-watcher.js');
-    expect(spawnBranchCleanupWatcher).not.toHaveBeenCalled();
+    // Inline cleanup only — no registration behind a headless run.
+    expect(context.reportBranchCleanupRegistration).not.toHaveBeenCalled();
   });
 
   it('fails a background launch on nonzero exit and signal termination', async () => {

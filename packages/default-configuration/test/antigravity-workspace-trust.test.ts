@@ -103,10 +103,6 @@ vi.mock('@cards.management/sdk/transcript-sync', () => ({
   finalizePersistedSqlitePollSession: vi.fn()
 }));
 
-vi.mock('../src/lib/branch-cleanup-watcher.js', () => ({
-  spawnBranchCleanupWatcher: vi.fn()
-}));
-
 /** Agent id the Antigravity launch paths are bound to. */
 const AGENT = 'antigravity-cli';
 
@@ -204,6 +200,7 @@ function createMockChild(): ChildProcess {
 function createMockContext(): ActionContext {
   return {
     reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),

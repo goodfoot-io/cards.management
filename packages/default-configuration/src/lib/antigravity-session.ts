@@ -25,7 +25,6 @@ import { randomUUID } from 'node:crypto';
 import { access, constants, mkdir, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '@cards.management/sdk';
-import { resolveBranchCleanupWatcher } from '@cards.management/sdk/bin/resolve-branch-cleanup-watcher';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { type ActionContext, type ActionInput, CARDS_ENV_VARS } from '@cards.management/sdk/config';
 import {
@@ -34,7 +33,6 @@ import {
 } from '@cards.management/sdk/transcript-sync';
 import { createAntigravityTerminationController } from './antigravity-termination.js';
 import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
-import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import { cleanupMergedBranches, errorMessage, resolveBaseBranch, resolveOrCreateWorktree } from './claude-session.js';
 import { spawnAgentCli } from './spawn-cli.js';
 
@@ -602,18 +600,9 @@ export async function spawnAntigravitySession(
   // terminal closes immediately (the watcher calls the same
   // {@link cleanupMergedBranches} function).
   try {
-    await spawnBranchCleanupWatcher(
-      {
-        cardId: input.cardId,
-        repoRoot: input.repoRoot,
-        cardRepoPath: input.cardRepoPath,
-        sessionId
-      },
-      context.logger,
-      resolveBranchCleanupWatcher(join(input.extensionPath, 'dist', 'bin'))
-    );
+    await context.reportBranchCleanupRegistration({ sessionId });
   } catch (error) {
-    context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', {
+    context.logger.warn('Failed to register branch cleanup (non-fatal)', {
       error: errorMessage(error),
       sessionId
     });

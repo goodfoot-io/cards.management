@@ -186,6 +186,16 @@ export interface ActionContext {
   reportWorktreeAssignment(assignment: WorktreeAssignmentResult): Promise<void>;
 
   /**
+   * Durably registers the provider's session-specific inputs for a later
+   * detached branch-cleanup run, while the provider still holds them. The
+   * server derives `cardId`/`repoRoot`/`cardRepoPath` from the admitted
+   * execution and its reservation itself — this carries nothing else on
+   * purpose, so no path supplied by a producer can steer the maintenance
+   * worker.
+   */
+  reportBranchCleanupRegistration(registration: BranchCleanupRegistration): Promise<void>;
+
+  /**
    * Register a callback to be invoked when the action is cancelled.
    *
    * The callback is called when the runtime receives a cancel command
@@ -226,6 +236,14 @@ export interface WorktreeAssignmentResult {
   readonly branch: string;
   readonly worktreePath: string;
   readonly reason: 'reused' | 'reattached' | 'allocated';
+}
+
+/**
+ * Branch-cleanup registration reported by the admitted action handler while
+ * it still holds its session-specific inputs.
+ */
+export interface BranchCleanupRegistration {
+  readonly sessionId?: string;
 }
 
 // ============================================================================

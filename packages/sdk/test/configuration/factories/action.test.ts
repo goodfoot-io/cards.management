@@ -43,6 +43,7 @@ describe('defineAction', () => {
     logger: mockLogger,
     cwd: '/workspace',
     reportWorktreeAssignment: vi.fn(),
+    reportBranchCleanupRegistration: vi.fn(),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };

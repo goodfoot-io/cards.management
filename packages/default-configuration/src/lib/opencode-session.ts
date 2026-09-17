@@ -50,11 +50,9 @@ import { homedir } from 'node:os';
 import * as path from 'node:path';
 import { resolveGlobalCardsConfigDir } from '@cards.management/sdk';
 import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
-import { resolveBranchCleanupWatcher } from '@cards.management/sdk/bin/resolve-branch-cleanup-watcher';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
-import { spawnBranchCleanupWatcher } from './branch-cleanup-watcher.js';
 import {
   cleanupMergedBranches,
   errorMessage,
@@ -1222,17 +1220,9 @@ export async function spawnOpencodeSession(
   // {@link cleanupMergedBranches} function).
   if (isInteractive) {
     try {
-      await spawnBranchCleanupWatcher(
-        {
-          cardId: input.cardId,
-          repoRoot: input.repoRoot,
-          cardRepoPath: input.cardRepoPath
-        },
-        context.logger,
-        resolveBranchCleanupWatcher(path.join(input.extensionPath, 'dist', 'bin'))
-      );
+      await context.reportBranchCleanupRegistration({});
     } catch (error) {
-      context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', {
+      context.logger.warn('Failed to register branch cleanup (non-fatal)', {
         error: errorMessage(error)
       });
     }

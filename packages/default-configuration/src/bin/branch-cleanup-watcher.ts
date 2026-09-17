@@ -1,25 +1,41 @@
 /**
  * Thin CLI entry for the installed `branch-cleanup-watcher` binary.
  *
- * Unlike `../lib/branch-cleanup-watcher.js`'s dual-purpose self-invocation
- * guard (importable as a library, or self-exec'd via a `--branch-cleanup`
- * argv flag as an interim shim), this file has exactly one job: it is the
- * installed binary's entry point, always invoked as the process root, so it
- * unconditionally reads params off stdin and runs the worker — no flag needed
- * to distinguish "imported" from "invoked as a script".
+ * The extension's branch-cleanup effect authority
+ * (`packages/extension/src/runtime/branchCleanupEffect.ts`) spawns this
+ * wrapper directly and passes cleanup parameters as environment variables
+ * (`CARD_ID`, `REPO_ROOT`, `CARD_REPO_PATH`, optionally `CARDS_SESSION_ID`) —
+ * never over stdin or argv, so no program path or session data travels
+ * through a spawned command line. This entry reads them the same way any
+ * other action/hook entry point does, then delegates to
+ * {@link runBranchCleanupWorker}.
  *
  * @summary Installed-binary CLI entry for the branch-cleanup watcher
  * @module
  */
 
-import { runDetachedCleanup } from '../lib/branch-cleanup-watcher.js';
+import { CARDS_ENV_VARS, getCardId, getCardRepoPath, getRepoRoot } from '@cards.management/sdk/config/env';
+import { Logger } from '@cards.management/sdk/config/logger';
+import { runBranchCleanupWorker } from '../lib/branch-cleanup-watcher.js';
 
 /**
- * Runs the detached cleanup worker to completion and sets the process exit
- * code accordingly.
+ * Reads {@link BranchCleanupParams} off the environment, runs the worker to
+ * completion, and sets the process exit code accordingly.
  */
 export async function main(): Promise<void> {
-  process.exitCode = await runDetachedCleanup();
+  const logger = new Logger();
+  try {
+    const sessionId = process.env[CARDS_ENV_VARS.CARDS_SESSION_ID];
+    const params = {
+      cardId: getCardId(),
+      repoRoot: getRepoRoot(),
+      cardRepoPath: getCardRepoPath(),
+      ...(sessionId ? { sessionId } : {})
+    };
+    process.exitCode = await runBranchCleanupWorker(params, logger);
+  } finally {
+    logger.close();
+  }
 }
 
 if (process.argv[1]?.endsWith('branch-cleanup-watcher.mjs') || process.argv[1]?.endsWith('branch-cleanup-watcher.ts')) {

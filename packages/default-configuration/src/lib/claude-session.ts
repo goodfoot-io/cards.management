@@ -18,7 +18,6 @@ import * as path from 'node:path';
 import { type ActionContext, type ActionInput, CARDS_ENV_VARS, resolveWorktreeDir } from '@cards.management/sdk';
 import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
 import { readCardStatus } from '@cards.management/sdk/bin/process-utils';
-import { resolveBranchCleanupWatcher } from '@cards.management/sdk/bin/resolve-branch-cleanup-watcher';
 import type { CardsClient } from '@cards.management/sdk/client';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { compiledHookScriptPaths } from '@cards.management/sdk/git-hooks';
@@ -1572,20 +1571,10 @@ export async function spawnClaudeSession(
         candidateBranches: candidates.map(([name]) => name)
       });
 
-      const { spawnBranchCleanupWatcher } = await import('./branch-cleanup-watcher.js');
-      await spawnBranchCleanupWatcher(
-        {
-          cardId: input.cardId,
-          repoRoot: input.repoRoot,
-          cardRepoPath: input.cardRepoPath,
-          sessionId
-        },
-        context.logger,
-        resolveBranchCleanupWatcher(path.join(input.extensionPath, 'dist', 'bin'))
-      );
+      await context.reportBranchCleanupRegistration({ sessionId });
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      context.logger.warn('Failed to spawn branch-cleanup watcher (non-fatal)', { error: message, sessionId });
+      context.logger.warn('Failed to register branch cleanup (non-fatal)', { error: message, sessionId });
     }
   } else {
     const cleanupStart = performance.now();
