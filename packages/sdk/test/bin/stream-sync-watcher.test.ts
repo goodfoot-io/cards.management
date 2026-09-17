@@ -2,13 +2,19 @@
  * Stream-sync watcher composition tests independent of transport mechanics.
  * @summary Stream-sync watcher behavior tests
  */
+
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFinalizationController, parseMinimalIdentity, runSession } from '../../src/bin/stream-sync-watcher.js';
 import type { ReconnectingWatcherHandle } from '../../src/config/watcher/reconnectingWatcher.js';
+import {
+  readExecutionFinalization,
+  registerExecutionFinalization,
+  SESSION_FINALIZATION_FILE_ENV
+} from '../../src/transcript-sync/engine/execution-finalization.js';
 import type { SessionSyncManifest } from '../../src/transcript-sync/manifest.js';
 
 describe('parseMinimalIdentity', () => {
@@ -118,7 +124,10 @@ describe('runSession', () => {
     };
   });
 
-  afterEach(() => rmSync(base, { recursive: true, force: true }));
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    rmSync(base, { recursive: true, force: true });
+  });
 
   function handle(): ReconnectingWatcherHandle {
     return {
@@ -134,6 +143,20 @@ describe('runSession', () => {
       shutdown() {}
     };
   }
+
+  it.each([
+    'complete',
+    'missing-main',
+    'commit-failed'
+  ])('publishes truthful finalization after a %s close', async (mode) => {
+    const directory = join(base, 'execution');
+    const file = registerExecutionFinalization(manifest, directory)!;
+    vi.stubEnv(SESSION_FINALIZATION_FILE_ENV, file);
+    if (mode !== 'missing-main') writeFileSync(join(watchRoot, 'sess-1.jsonl'), 'line1\n');
+    if (mode === 'commit-failed') writeFileSync(join(cardRepoPath, '.git', 'index.lock'), 'locked');
+    await runSession(manifest, handle());
+    expect(await readExecutionFinalization(directory)).toBe(mode === 'complete' ? 'complete' : 'incomplete');
+  });
 
   it('syncs, reports watching, and commits on process-death exit', async () => {
     writeFileSync(join(watchRoot, 'sess-1.jsonl'), 'line1\n');

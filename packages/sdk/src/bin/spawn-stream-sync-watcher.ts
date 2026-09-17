@@ -17,6 +17,10 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { isAbsolute, join } from 'node:path';
+import {
+  registerExecutionFinalization,
+  SESSION_FINALIZATION_FILE_ENV
+} from '../transcript-sync/engine/execution-finalization.js';
 import { type SessionSyncManifest, serializeManifest } from '../transcript-sync/manifest.js';
 import { resolveDetachedNodeInterpreter } from './detached-node.js';
 
@@ -166,6 +170,11 @@ export function spawnStreamSyncWatcher(options: SpawnStreamSyncWatcherOptions): 
     ? resolveStreamSyncWatcher(join(extensionPath, 'dist', 'bin'))
     : streamSyncWatcherWrapperName();
 
+  // A required watcher that cannot start remains an incomplete obligation.
+  const finalizationFile = registerExecutionFinalization(manifest);
+  const watcherEnv = { ...process.env };
+  delete watcherEnv[SESSION_FINALIZATION_FILE_ENV];
+  if (finalizationFile !== undefined) watcherEnv[SESSION_FINALIZATION_FILE_ENV] = finalizationFile;
   const spawnArgs = [serializeManifest(manifest)];
   const { sessionId, cardId, monitorPid } = manifest;
 
@@ -194,7 +203,7 @@ export function spawnStreamSyncWatcher(options: SpawnStreamSyncWatcherOptions): 
     const child = spawn(nodeExe, [mjs, ...spawnArgs], {
       detached: false,
       stdio: 'ignore',
-      env: { ...process.env },
+      env: watcherEnv,
       windowsHide: true
     });
     child.on('error', (err) => {
@@ -224,7 +233,7 @@ export function spawnStreamSyncWatcher(options: SpawnStreamSyncWatcherOptions): 
   const child = spawn(watcher, spawnArgs, {
     detached: false,
     stdio: 'ignore',
-    env: { ...process.env }
+    env: watcherEnv
   });
   child.on('error', (err) => {
     logger.error('stream-sync-watcher spawn failed', {

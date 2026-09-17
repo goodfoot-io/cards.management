@@ -9,6 +9,13 @@
  */
 
 export { commitSessionClose, removeSentinelFile, sentinelExists, sentinelPath } from './commit.js';
+export {
+  EXECUTION_FINALIZATION_DIR_ENV,
+  readExecutionFinalization,
+  recordExecutionFinalization,
+  registerExecutionFinalization,
+  SESSION_FINALIZATION_FILE_ENV
+} from './execution-finalization.js';
 export { ensureGitignoreEntry } from './gitignore.js';
 export {
   type LifecycleDeps,

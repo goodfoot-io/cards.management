@@ -1,5 +1,5 @@
 /**
- * Detached, runtime-agnostic transcript-sync watcher process.
+ * Wrapper-owned, runtime-agnostic transcript-sync watcher process.
  *
  * Spawned by session-start with a single argv argument — a serialized
  * {@link SessionSyncManifest} (see `../transcript-sync/manifest.ts`) — this
@@ -8,7 +8,7 @@
  * `../transcript-sync/engine/`. It is a manifest-driven implementation that
  * serves both Claude Code and Codex sessions.
  *
- * Startup is fail-closed and REGISTERS FIRST: this process runs detached with
+ * Startup is fail-closed and REGISTERS FIRST: this process runs with
  * `stdio: 'ignore'`, so once spawned its exit code is invisible to the parent.
  * The control-socket registration (which gives the extension a channel to
  * observe and stop this process) happens before manifest validation, so even
@@ -22,7 +22,7 @@
  * re-registers with capped exponential backoff on an unexpected disconnect
  * instead of exiting — sync work keeps running underneath a dropped socket.
  *
- * @summary Manifest-driven detached transcript-sync watcher — composition root
+ * @summary Manifest-driven transcript-sync watcher — composition root
  */
 
 import { mkdir, readdir, stat } from 'node:fs/promises';
@@ -30,6 +30,7 @@ import { join } from 'node:path';
 import type { WatcherContext } from '../config/watcher/context.js';
 import { createReconnectingWatcher, type ReconnectingWatcherHandle } from '../config/watcher/reconnectingWatcher.js';
 import { commitSessionClose, sentinelExists } from '../transcript-sync/engine/commit.js';
+import { recordExecutionFinalization } from '../transcript-sync/engine/execution-finalization.js';
 import { acquireFinalizationLock } from '../transcript-sync/engine/finalization-lock.js';
 import { ensureGitignoreEntry } from '../transcript-sync/engine/gitignore.js';
 import {
@@ -117,7 +118,8 @@ export function createFinalizationController(finalize: () => Promise<void>): Fin
       if (waiter.timer !== undefined) clearTimeout(waiter.timer);
       waiter.resolve();
     }
-    settlement ??= finalize();
+    settlement ??= Promise.resolve().then(finalize);
+    void settlement.catch(() => undefined);
     return settlement;
   }
 
@@ -322,6 +324,7 @@ async function runPollSession(manifest: SessionSyncManifest, handle: Reconnectin
       errorFn(`stream-sync-watcher: final transcript drain degraded (${finalization.reason}): ${finalization.detail}`);
       ctx.emit({ type: 'error', data: { message: finalization.detail } });
     }
+    await recordExecutionFinalization(manifest, finalization.kind === 'flushed');
   };
 
   const controller = createFinalizationController(closeSession);
@@ -394,7 +397,11 @@ export async function runSession(manifest: SessionSyncManifest, handle: Reconnec
 
   const { ctx } = handle;
   const warnFn = (message: string) => ctx.logger.warn(message);
-  const errorFn = (message: string) => ctx.logger.error(message);
+  let reportedError = false;
+  const errorFn = (message: string): void => {
+    reportedError = true;
+    ctx.logger.error(message);
+  };
 
   const destRoot = join(manifest.cardRepoPath, 'streams', manifest.streamType);
   await mkdir(destRoot, { recursive: true });
@@ -425,6 +432,12 @@ export async function runSession(manifest: SessionSyncManifest, handle: Reconnec
       if (state.failed !== undefined) fileFailures[state.relPath] = state.failed;
     }
     await writeSessionStatus(manifest, { startedAt, closedAt: new Date().toISOString(), fileFailures });
+    await recordExecutionFinalization(
+      manifest,
+      !reportedError &&
+        Object.keys(fileFailures).length === 0 &&
+        reconciler.getFileStates().some((state) => state.role === 'main')
+    );
   };
 
   await watchInstaller.tryInstall();
