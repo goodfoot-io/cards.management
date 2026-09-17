@@ -180,7 +180,7 @@ describe('WorktreeRemove hook', () => {
     });
   });
 
-  it('falls back to bare removeWorktree (no client) when the API is unavailable for a bound worktree', async () => {
+  it('preserves a bound worktree when its cleanup authority is unavailable', async () => {
     resetMocks();
     mockCreateCardsClient.mockResolvedValue(null);
     const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
@@ -189,7 +189,9 @@ describe('WorktreeRemove hook', () => {
     await hookFn({ ...baseInput, worktree_path }, { logger: mockLogger as unknown as Logger });
 
     expect(mockRemoveWorktreeForCard).not.toHaveBeenCalled();
-    expect(mockRemoveWorktree).toHaveBeenCalledWith(worktree_path);
+    expect(mockRemoveWorktree).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(worktree_path, '.cards', 'CARD_ID'), 'utf8')).toBe('main-77\n');
+    expect(mockLogger.info).not.toHaveBeenCalledWith('WorktreeRemove complete', expect.anything());
     expect(mockLogger.warn).toHaveBeenCalledWith(
       expect.stringContaining('Cards API unavailable'),
       expect.objectContaining({ cardId: 'main-77' })
@@ -269,8 +271,8 @@ describe('WorktreeRemove hook', () => {
     await hookFn({ ...baseInput, worktree_path }, { logger: mockLogger as unknown as Logger });
 
     // The hook no longer special-cases detached HEAD: it forwards to
-    // removeWorktreeForCard, and the detached-HEAD skip-with-warning now lives
-    // inside releaseWorktreeForCard (covered by the SDK-level tests).
+    // removeWorktreeForCard, whose ownership check refuses an unregistered HEAD
+    // (covered by the SDK-level tests). No bare-removal path bypasses it.
     expect(mockRemoveWorktreeForCard).toHaveBeenCalledWith(fakeClient, worktree_path, {
       cardId: 'main-77'
     });

@@ -457,12 +457,10 @@ export interface CreateWorktreeForCardOptions {
  * Creates a card-bound worktree and registers the branch with the Cards API.
  *
  * Composes the pure {@link createWorktree} git primitive with
- * {@link outfitWorktreeForCard}: it creates the worktree on disk, then — using
- * the EARLY worktree path (before `settle` resolves) — outfits it (installs the
- * attribution hooks and registers the branch) so the agent session can spawn
- * immediately without waiting for symlink wiring to finish. Outfit runs
- * synchronously before `settle` is returned, preserving the A2 guarantee for the
- * creation-time flow (the disk phase is in place before any caller can commit).
+ * the same outfit implementation used by {@link outfitWorktreeForCard}. Local
+ * hook and marker preparation overlaps materialization on the early path, but
+ * registration waits for settlement. Callers receive the checkout only after
+ * both phases succeed, so rollback cannot race an exposed agent session.
  *
  * Returns the same `{ path, settle }` shape after settlement completes. The
  * early path remains available internally to outfit, but is not handed to an
@@ -534,8 +532,8 @@ export async function createWorktreeForCard(
     // failed response or race a request still in flight with local rollback.
     if (publication.attempted) throw outfitError;
     // Atomicity: the worktree dir + git branch now exist on disk but outfit
-    // failed partway (e.g. addBranch rejected), so no fully-registered worktree
-    // exists. First quiesce createWorktree's asynchronous materialization: its
+    // failed before registration was dispatched, so this invocation has not
+    // published the worktree. First quiesce its asynchronous materialization: its
     // copy/symlink/config work owns paths inside the worktree and must not race
     // teardown. Settlement failure is cleanup context; outfitError remains the
     // primary failure that caused rollback.

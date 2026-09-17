@@ -33,10 +33,10 @@ cards "$CARD_ID" shutdown --outcome blocked --message "waiting on review"
 cards "$CARD_ID" shutdown --outcome error --message "what failed"
 ```
 
-`--outcome` defaults to `success`; `--message` is optional free text. Exit 0 confirms the request was sent.
+`--outcome` defaults to `success`; `--message` is optional free text. Exit 0 confirms durable request acceptance, not that cleanup has completed.
 
-Do not make any later tool call after the shutdown command. Delivery is not completion: the Claude Stop hook acknowledges readiness only after Cards proves the owned process tree is drained.
+Do not make any later tool call after the shutdown command. Delivery is not completion: the runtime records one terminal decision, and the execution wrapper reports containment and output finalization after stopping its owned processes.
 
-4. End the session cleanly. The action handler terminates this session gracefully in response to the signal — no kill commands are needed.
+4. End the session cleanly. The execution wrapper owns termination in response to the accepted decision — no separate kill commands are needed.
 
 </instructions>

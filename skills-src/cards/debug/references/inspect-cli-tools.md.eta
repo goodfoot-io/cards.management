@@ -107,9 +107,9 @@ Routes through `POST /execute-command` with `{command: "cards.reportIssue", args
 
 | Daemon | Spawned by | Purpose |
 |--------|-----------|---------|
-| `stream-sync-watcher` | SessionStart/`EnterWorktree` hooks | Monitors agent PID, syncs manifest-described transcript files → card repo stream files |
+| `stream-sync-watcher` | SessionStart/`EnterWorktree` hooks | Remains in the spawning session, monitors agent PID, and finalizes transcript capture on stop or signal |
 | `adhoc-cleanup` | `EnterWorktree` hook | Monitors agent PID, transitions card to `needs_review` on session end |
-| Branch cleanup watcher | ActionDispatcher (detached) | Cleans up branches after interactive sessions |
+| Branch cleanup watcher | Extension durable branch-cleanup effect | Runs the installed worker with server-derived environment parameters and awaits its exit; failure remains a failed effect |
 
 ## Shell Shim Pattern
 
@@ -158,7 +158,7 @@ All CLIs authenticate via Bearer token from the API discovery file.
 
 ## Platform-Specific Behavior
 
-**Win32 detached spawns**: Resolve `node.exe` directly (not through `.cmd` shim) via `resolveDetachedNodeInterpreter()` to prevent console window popups. `windowsHide: true` on all child processes.
+**Win32 transcript/adhoc spawns**: Resolve `node.exe` directly (not through a `.cmd` shim) via `resolveDetachedNodeInterpreter()` with `windowsHide: true`. The stream-sync watcher stays in the spawning session; adhoc cleanup is detached. The branch-maintenance effect separately invokes the installed worker shim and awaits its exit.
 
 ## Out of Scope
 

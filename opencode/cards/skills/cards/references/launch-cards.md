@@ -82,6 +82,16 @@ done
   iteration, so keep polling `$.status` as documented: status still settles to
   `needs_review` either way, and the signal never gates that transition.
 
+### Completion authority
+
+Card-status settlement belongs to the live runtime completion authority. Terminal
+execution results are retained by the lifecycle result sink; the conditional
+metadata mutation itself only patches or aborts and has no separate offline-finisher
+queue to drain. Settlement is refused when another live execution owns the card or
+when a competing user status change invalidates the write. Keep polling and inspect
+the runtime's reported state rather than overwriting `CARD.meta.json` to force a
+completion.
+
 ## 4. Track and Report
 
 - Represent each card as one task (TaskCreate/TaskUpdate or equivalent):

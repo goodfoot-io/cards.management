@@ -15,8 +15,8 @@ cards "$CARD_ID" shutdown --outcome blocked --message "waiting on review"
 cards "$CARD_ID" shutdown --outcome error --message "what failed"
 ```
 
-`--outcome` defaults to `success`; `--message` is optional free text. Exit 0 confirms the request was sent.
+`--outcome` defaults to `success`; `--message` is optional free text. Exit 0 confirms durable request acceptance, not that cleanup has completed.
 
-3. End the session cleanly. The action handler terminates this session gracefully in response to the signal — no kill commands are needed.
+3. End the session cleanly. The execution wrapper owns termination in response to the accepted decision — no separate kill commands are needed.
 
 </instructions>

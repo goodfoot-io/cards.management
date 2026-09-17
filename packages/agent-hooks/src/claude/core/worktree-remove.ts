@@ -52,9 +52,8 @@ export default worktreeRemoveHook({}, async (input, { logger }) => {
 
   try {
     // Resolve the card binding from disk before removal: the marker yields the
-    // cardId. The exact branch name is derived inside releaseWorktreeForCard
-    // from the worktree's HEAD, where the detached-HEAD skip-with-warning stance
-    // now lives — so the hook no longer resolves the branch itself.
+    // cardId. The orchestrator derives the exact branch from HEAD and requires
+    // a durable cleanup claim; the hook must not bypass that ownership gate.
     const cardId = await readWorktreeCardId(input.worktree_path);
 
     if (cardId === undefined) {
@@ -62,17 +61,19 @@ export default worktreeRemoveHook({}, async (input, { logger }) => {
       // Tear down the worktree from disk only.
       await removeWorktree(input.worktree_path);
     } else {
-      // Fail-open: a missing client or a failed removeBranch must never block
-      // disk teardown. Remove the worktree regardless, logging the orphaned
-      // branch record for later reconciliation.
+      // A bound worktree may belong to another live execution. No API means
+      // no cleanup authority, not permission to bypass the guarded orchestrator.
       const client = await createCardsClient(logger, { retryOnNetworkError: false });
       if (client === null) {
-        logger.warn('WorktreeRemove: Cards API unavailable; removing worktree without unregistering branch', {
-          event: 'WorktreeRemove',
-          worktree_path: input.worktree_path,
-          cardId
-        });
-        await removeWorktree(input.worktree_path);
+        logger.warn(
+          'WorktreeRemove: Cards API unavailable; preserving bound worktree until cleanup ownership can be checked',
+          {
+            event: 'WorktreeRemove',
+            worktree_path: input.worktree_path,
+            cardId
+          }
+        );
+        return worktreeRemoveOutput({});
       } else {
         try {
           await removeWorktreeForCard(client, input.worktree_path, { cardId });
