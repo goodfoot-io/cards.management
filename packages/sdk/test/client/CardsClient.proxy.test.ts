@@ -1,4 +1,8 @@
-/** @summary HTTP clients preserve remote forwarding path prefixes and routing queries */
+/**
+ * Uses proxy-shaped endpoint fixtures to verify HTTP routing preserves forwarding paths and query parameters.
+ *
+ * @summary HTTP clients preserve remote forwarding path prefixes and routing queries
+ */
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
