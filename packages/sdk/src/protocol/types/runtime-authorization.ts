@@ -72,11 +72,13 @@ const EXECUTION_PRODUCERS: readonly ProducerRole[] = [
  * be authorized and is therefore rejected.
  */
 export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, MessageContract>> = {
+  // An admitted CLI must register before it can submit shutdown. Registration
+  // does not grant execution-owner liveness, capabilities, or cleanup authority.
   'runtime.register': {
     type: 'runtime.register',
     direction: 'client-to-server',
     deliveryClass: 'reconciled-snapshot',
-    allowedRoles: [...EXECUTION_PRODUCERS, 'watcher'],
+    allowedRoles: [...EXECUTION_PRODUCERS, 'watcher', 'cli'],
     executionRequirement: 'authenticated-subject',
     requiresRequestId: false,
     requiresCausationId: false,
@@ -87,7 +89,7 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     type: 'runtime.resume',
     direction: 'client-to-server',
     deliveryClass: 'reconciled-snapshot',
-    allowedRoles: [...EXECUTION_PRODUCERS, 'watcher'],
+    allowedRoles: [...EXECUTION_PRODUCERS, 'watcher', 'cli'],
     executionRequirement: 'authenticated-subject',
     requiresRequestId: false,
     requiresCausationId: false,

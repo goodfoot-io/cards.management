@@ -227,3 +227,34 @@ describe('acknowledgment messages', () => {
     expect(RUNTIME_MESSAGE_CONTRACTS['runtime.resumeAck'].requiresCausationId).toBe(true);
   });
 });
+
+describe('admitted CLI transport permissions', () => {
+  const cli = { role: 'cli', producerId: 'cli-1' } as const;
+  const context = contextOf({ authenticatedRole: 'cli', authenticatedProducerId: cli.producerId });
+
+  it.each(['runtime.register', 'runtime.resume'] as const)('allows %s before an authenticated shutdown', (type) => {
+    const opening = envelopeOf({ type, producer: cli });
+    expect(refusal(opening, context)).toBe('authorized');
+    expect(refusal({ ...opening, scope: { ...scope, cardId: 'other-card' } }, context)).toBe('scope-mismatch');
+    expect(refusal({ ...opening, ownership: { ownerId: 'server-a', generation: 1 } }, context)).toBe('ownership-stale');
+    expect(refusal({ ...opening, producer: { ...cli, producerId: 'other-cli' } }, context)).toBe('role-impersonation');
+  });
+
+  it('still requires an admitted execution when the CLI submits shutdown', () => {
+    const shutdown = envelopeOf({
+      type: 'execution.shutdownRequest',
+      producer: cli,
+      requestId: 'terminal:exec-1',
+      payload: { outcome: 'success' }
+    });
+    expect(refusal(shutdown, { ...context, executionAdmitted: false })).toBe('execution-not-admitted');
+  });
+
+  it.each([
+    'runtime.liveness',
+    'runtime.capabilities',
+    'execution.cleanupResult'
+  ] as const)('does not grant CLI producers the execution-owner permission %s', (type) => {
+    expect(refusal(envelopeOf({ type, producer: cli }), context)).toBe('role-not-permitted');
+  });
+});
