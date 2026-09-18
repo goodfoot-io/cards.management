@@ -330,6 +330,25 @@ describe('sending', () => {
 });
 
 describe('post-barrier own-record drain', () => {
+  it('retransmits the exact persisted result after time has advanced, rather than changing its fingerprint', async () => {
+    const outbox = new MemoryOutbox();
+    const original = pendingResult('immutable-cleanup');
+    server = await FakeRuntimeServer.start();
+    client = createRuntimeClient(optionsFor(server, { outbox, now: () => new Date('2026-09-18T12:00:00.000Z') }));
+    await client.connect();
+    await outbox.enqueue(original);
+    const report = await drainRuntimeClientOutbox({
+      client,
+      outbox,
+      executionId: 'exec-1',
+      role: 'runtime-wrapper',
+      deadlineMs: 100
+    });
+    expect(report.ok).toBe(true);
+    expect(server.received.find(({ messageId }) => messageId === original.messageId)).toEqual(original.envelope);
+    expect(outbox.stored).toHaveLength(0);
+  });
+
   it('automatically resends an own pending result after resume and retires only after runtime.accepted', async () => {
     const outbox = new MemoryOutbox();
     await outbox.enqueue(pendingResult('pending-result'));

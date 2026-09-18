@@ -143,6 +143,8 @@ export interface OutboundMessage<TType extends RuntimeMessageType = RuntimeMessa
   readonly messageId: string;
   readonly requestId?: string;
   readonly causationId?: string;
+  /** Original envelope timestamp when replaying a durable outbox record. */
+  readonly sentAt?: string;
   readonly execution: ExecutionRef | null;
   /** Bounded wait for durable acceptance. Expiry is never agent termination. */
   readonly deadlineMs?: number;

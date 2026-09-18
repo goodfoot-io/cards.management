@@ -268,7 +268,7 @@ class RuntimeClientImpl implements RuntimeClient {
       messageId: message.messageId,
       ...(message.requestId === undefined ? {} : { requestId: message.requestId }),
       ...(message.causationId === undefined ? {} : { causationId: message.causationId }),
-      sentAt: (this.options.now?.() ?? new Date()).toISOString(),
+      sentAt: message.sentAt ?? (this.options.now?.() ?? new Date()).toISOString(),
       execution: message.execution,
       scope: this.options.identity.scope,
       producer: this.options.identity.producer,
