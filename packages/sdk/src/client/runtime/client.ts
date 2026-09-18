@@ -685,6 +685,7 @@ class RuntimeClientImpl implements RuntimeClient {
         messageId: envelope.messageId,
         requestId: envelope.requestId,
         causationId: envelope.causationId,
+        sentAt: envelope.sentAt,
         execution: envelope.execution,
         deadlineMs: 5_000
       } as OutboundMessage);

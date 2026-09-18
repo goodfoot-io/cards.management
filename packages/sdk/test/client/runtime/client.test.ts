@@ -358,6 +358,9 @@ describe('post-barrier own-record drain', () => {
 
     expect(outbox.stored).toHaveLength(0);
     expect(server.received.filter(({ messageId }) => messageId === 'pending-result')).toHaveLength(1);
+    expect(server.received.find(({ messageId }) => messageId === 'pending-result')).toEqual(
+      pendingResult('pending-result').envelope
+    );
   });
 
   it('preserves an own pending record when delivery is uncertain', async () => {
