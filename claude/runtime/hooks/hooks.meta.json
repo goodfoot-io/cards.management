@@ -1,0 +1,12 @@
+{
+  "files": [
+    "notification-idle-nudge.mjs",
+    "post-tool-use.mjs",
+    "session-end.mjs",
+    "session-start-after-compaction.mjs",
+    "session-start.mjs",
+    "stop.mjs",
+    "subagent-start.mjs",
+    "subagent-stop.mjs"
+  ]
+}

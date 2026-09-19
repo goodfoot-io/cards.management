@@ -1,0 +1,11 @@
+{
+  "files": [
+    "enter-worktree.mjs",
+    "post-tool-use-skill.mjs",
+    "session-start.mjs",
+    "subagent-start.mjs",
+    "user-prompt-submit.mjs",
+    "worktree-create.mjs",
+    "worktree-remove.mjs"
+  ]
+}
