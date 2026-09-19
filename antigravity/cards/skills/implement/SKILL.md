@@ -1,30 +1,27 @@
 ---
 name: implement
-description: Worktree workflow for implementing a task — create a worktree, create a bound card, implement, rebase, fast-forward merge back, and clean up.
+description: Implement, validate, and fast-forward merge a card-bound worktree.
 ---
 
-<worktree-task-workflow>
+On resume, restore saved context, verify binding and origin, and skip Steps 1–3.
 
-1. **Record the starting point** before doing anything else:
-   - `ORIGIN_DIR=$(pwd)` — the directory to return to and merge into.
-   - `ORIGIN_BRANCH` — the branch currently checked out there.
-   - Confirm this checkout is unbound (`.cards/CARD_ID` is absent or empty). Flagless `create-worktree` inherits a trimmed marker from the nearest invoking Git checkout, so a bound origin would create another checkout for that existing card instead of the fresh-card workflow below. Ambient `CARD_ID` is ignored, and a nested repository forms its own inheritance boundary.
+1. From a clean, unbound checkout (`.cards/CARD_ID` absent/empty), record `ORIGIN_DIR=$(pwd)` and a named `ORIGIN_BRANCH=$(git branch --show-current)`.
 
-2. **Create a worktree** with the `create-worktree` CLI — the agent CLI has no built-in worktree tool:
-   `create-worktree <task-branch>`
-   then `cd` into the printed `worktree` path (parsed from the JSON output).
+2. Run `create-worktree <task-branch>`; enter its JSON `worktree` path and record `branch`.
 
-3. **Create a card for the task** by running `cards create` from inside the worktree. Creating it from within the worktree auto-attaches the card to it — no separate attach step.
+3. Run `cards create` here (auto-attaches), or `cards <requested-id> attach --parent-branch "$ORIGIN_BRANCH"`. Capture `CARD_ID`; fetch `cards "$CARD_ID"`'s `repositoryPath` as `CARD_REPO_PATH`. Follow card-repository instructions; commit origin/worktree paths and branches in a card comment.
 
-4. **Implement the change** in the worktree, on its branch.
+4. Pin the baseline; preserve an existing tag:
 
-5. **Rebase onto the origin branch**, from the worktree:
-   `git rebase --empty=drop $ORIGIN_BRANCH`
+```bash
+BASELINE="implement/$CARD_ID/baseline"
+git show-ref --verify --quiet "refs/tags/$BASELINE" || git tag "$BASELINE" HEAD
+```
 
-6. **Fast-forward merge back**, from `$ORIGIN_DIR` (not the worktree):
-   `git merge --ff-only <worktree-branch>`
-   Fails loudly on divergence instead of creating a merge commit — resolve by rebasing again rather than forcing a merge commit.
+Read [implementation](./references/implementation.md). Preserve worktree/baseline on failure or unmet approval gates.
 
-7. **Exit the worktree** with `ExitWorktree`, `action: "remove"`.
+5. Run `git rebase --empty=drop "$ORIGIN_BRANCH"` from the worktree. Revalidate, then `git merge --ff-only <worktree-branch>` from the clean `$ORIGIN_DIR` on `$ORIGIN_BRANCH`. On divergence, rebase and validate again; never force.
 
-</worktree-task-workflow>
+6. Record landed SHAs and results in the card.
+From `$ORIGIN_DIR`, run `remove-worktree <worktree-path>`.
+Delete the baseline: `git tag -d "$BASELINE"`.
