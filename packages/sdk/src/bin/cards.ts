@@ -1553,11 +1553,11 @@ async function detectBoundCard(worktreeDir: string): Promise<BindDetection> {
  * transcript, and parent branch, then outputs card-repo-log and workspace-repo-log
  * context blocks to stdout so the calling agent receives current card context.
  *
- * Fail-closed on skipped activation: if the outfit's attribution outcome
- * reports that session activation was skipped (lock held, card not
- * activatable, or a preflight failure), attach prints a "branch registered but
- * card not activated" diagnostic to stderr and exits non-zero instead of
- * printing the success payload.
+ * Fail-closed on skipped activation, except for a missing transcript. A
+ * transcript is optional for binding: when none can be resolved, attach keeps
+ * the warning emitted below, skips streaming, and still reports the completed
+ * bind as success. Other attribution skips (lock held, card not activatable,
+ * or a preflight failure) remain non-zero partial failures.
  *
  * @param cardId - The card identifier to attach to the current worktree.
  * @param parentBranchFlag - Optional `--parent-branch` flag value.
@@ -1662,12 +1662,14 @@ export async function attachCard(cardId: string, parentBranchFlag?: string): Pro
     compiledScriptPaths
   });
 
-  // Fail closed: at this point the branch is registered, but if session
-  // activation was skipped (de-dupe lock held by another card, card not in an
-  // activatable status, or an attribution preflight failed) the attach must not
-  // masquerade as a plain success — surface the partial state on stderr and
-  // exit non-zero so scripted callers can detect it.
-  if (outcome && (outcome.activated === false || outcome.attribution === 'skipped')) {
+  // Missing transcript is the documented degraded-success path: the durable
+  // bind is complete and only optional streaming is unavailable. Every other
+  // attribution skip remains fail-closed because it means a transcript existed
+  // but activation or its preflight could not complete.
+  const attributionFailed =
+    outcome !== undefined &&
+    (outcome.activated === false || (outcome.attribution === 'skipped' && outcome.reason !== 'no-transcript'));
+  if (attributionFailed) {
     console.error(`cards attach: branch registered but card not activated (${outcome.reason ?? 'unknown reason'}).`);
     // Post-connection (the client + `outfitWorktreeForCard` opened sockets) —
     // set the code and return so the top-level `requestProcessExit` drains the

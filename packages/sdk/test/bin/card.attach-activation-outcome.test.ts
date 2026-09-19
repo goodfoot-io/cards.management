@@ -6,12 +6,13 @@
  *
  * Hypothesis under test: attachCard() ignores any activation outcome returned by
  * outfitWorktreeForCard and unconditionally prints the success payload and
- * completes with exit 0. The fail-closed contract is: when activation was
- * skipped, attach must exit non-zero (or at minimum emit an unmistakable
- * "branch registered but card not activated" notice instead of the bare
- * success payload).
+ * completes with exit 0. The fail-closed contract applies when activation
+ * or attribution preflight fails after a transcript exists. Missing transcript
+ * is deliberately different: binding succeeds, streaming is unavailable, and
+ * attach exits 0 after warning rather than converting the completed bind into
+ * a partial failure.
  *
- * @summary attachCard fail-closed contract when activation is skipped
+ * @summary attachCard activation failure and no-transcript degraded-success contracts
  */
 
 import { execFileSync } from 'node:child_process';
@@ -194,6 +195,48 @@ describe('attachCard activation outcome (fail-closed)', () => {
     restoreEnv('CARDS_HOME', savedCardsHome);
     restoreEnv('XDG_DATA_HOME', savedXdgDataHome);
     restoreEnv('XDG_CONFIG_HOME', savedXdgConfigHome);
+  });
+
+  it('succeeds with context when attribution is skipped only because no transcript exists', async () => {
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      makeLinkedWorktree();
+      // Give the card-repository fixture one path-bearing commit so the real
+      // context builder has content to emit after the degraded-success bind.
+      writeFileSync(join(mainRepo, 'CARD.md'), 'context fixture\n');
+      execFileSync('git', ['add', 'CARD.md'], { cwd: mainRepo });
+      execFileSync('git', ['commit', '-q', '-m', 'card context'], { cwd: mainRepo });
+      cards.set('main-001', {
+        id: 'main-001',
+        title: 'Bind Target',
+        status: 'todo',
+        repositoryPath: mainRepo
+      });
+      process.chdir(linkedWorktree);
+      process.env['CARDS_SESSION_ID'] = 'sess-no-transcript';
+      delete process.env['CARDS_TRANSCRIPT_PATH'];
+      outfitWorktreeForCard.mockResolvedValue({
+        attribution: 'skipped',
+        reason: 'no-transcript',
+        registrationRevision: 'revision-1'
+      });
+
+      await expect(attachCard('main-001')).resolves.toBeUndefined();
+
+      expect(process.exitCode).not.toBe(1);
+      expect(exitSpy).not.toHaveBeenCalled();
+      expect(removeUnboundCandidate).toHaveBeenCalledWith('sess-no-transcript', linkedWorktree);
+      expect(errSpy.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toContain(
+        'session streaming is disabled for this attach'
+      );
+      expect(logSpy.mock.calls.map((c) => c.map(String).join(' ')).join('\n')).toContain(
+        '<card-repo-log order="oldest-first">'
+      );
+    } finally {
+      errSpy.mockRestore();
+      logSpy.mockRestore();
+    }
   });
 
   it('exits non-zero when outfitWorktreeForCard reports activation was skipped', async () => {
