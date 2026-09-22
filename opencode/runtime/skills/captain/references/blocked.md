@@ -1,61 +1,12 @@
-
-<placeholder-variables>
-[REFERENCED CARD ID] — A card ID from the `relations` array in CARD.meta.json or referenced in the description or comments
-</placeholder-variables>
-
 <instructions>
 
-Do not attempt implementation until the blocker is resolved.
+Load `$blocker-contract`. The tag requests reconciliation; it does not prove a live blocker.
 
-## 1. Analyze Blocker
-
-Read `CARD.meta.json` for `relations` entries that reference other cards. Read the card description and comments for context on what is blocking progress. Identify all blocker reasons and referenced card IDs.
-
-- **Multiple blockers found**: Check each referenced card's status; all must be resolved before removing the "blocked" tag.
-
-Based on blocker analysis:
-- **Blocker references another card**: Look up its metadata and check its status
-
-  ```bash
-  card [REFERENCED CARD ID]
-  ```
-
-  The output is JSON containing the card's metadata (status, tags, gates) and `repositoryPath`.
-
-  - **If resolved (status = "done")**: Remove `blocked` from `tags` in `CARD.meta.json`. Commit, then re-invoke routing.
-
-  - **If not resolved**: Continue to Step 2
-- **Blocker cannot be identified**: Post a comment asking for clarification and stop
-
-  ```bash
-  cd $CARD_REPO_PATH
-  cat <<'EOF' > comments/clarify-blocker.md
-  [clarification request: describe what blocker information is missing and what the user should provide]
-  EOF
-  git add comments/clarify-blocker.md
-  git commit -m "[single sentence describing what blocker information is missing]"  # <card-repo-commit-style>
-  ```
-
-## 2. Report Blocked Status
-
-Skip if a comment already exists containing "## Blocked" that describes the same blocker(s). If the blocker reason has changed since the last "## Blocked" comment, do not skip — write a new comment with the updated reason.
-
-## 3. Write Comment and Commit
-
-Write a comment explaining:
-- What is preventing progress
-- The specific blocker (including any referenced card IDs)
-- What action is needed to resolve it
-
-```bash
-cd $CARD_REPO_PATH
-cat <<'EOF' > comments/blocked-status.md
-[what is preventing progress, the specific blocker with any referenced card IDs, what action is needed to resolve it, and that work will resume once the blocker is cleared]
-EOF
-git add comments/blocked-status.md
-git commit -m "[single sentence describing what is blocking progress and what is needed to resolve it]"  # <card-repo-commit-style>
-```
-
-**STOP** — Do not proceed until the blocker is resolved and the "blocked" tag is removed. Routing will re-evaluate once the tag is removed.
+1. Find the comment that caused the tag and state its concrete predicate. Read all later user-authored comments plus current source, metadata, dependencies, and relevant external state.
+2. Re-run safe diagnostics. Repair, isolate, re-plan, delegate, or route work to its owner where that can advance the card.
+3. Treat a relation as a blocker only when this card consumes a named unfinished deliverable. A related card becoming done can clear that predicate; it is not the only unblock shape.
+4. If the predicate is false, superseded, independently repairable, or never met `<blocker-contract>`, remove `blocked`, commit the reconciliation in the card repository, and re-run routing in this execution.
+5. Retain the tag only when every contract criterion is proven. If evidence or the unblock action changed, commit an updated comment naming the predicate, evidence, attempts, unblock owner, and exact resumption condition.
+6. Before stopping on a retained blocker, collect the paths or IDs of every unanswered later user question and pass that exact set to `./question-response.md`, then re-route. Otherwise add no repeated status comment and stop.
 
 </instructions>

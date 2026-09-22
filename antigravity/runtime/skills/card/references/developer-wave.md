@@ -101,6 +101,7 @@ Dispatch every package whose first task consumes no peer contract in one message
 
 A `CHECKPOINT:` DM (`contract-ready` or `unanticipated-contract`) holds the worker — it does not proceed without your `PROCEED` reply; review what it built and reply `PROCEED` or `REVISE:` promptly, since the worker is blocked until you do. A `REPORT:` DM means the worker has gone idle; a report with unmet criteria gets a `REVISE:` back, never a re-dispatch. A `REPORT: BLOCKED` naming a false plan assumption or an approach that creates its own problems is a `<when-to-return-to-planning>` signal — evaluate it there before re-tasking. A `REPORT: BLOCKED` on a failure outside the worker's package: `REVISE:` the owning worker if a package owns the file; otherwise `<pre-existing-diagnosis>`. A `HELD:` DM means the worker paused mid-task with a committed partial step on its branch — resume it with `PROCEED` or `TASK:`; merge the branch only on a green `REPORT:`. A background worker's turn-end also surfaces as an Agent completion result — the DM body is authoritative; a completed turn is not a stopped worker. An `idle_notification` with no `REPORT:`, `CHECKPOINT:`, or `HELD:` means the worker is stuck — wake it with a DM inlining what it was waiting on.
 
+`REPORT: BLOCKED` is transient scheduling evidence. It never authorizes the card tag or terminal blocked outcome; repair, re-plan, reassign, or satisfy a consumed peer dependency before applying `<blocker-contract>`.
 When a task's `REVISE:` rounds stop producing new information (usually by the third), stop correcting: split it, re-scope it, or replace the worker with a fresh one given the restated task and the failed attempts.
 
 Route contract questions and integration bugs to the worker that owns the affected package; bug fixes skip `tdd-bootstrap` — reproduce first. Workers do not message each other — contract questions come to you. Use the `Sender:` line, not timing or content, to attribute every inbound DM to its package — concurrent workers make timing-based attribution unreliable.
@@ -109,7 +110,7 @@ Route contract questions and integration bugs to the worker that owns the affect
 
 <integration-gate>
 
-**Merge each green `REPORT:` as it lands, one branch at a time, from the card worktree.** Confirm `git status --porcelain` is empty, verify the reported HEAD SHA is the branch tip, then:
+**Merge each green `REPORT:` as it lands, one branch at a time, from the card worktree.** Classify visible paths per `<workspace-ownership>` and ensure no card-owned change is pending; off-card paths may remain. Verify the reported HEAD SHA is the branch tip, then:
 
 ```bash
 git merge --ff-only "[WORKER_BRANCH]" || git merge --no-edit "[WORKER_BRANCH]"

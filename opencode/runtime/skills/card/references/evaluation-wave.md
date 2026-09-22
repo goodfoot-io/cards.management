@@ -1,11 +1,11 @@
 # Evaluator Wave
 
-Independent adversarial evaluation via spawned evaluator children. Entered from `./implementation-evaluation.md` Step 3 (or `./validate.md` Step 4) with changes committed, validation passing, and a clean tree.
+Independent adversarial evaluation via spawned evaluator children. Entered from `./implementation-evaluation.md` Step 3 (or `./validate.md` Step 4) with card-owned changes committed and validation passing. Preserve off-card state; when it remains in the active tree, evaluate an isolated worktree at the recorded HEAD.
 
 The evaluator children form an ephemeral spawn tree under you. You spawn them directly in Step 1, and they report their result to you when their task completes.
 
 <placeholder-variables>
-[HEAD_SHA] — The commit under evaluation; the tree must be clean at dispatch
+[HEAD_SHA] — The commit under evaluation; all card-owned changes must be committed. Use an isolated worktree at this SHA when off-card state remains
 [EFFORT] — Chosen by the diff's scope and risk, same criteria as `./developer-wave.md`'s `<effort-selection>`
 </placeholder-variables>
 
@@ -72,13 +72,13 @@ Continue until every spawned evaluator has reported a `VERDICT:` for the current
 
 An `idle_notification` or a report that arrives without a verdict means the evaluator's process has stopped; it runs again only when you re-engage it. An evaluator that reported dirty paths instead of a verdict is the exception. Commit or revert the outstanding changes, then re-engage that lane with the new HEAD SHA — never spawn a fresh replacement, which would re-open findings already accepted.
 
-Otherwise, an evaluator that finished without a usable verdict, or that cannot run, is a judgment call: spawn a fresh replacement, or BLOCKED per the branch below. Re-engage the lane first — `send_message` if live, `resume_agent` if completed — never spawn a replacement without a failed re-engagement attempt on record. A fresh replacement is a new child with no prior context: spawn it through Step 1, evaluating current HEAD from scratch — point it at its lane's questions note in the card repo's `notes/`, inline the known prior-round findings for its lane, and state the round number it inherits.
+Otherwise, re-engage it once with missing context, then spawn a fresh evaluator or return its evidence for repair or re-planning. A replacement evaluates current HEAD from scratch under the same name, using its lane's questions note and prior findings.
 
 A mixed set — one evaluator approves while another requests changes — is CHANGES_REQUESTED.
 
 - **All APPROVED** (every spawned evaluator): Proceed to Step 6: Finalize. This is the only path to Finalize.
 - **Any CHANGES_REQUESTED**: Proceed to Step 3: Dispatch Developer Team with the recorded findings. You do not fix evaluator findings — the developer team does.
-- **BLOCKED** (an evaluator names an external constraint preventing the fix): Document the constraint and the specific finding in a comment, add `blocked` to `tags` in `CARD.meta.json`, commit, then **STOP**.
+- **BLOCKED**: Treat the evaluator verdict as scheduling evidence. Repair, reassign, or re-plan first; create card-level blocked state only after loading `$blocker-contract` and proving every criterion.
 
 ## 3. Dispatch Developer Team
 
@@ -97,7 +97,7 @@ Re-engage every evaluator lane against the revised implementation. If an evaluat
 Give it the new HEAD SHA, the commit range, a plain account of what the wave changed and why, and anything the wave could *not* fix. The literal `RE_EVALUATE` marker wakes the evaluator's resume behavior — a free-form status message with the same content does not.
 
 ```
-The implementation has been updated to address the prior round's findings. Re-evaluate against commit [HEAD_SHA]; the tree is clean at that commit.
+The implementation has been updated to address the prior round's findings. Re-evaluate against commit [HEAD_SHA]; use an isolated worktree at that commit when off-card state remains.
 
 Fix commits: implement/[CARD_ID]/baseline..HEAD (this wave: [SHA list])
 What changed and why: [a plain account — which findings the wave addressed and how, in enough detail to re-check]

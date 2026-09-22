@@ -20,7 +20,7 @@ Run `git status --porcelain`:
 - **Clean**: proceed.
 - **Dirty**: Read `./bug-dirty-tree.md`. Return here after verified task-owned work is recovered.
 
-Use the initial baseline pinned by `session.md`; the bug baseline is another name for that same commit. It does not advance during bug resolution. On resume, verify any existing tag still points there. A missing expected tag is a blocker.
+Use the initial baseline pinned by `session.md`; the bug baseline is another name for that same commit. It does not advance during bug resolution. On resume, verify any existing tag still points there; recreate a missing tag from the recorded baseline.
 
 ```bash
 git tag "bug/$TASK_KEY/baseline" "implement/$TASK_KEY/baseline"  # first bug entry only
@@ -78,9 +78,9 @@ For each viable hypothesis, in turn:
 **Every commit below follows the `<workspace-commit-style>` and `<markdown-guidelines>` conventions.**
 
 Based on the reproduction results:
-- **One or more tests fail**: Commit the failing tests in one reproduction commit, tag the state, capture `[TEST_FAILURE_OUTPUT]`, and save each viable pathway/test in `TASK_STATE/progress.md`. Proceed to Step 2. Never bypass a hook to commit deliberately failing tests; if repository requirements prevent this reproduction checkpoint, preserve the tests/evidence and report the conflicting requirement through `./blocked.md`.
-- **No tests fail, new evidence expanded the hypothesis set** (max 3 rounds total across Step 1.3–1.6): Return to Step 1.3: Identify Root Cause Hypotheses.
-- **No tests fail, hypotheses exhausted**: Save attempted hypotheses and evidence, then read `./blocked.md`.
+- **One or more tests fail**: Commit the failing tests in one reproduction commit, tag the state, capture `[TEST_FAILURE_OUTPUT]`, and save each viable pathway/test in `TASK_STATE/progress.md`. Proceed to Step 2. Never bypass a hook; if repository requirements reject a red checkpoint, preserve the evidence and return to planning unless the shared blocker contract holds.
+- **No tests fail, new evidence expanded the hypothesis set**: Return to Step 1.3 only when another attempt tests a new hypothesis.
+- **No tests fail, hypotheses exhausted**: Save the evidence and read `./plan.md` for another in-scope approach.
 
 ```bash
 git add [test files]
@@ -93,7 +93,7 @@ git tag -f "bug/$TASK_KEY/reproduction" HEAD
 
 ## 2. Resolve Bug
 
-Resolve is a retry loop, bounded at 3 attempts. Each attempt runs Step 2.1: Trace Data Flow, Step 2.2: Fix, and Step 2.3: Validate and Commit.
+Each evidence-driven resolve attempt runs Steps 2.1–2.3. Retry only to test a new hypothesis; otherwise return to planning.
 
 ### 2.1 Trace Data Flow
 
@@ -127,13 +127,13 @@ Run every reproduction test. Then lint and typecheck per the project's AGENTS.md
 
 Based on the combined result:
 - **All reproduction tests pass and all validations pass**: Commit the fix and proceed to Step 3: Validate.
-- **Reproduction test still fails, or validation fails on implementation grounds**: Treat as NEEDS_REVISION. Save attempt evidence, revert only this attempt's verified source changes, preserve the reproducer, and retry. If three attempts are exhausted, save the specific obstacle and read `./blocked.md`.
-- **Cannot proceed** (structural obstacle): Save the reasoning and exact failed prerequisite, then read `./blocked.md`.
+- **Reproduction test still fails, or validation fails on implementation grounds**: Save the evidence, revert only this attempt's verified source changes, preserve the reproducer, and retry a new hypothesis or return to planning.
+- **Cannot advance independently**: Load `$cardless:blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
 
 Commit on success:
 
 ```bash
-git add -A
+git add -- [reviewed task-owned source and test paths]
 git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG
@@ -151,8 +151,8 @@ A reproduction test needs correction. Validate the correction before accepting i
 
 Based on the corrected test's result:
 - **Fails (valid correction)**: Commit the corrected test, update the tag (`git tag -f "bug/$TASK_KEY/reproduction" HEAD`), capture new `[TEST_FAILURE_OUTPUT]`, and return to Step 2.2: Fix.
-- **Passes (invalid correction)**: Revert the test correction. If resolve attempts remain, return to Step 2.2; otherwise report the test-validation failure through `./blocked.md`.
-- **Corrections exhausted (2 already applied)**: Record why the reproduction became unreliable and read `./blocked.md`.
+- **Passes (invalid correction)**: Revert the test correction. Retry only with a new hypothesis; otherwise return to planning.
+- **Further corrections lack new evidence**: Record why the reproduction became unreliable and return to planning.
 
 ## 3. Validate
 
@@ -177,7 +177,7 @@ Validation is binary — there is no "probably fine" state.
 Based on the result:
 - **All validations pass**: Proceed to Step 4: Finalize.
 - **Resolvable error**: Fix it and re-run validation.
-- **Unresolvable error**: Save the exact failure output and read `./blocked.md`; do not retry hoping it resolves itself.
+- **No independent repair remains**: Save the exact output and load `$cardless:blocker-contract`. Block only if every criterion holds; otherwise re-plan with the evidence.
 
 ## 4. Finalize
 

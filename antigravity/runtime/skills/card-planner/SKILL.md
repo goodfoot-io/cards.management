@@ -101,7 +101,7 @@ Watch incoming messages while you work. Treat peer `FINDING:` DMs as workspace t
 
 Before DMing `PLAN: READY round-1`, re-read `notes/` — the reviewer's questions note usually lands after you started; answer it inline first. Then DM `PLAN: READY for:[AGENT_NAME] round-K` or, when unrecoverable, `PLAN: BLOCKED for:[AGENT_NAME]` per `<dm-envelope>`.
 
-Once blocked, do not continue revising against an unresolvable obstacle.
+`PLAN: BLOCKED` ends only your contest attempt; report its evidence for orchestrator research or re-planning.
 
 ## 4. Handle Incoming Messages
 

@@ -13,10 +13,10 @@ For each logical unit, select the first matching primary route:
 
 Before or during any route, resolve a blocking fact that requires execution with a [spike](./spike.md), then reroute. For a failed assumption, design fork, or scope change, [reconsider the approach](./reconsider-approach.md).
 
-Read the affected code and consumers, apply the route, then validate. Follow repository commands: start with focused checks, expand across affected dependency boundaries, and run required integration gates before completion. Use real implementations and observable outcomes rather than mocks of internals. Commit each validated unit.
+Before editing, classify tracked, staged, and untracked paths against the card; inspect untracked symlinks without following them and snapshot generated, provisioned, or unrelated paths. Preserve that set. Read affected code and consumers, apply the route, then validate. Stage only intentional card-owned paths, review the staged diff, and commit each validated unit. If off-card state could affect a check, validate an isolated candidate containing only the exact owned staged/working diff and created files; certify the final result at the exact committed card HEAD.
 
 Fix required-check warnings and failures. Diagnose ambiguous failures with [pre-existing validation](./pre-existing-validation.md); do not dismiss them. Never weaken assertions, disable checks, or bypass hooks. TDD's temporary skipped checks must all be enabled before completion.
 
 After all units, inspect `git diff "$BASELINE"..HEAD` and any remaining edits against the card. Run all required completion checks. For behavioral or risk-bearing diffs—new logic/APIs, cross-file behavior, async/shared-state/error paths, or user-visible changes—run [quality review](./quality-review.md). A mechanical, behavior-neutral diff may skip review. Commit remaining validated artifacts before returning to the lifecycle.
 
-On an unresolved blocker, commit the evidence and next step to a card comment, add `blocked` to its tags without changing gates, and stop. Do not merge or clean up unfinished work.
+If progress appears blocked, load `blocker-contract`. Repair, isolate, re-plan, or delegate unless every criterion holds; only then commit the required record, add the tag without changing gates, and stop. Do not merge or clean up unfinished work.

@@ -105,6 +105,7 @@ Start every package whose first task consumes no peer contract concurrently, wit
 - `REPORT:` ends a task turn, not the package worker's lifetime. Unmet criteria get `REVISE:` on the same worker identity.
 - `REPORT: BLOCKED` naming a false assumption or a self-defeating approach triggers `implementation.md`'s `<when-to-return-to-planning>` before reassignment.
 - `REPORT: BLOCKED` on a failure outside its package goes to the owning worker; if none owns it, apply `<pre-existing-diagnosis>`.
+- `REPORT: BLOCKED` is transient scheduling evidence. It never establishes task-level blocked state; the lead repairs, re-plans, reassigns, or applies the shared blocker contract.
 - `HELD:` plus confirmed idle state means a committed partial step, not a green branch. Resume with `PROCEED` or `TASK:`; merge only after a green report. An accepted HOLD send or interrupt result is not that acknowledgment.
 - Idle/turn completion without a report, checkpoint or held message is unexplained. While a worker has an outstanding assignment, check its progress every five minutes: a new checkpoint, report or `HELD:`, or a moved package-branch tip. Reengage the recorded identity with what it was waiting on; do not infer progress from silence.
 
@@ -114,7 +115,7 @@ When revision rounds stop producing information, usually by the third, split or 
 
 <integration-gate>
 
-Merge each green report as it arrives, one branch at a time, from the lead checkout. Require clean status and verify the reported SHA is the recorded branch tip. Inspect its diff for ownership, contract compliance and the claimed gate evidence. Use a fast-forward when ancestry allows it; otherwise perform a regular local merge. A failed merge requires diagnosis, not an unconditional alternate command.
+Merge each green report as it arrives, one branch at a time. Require no pending task-owned mutation, preserve the off-task snapshot, and verify the reported SHA is the recorded branch tip. Use an isolated integration checkout when off-task state interferes. Inspect the diff for ownership, contract compliance and gate evidence. Use a fast-forward when ancestry allows it; otherwise perform a regular local merge. Diagnose a failed merge before choosing another strategy.
 
 Resolve conflicts before the next integration or task dispatch. A wave is all tasks since the last step tag. Workers with nothing queued remain idle while other reports arrive. Once every wave branch is integrated, review cross-package consistency, run workspace lint/typecheck and every touched package suite, reconcile any affected repository-maintained anchors, and commit integration fixes under the repository conventions.
 

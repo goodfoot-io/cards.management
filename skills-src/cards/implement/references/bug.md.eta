@@ -14,4 +14,4 @@ Write the minimal witness without fixing product code. Run it against the pinned
 
 Trace source → state/data flow → symptom, distinguishing evidence from hypotheses. Fix the smallest root cause. Verify production writers feed new reads, readers consume new writes, callers pass new parameters, and production paths reach new branches.
 
-Run every retained witness and affected checks until green. Any changed reproduction witness must be red again on the unfixed baseline and green on the fix. Re-run validation after corrections; never alter a witness merely to accept the implementation. When repeated attempts yield no new evidence, record the obstacle and stop.
+Run every retained witness and affected check until green. A changed witness must be red on the unfixed baseline and green on the fix. Re-run validation after corrections; never alter a witness to accept the implementation. Retry only on a new hypothesis; otherwise preserve evidence and [reconsider the approach](./reconsider-approach.md).

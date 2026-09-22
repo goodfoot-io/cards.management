@@ -5,7 +5,7 @@
 
 <instructions>
 
-This reference fires when card work exists (`commits/` directory has commit files and/or the worktree has uncommitted changes) and no stronger signal claims the card — typically after the card emerged from a `blocked` state, after a session crashed or terminated mid-flow, or when work exists without an approved plan or pending merge approval.
+This reference fires for attributed commits or card-owned workspace changes, never for the off-card set recorded by `<workspace-ownership>`.
 
 **Output asymmetry.** You may route backward to planning or implementation on your own judgment. You may not route forward to merge without passing Step 4's review.
 
@@ -31,10 +31,11 @@ fi
 
 **Every commit below follows the `<workspace-commit-style>` and `<markdown-guidelines>` conventions.**
 
-If the worktree contains uncommitted changes — typical after a crashed session that left work unsaved — commit them so validation and review analyze a coherent implementation:
+Commit coherent recovered card work; preserve everything else:
 
 ```bash
-git add -A
+git add -- [CARD_OWNED_PATHS...]
+git diff --cached
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines> — describe the uncommitted changes recovered from the worktree]
 COMMITMSG
@@ -47,9 +48,9 @@ Run the workspace's typecheck and lint, plus each package suite the diff `implem
 
 - **All validations pass**: Proceed to Step 3.
 - **Failure not obviously the active card's work** (anything ambiguous, unfamiliar, or that "feels" pre-existing): Diagnose it per `./implementation.md`'s `<pre-existing-diagnosis>`.
-  - **Reproduces on baseline**: repair per that procedure, re-run the validation command. If it passes, proceed to Step 3.
+  - **Reproduces on baseline**: repair the root cause or route it to its code owner, then re-run the command.
   - **Does not reproduce on baseline**: the failure is in scope of the active card's work. Proceed to Step 3 — the escape hatch in Step 3 should fire on this evidence.
-  - **Structural obstacle**: add `blocked` to `tags` in `CARD.meta.json`, write the diagnosis and exact failure output to `comments/validation-failed.md`, commit, **STOP**.
+  - **Independent progress is impossible**: apply `<blocker-contract>`; otherwise repair, isolate, delegate, or re-plan.
 - **Failure clearly originates in files the active card's diff touched**: Proceed to Step 3 — the validation suite is reporting that the work is not actually done.
 
 ## 3. Optional Escape Hatch — Your Judgment
@@ -74,7 +75,7 @@ Weight completeness against the card's acceptance criteria alongside the usual f
 - **No findings**: Proceed to Step 5: Finalize.
 - **Findings that are in-scope fixes**: Fix them, re-run Step 2's validations, then return to Step 4 and re-review the new HEAD.
 - **Findings that require a different approach or missed scope**: Treat as Step 3's escape hatch — route to `./implementation.md` (plan exists) or `./plan.md` (no plan), carrying the findings as context.
-- **Structural constraint blocking the fix**: Document the constraint and finding in a comment, add `blocked` to `tags` in `CARD.meta.json`, commit, **STOP**.
+- **Independent progress is impossible**: apply `<blocker-contract>`; otherwise repair, isolate, delegate, or re-plan.
 
 ## 5. Finalize
 
@@ -83,7 +84,8 @@ Only enter this step once Step 4 finds nothing further to fix.
 ### 5.1 Stage Remaining Changes
 
 ```bash
-git add -A
+git add -- [CARD_OWNED_PATHS...]
+git diff --cached
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG

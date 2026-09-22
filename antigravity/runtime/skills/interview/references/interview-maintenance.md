@@ -62,7 +62,7 @@ When the user confirms the card is complete, reconcile notes into `CARD.md`, ens
 
 ```bash
 cd $CARD_REPO_PATH
-git add -A
+git add -- CARD.md CARD.meta.json notes plans
 git commit -m "[single sentence summarizing the maintenance approach and key decisions from the interview]"  # <card-repo-commit-style>
 ```
 

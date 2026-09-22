@@ -83,8 +83,8 @@ Before reporting `PLAN: READY round-1`, re-read `notes/` — the reviewer's ques
 
 For both READY and BLOCKED, the marker (`PLAN: READY for:[PLANNER_NAME] round-K` or `PLAN: BLOCKED for:[PLANNER_NAME]`) opens the message.
 
-- **Plan ready**: Send the orchestrator the full body — plan summary, key decisions, suggested slug like `initial`, `phase-2`, `schema-first`, and your plan file path so the reviewer can read `plans/[PLANNER_NAME].md` directly. The orchestrator relays your readiness and plan path to the reviewer and the other live planners. Tag the round in the marker: round-1 for your initial submission, round-K+1 for each subsequent revision following a `CHANGES_REQUESTED` verdict. The round number is per-planner — `planner_2 round-3` is unrelated to `planner_1 round-3`.
-- **Blocked**: Send the orchestrator the blocking reason; it relays your exit to the reviewer and the other live planners. Do not continue revising against an unresolvable obstacle.
+- **Plan ready**: Send the orchestrator the summary, key decisions, suggested slug, plan path, and round.
+- **Blocked**: End only your contest attempt and send the evidence for orchestrator research or re-planning.
 
 ```
 PLAN: READY for:[PLANNER_NAME] round-K

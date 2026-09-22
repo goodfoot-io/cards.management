@@ -15,6 +15,8 @@ The input is the full task brief supplied in the conversation. The intended work
 Use the host's dedicated task checkout and assigned branch. Inspect unfamiliar state before overwriting it. Only the lead integrates worker branches and writes to the remote. Workers own separate Git worktrees. Never bypass hooks or validation. Rollbacks affect only verified task-owned work after workers have drained.
 
 The task brief and locally derived Git state are the inputs. First read `./references/session.md`; it defines every `TASK_*` value, the local session record, and the commit/Markdown conventions used below. These are local values derived and saved by this workflow, not injected environment dependencies.
+
+Before recording or retaining blocked state, load `$blocker-contract` and prove every criterion. When all hold, read `./references/blocked.md` to persist the first or retained blocker.
 </execution-environment>
 
 <routing-constraints>
@@ -28,7 +30,7 @@ Read the saved brief, current plan, progress, Git status and baseline diff. Comp
 | Condition | Reference |
 |---|---|
 | New information-seeking question | `question-response.md` |
-| Unresolved saved blocker | `blocked.md` |
+| `session.md` records `phase: blocked` | `blocked.md` for reconciliation |
 | New actionable feedback on implemented work | `implementation-feedback.md` |
 | New feedback on the current plan before implementation | `plan-feedback.md` |
 | Goals, acceptance criteria, or feasibility are not determinable | `clarify-and-enrich.md` |

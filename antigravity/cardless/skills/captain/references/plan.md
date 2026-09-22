@@ -51,7 +51,7 @@ Build failure-mode questions from the task, plan, notes and similar workspace co
 - **Delivered experience:** compare the intended outcome with the acceptance criteria. Does the plan deliver the actual request?
 - **Surviving assumptions:** verify each load-bearing claim that survived Step 2 against source or revise the plan.
 
-List every finding; revise and re-evaluate the full question set until all questions are answered. Record the questions and resolutions in task state. Missing technical facts require research. Only a material missing user requirement that cannot be inferred from the brief and repository routes to `./blocked.md`.
+List every finding; revise and re-evaluate the full question set until all questions are answered. Record the questions and resolutions in task state. Missing technical facts require research. A material missing user requirement routes to `./blocked.md` only after the shared blocker contract is proven.
 
 ## 4. Route to Implementation
 

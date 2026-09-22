@@ -20,6 +20,6 @@ Compare the brief, plan tasks, recorded commits, baseline diff and validation ev
 
 ## 4. Review
 
-Review completeness against acceptance criteria alongside runtime failure modes and delivered experience. Use fresh-eyes subagents for substantial diffs. Findings require fixes followed by validation and re-review of the new HEAD; a changed approach returns to planning, and a structural obstacle routes to `blocked.md`.
+Review completeness against acceptance criteria alongside runtime failure modes and delivered experience. Use fresh-eyes subagents for substantial diffs. Findings require fixes followed by validation and re-review of the new HEAD; a changed approach returns to planning. Apply the shared blocker contract only when independent progress is impossible.
 
 Once no findings remain, save the reviewed HEAD and evidence, drain any remaining workers and read `deliver.md`. Preserve baseline refs until delivery succeeds.

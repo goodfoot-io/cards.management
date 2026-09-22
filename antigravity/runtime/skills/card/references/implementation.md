@@ -44,10 +44,11 @@ Diff `implement/$CARD_ID/baseline..HEAD` to assess scope: number of files change
 
 The card is not COMPLETED until every part of this section has run. Passing the completion gate at the end of Step 2 is not the terminal state — staging, tag cleanup, and the merge decision all follow.
 
-**Stage remaining changes.** If a developer team is live, drain it per `./developer-wave.md` `<lifecycle>` first. Stage any uncommitted implementation artifacts and commit per the workspace commit style:
+**Commit remaining work.** If a developer team is live, drain it first. Stage only card-owned paths per `<workspace-ownership>`:
 
 ```bash
-git add -A
+git add -- [CARD_OWNED_PATHS...]
+git diff --cached
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG
@@ -74,7 +75,7 @@ git tag -l "implement/$CARD_ID/*" | xargs -r git tag -d
 
 **No mocks.** Test with real implementations. Use dependency injection so code stays testable, and create thin adapter interfaces with real test implementations for external services — never mock libraries or framework internals.
 
-**Iterate, then escalate.** On validation failure, fix and re-run. When repeated attempts produce no new information, stop and route via `<completion-gate>` rather than thrashing.
+**Iterate on evidence.** Fix and re-run when an attempt tests a new hypothesis; otherwise return to planning.
 
 **Follow repository conventions** and existing patterns. Do not create extra artifacts unless the scope or loaded skills require them.
 
@@ -102,7 +103,7 @@ After all logical units are complete, run workspace-wide lint and typecheck plus
 
 <pre-existing-diagnosis>
 
-Reproduce the failing command against the baseline instead of guessing. If the reproduction looks like it will be long or noisy, dispatch a `card-pre-existing-condition` subagent with the failing command, its full output, and the card's diff scope — it reproduces on baseline, repairs pre-existing root causes, and returns `NOT_PRE_EXISTING` (with baseline output) or `BLOCKED` otherwise. To diagnose yourself, use a disposable worktree at the baseline ref — never switch branches or stash in the active workspace:
+Reproduce against the baseline instead of guessing. For long diagnosis, dispatch `card-pre-existing-condition` with the command, output, and card diff. Its `BLOCKED` is evidence for orchestrator reconciliation, never card state. To diagnose yourself, use a disposable baseline worktree:
 
 ```bash
 create-worktree "implement/$CARD_ID/baseline"
@@ -112,7 +113,7 @@ Run the failing command in that worktree, then delete the worktree and branch.
 
 - **Reproduces on baseline** — the failure predates this card's changes. Try cheap remedies first (sync with the local base branch, reinstall dependencies, rebuild derived artifacts); if that doesn't clear it, repair the root cause in the active workspace, then re-run the failing command.
 - **Does not reproduce on baseline** — the failure is in scope of this card's work; fix it and re-run.
-- **Structural obstacle** (unreachable services, missing system tools or credentials, hardware constraints, an unresolved upstream bug on the base branch) — block: add `blocked` to `tags` in `CARD.meta.json` if not already present, write the failure output and your diagnosis to `comments/validation-failed.md`, commit both files, and **STOP**.
+- **Independent progress is impossible** — load `blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
 
 </pre-existing-diagnosis>
 
@@ -126,11 +127,12 @@ At any point during implementation, stop and return to planning if any of the fo
 4. **Scope exceeded the card's implied boundary** — the in-scope work must touch significantly more files or systems than the card (or plan) described. Discovering issues in code the change does not interact with is *not* this condition — create a new card for those and continue. Scope too large for one worker is also not this condition — split into another package per `./developer-wave.md`.
 5. **A plan assumption proved false, or the plan missed scope that changes the approach, or a completed planned step invalidates a later one** — when following a plan, any of these means the plan needs revision, not a workaround.
 
-When any condition holds, **stop immediately**. If a developer team is live, drain it per `./developer-wave.md` `<lifecycle>` first. Revert to baseline and discard step tags:
+If a false assumption exposes a missing capability, plan and build it when it fits the card outcome. Only a distinct independently deliverable enhancement becomes a prerequisite: create or reuse its card, name the consumed deliverable, then apply `<blocker-contract>`.
+
+When any condition holds, drain a live developer team. Preserve the off-card snapshot; restore card-owned tracked paths from the baseline and remove only session-created owned paths. A whole-tree reset or clean is allowed only when no off-card state exists. Then discard step tags:
 
 ```bash
-git reset --hard "implement/$CARD_ID/baseline"
-git clean -fd
+git restore --source "implement/$CARD_ID/baseline" --staged --worktree -- [CARD_OWNED_TRACKED_PATHS...]
 git tag -l "implement/$CARD_ID/step-*" | xargs -r git tag -d
 ```
 

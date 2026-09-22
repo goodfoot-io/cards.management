@@ -52,11 +52,7 @@ In order, with a re-validation between each:
 
 If validation passes after any cheap remedy, report COMPLETED with the remedy as the fix.
 
-**Iterate, then escalate.**
-On fix-attempt failure, retry. After 5 failed attempts on the same root cause, stop and return NEEDS_REVISION with all failure output and what was tried.
-
-**Distinguish exhausted from impossible.**
-NEEDS_REVISION is depth exhaustion — you tried, it kept failing, another pass might succeed. BLOCKED is a structural impossibility — the failure cannot be cleared from inside this session regardless of effort. Examples that are genuinely BLOCKED: an external service unreachable, a system tool the worktree cannot install, a runtime or hardware requirement the environment does not provide, a credential or environment value only a human can supply, or a base-branch failure that is itself unresolved upstream. Report BLOCKED only when the obstacle is structural, not when investigation is hard.
+**Iterate on evidence.** Retry only when the attempt tests a new hypothesis. Otherwise return NEEDS_REVISION with accumulated output so the orchestrator can re-plan or reassign. Return BLOCKED only when a named external action or distinct prerequisite is required; it remains worker-local evidence, not authority for a card tag or terminal outcome.
 
 ## Workflow
 
@@ -72,8 +68,7 @@ NEEDS_REVISION is depth exhaustion — you tried, it kept failing, another pass 
 
 **Re-validate.** During the fix-then-recheck loop, scope test runs to the failing test or suite per the project's CLAUDE.md validation conventions. The final certification before reporting COMPLETED runs the user's full validation command end-to-end; do not report COMPLETED until it exits 0.
 
-**Escalate only on structural impossibility.** If the root cause is outside your reach (external system, missing credential, hardware constraint, unresolved upstream bug on the base branch), return BLOCKED with a recommended next step the user can take.
-
+If local repair cannot advance the task, return evidence and the exact externally owned or separately scoped action. The orchestrator applies `blocker-contract` before any card-level state change.
 ## Output Contract
 
 Return exactly one status reflecting actual validated state.
@@ -82,8 +77,8 @@ Return exactly one status reflecting actual validated state.
 |---|---|---|
 | **COMPLETED** | Failure cleared by a cheap remedy or root-cause repair, user's validation command passes | Remedy or root cause, fix applied, files modified, full validation output |
 | **NOT_PRE_EXISTING** | Failure does NOT reproduce on the baseline ref — it is in scope of the active card | Baseline reproduction output, the failing command run, instruction to the user to re-route to a developer agent |
-| **NEEDS_REVISION** | Validation fails after 5 fix attempts on the same root cause | What was tried, exact failure output for each attempt |
-| **BLOCKED** | Failure is genuinely unresolvable from this session — external service, missing system tool or credential, hardware constraint, or an unresolved upstream bug on the base branch | Exact obstacle, why it is structural rather than depth-limited, recommended next step the user can take |
+| **NEEDS_REVISION** | Further attempts would repeat a tested hypothesis | What was tried and exact output |
+| **BLOCKED** | Progress needs an external action or distinct prerequisite | Evidence, attempts, owner, exact resumption condition |
 
 ### Report Format
 

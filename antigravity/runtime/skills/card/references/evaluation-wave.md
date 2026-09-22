@@ -1,9 +1,9 @@
 # Evaluator Wave
 
-Independent adversarial evaluation via background evaluator subagents. Entered from `./implementation-evaluation.md` Step 3 (or `./validate.md` Step 4) with changes committed, validation passing, and a clean tree.
+Independent adversarial evaluation via background evaluator subagents. Entered from `./implementation-evaluation.md` Step 3 (or `./validate.md` Step 4) with card-owned changes committed and validation passing. Preserve off-card state; when it remains in the active tree, evaluate an isolated worktree at the recorded HEAD.
 
 <placeholder-variables>
-[HEAD_SHA] — The commit under evaluation; the tree must be clean at dispatch
+[HEAD_SHA] — The commit under evaluation; all card-owned changes must be committed. Use an isolated worktree at this SHA when off-card state remains
 [EVALUATOR_MODEL] — Chosen by the diff's scope and risk, same criteria as `<dispatch>`'s model-tier judgment elsewhere
 </placeholder-variables>
 
@@ -96,13 +96,13 @@ An `idle_notification` means the evaluator's process has stopped; it runs again 
 
 An evaluator that yielded on a dirty tree is the exception. Commit or revert the outstanding changes, then wake it with the new HEAD SHA — never re-dispatch.
 
-Otherwise, if it idles again without a verdict, or cannot run, re-dispatch a replacement (or BLOCKED per the branch below) — never without a failed wake attempt on record. A replacement is a fresh agent dispatched through Step 1 under the same name, evaluating current HEAD from scratch — point it at its lane's questions note in the card repo's `notes/`, inline the known prior-round findings for its lane, and state the round number it inherits.
+Otherwise, wake it once with missing context, then re-dispatch a fresh evaluator or return its evidence for repair or re-planning. A replacement evaluates current HEAD from scratch under the same name, using its lane's questions note and prior findings.
 
 A mixed set — one evaluator approves while another requests changes — is CHANGES_REQUESTED.
 
 - **All APPROVED** (every dispatched evaluator): Proceed to Step 6: Finalize. This is the only path to Finalize.
 - **Any CHANGES_REQUESTED**: Proceed to Step 3: Dispatch Developer Wave with the recorded findings. You do not fix evaluator findings — the developer wave does.
-- **BLOCKED** (an evaluator names an external constraint preventing the fix): Document the constraint and the specific finding in a comment, add `blocked` to `tags` in `CARD.meta.json`, commit, then **STOP**.
+- **BLOCKED**: Treat the evaluator verdict as scheduling evidence. Repair, reassign, or re-plan first; create card-level blocked state only after loading `blocker-contract` and proving every criterion.
 
 ## 3. Dispatch Developer Team
 
@@ -125,7 +125,7 @@ DM a re-evaluation trigger to every dispatched evaluator (both DMs in a single m
   <parameter name="message">
 RE_EVALUATE
 ---
-The implementation has been updated to address the prior round's findings. Re-evaluate against commit [HEAD_SHA]; the tree is clean at that commit.
+The implementation has been updated to address the prior round's findings. Re-evaluate against commit [HEAD_SHA]; use an isolated worktree at that commit when off-card state remains.
 
 Fix commits: implement/[CARD_ID]/baseline..HEAD (this wave: [SHA list])
 What changed and why: [a plain account — which findings the wave addressed and how, in enough detail to re-check]

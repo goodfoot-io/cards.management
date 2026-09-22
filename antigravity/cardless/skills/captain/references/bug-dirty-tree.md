@@ -1,9 +1,14 @@
 # Recover a Dirty Checkout
 
-Inspect staged, unstaged and untracked files against the task brief, recorded initial state, and pinned baseline. Never infer ownership from the directory alone.
+Inspect `git diff`, `git diff --cached`, and `git ls-files --others --exclude-standard`. Use `lstat` or equivalent for untracked paths so provisioned symlinks are classified without following them. Compare each path with the brief, baseline diff, package scope, and recorded initial state; snapshot the off-task set.
 
-- **Task-owned and coherent:** inspect every file, commit the recoverable partial unit when repository hooks permit it, record its SHA and recovery in `progress.md`, then return to the caller. It still needs validation and review.
-- **Task-owned but incoherent:** preserve all affected tracked and untracked files in a named stash, record the exact stash ref and paths in task state, then continue from the clean checkout. Do not later report success until that saved work is accounted for as superseded or restored.
-- **Unrelated or ownership uncertain:** preserve the files in place and read `./blocked.md` with the exact paths. No broad staging, cleaning, restoring or reset is allowed over them.
+- **Task-owned, coherent:** commit the recoverable unit with explicit paths, record its SHA, and continue to validation.
+- **Task-owned, incoherent:** preserve those paths in a path-scoped stash or recovery commit, clean only those paths, and continue.
+- **Unrelated user work:** preserve exactly; use explicit path staging or an isolated worktree.
+- **Pre-existing off-task generated or provisioned artifacts:** leave untouched; exclude from work detection and staging.
+- **Task-required generated deliverables:** regenerate from their source, validate, and stage only their explicit paths.
+- **Overlapping state:** reconcile intent from source and history, or use an isolated worktree.
 
-Recovery never moves the pinned baseline forward. If a new session begins with task-owned dirty work, pin the initial HEAD first and record the dirty files; the recovered commit must remain inside the reviewed diff.
+Dirty state alone never blocks. Apply the shared blocker contract only when neither reconciliation nor isolation can preserve ownership and advance the task. Broad stash, restore, clean, or reset is allowed only after every affected off-task path is excluded or proven recoverable.
+
+When preserved off-task state could affect a check, use isolation. Before commit, materialize only the exact task-owned staged/working diff and session-created files over the current HEAD, then validate that candidate. For final certification and review, use an isolated worktree at the exact committed task HEAD.

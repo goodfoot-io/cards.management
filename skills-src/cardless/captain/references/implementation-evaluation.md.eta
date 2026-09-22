@@ -5,10 +5,10 @@
 
 **Every commit below follows the `<workspace-commit-style>` and `<markdown-guidelines>` conventions.**
 
-Commit any uncommitted workspace changes:
+Classify changes through `./bug-dirty-tree.md`. Commit only reviewed task-owned paths:
 
 ```bash
-git add -A
+git add -- [reviewed task-owned paths]
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines> — describe the uncommitted changes]
 COMMITMSG
@@ -61,7 +61,7 @@ Lint and typecheck per the project's <%= it.conventionsFile %> validation conven
 - **Failure**: Fix and re-run.
 
 ```bash
-git add -A
+git add -- [reviewed task-owned paths]
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG

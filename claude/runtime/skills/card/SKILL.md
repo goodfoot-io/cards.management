@@ -5,6 +5,8 @@ description: Evaluate card state and orchestrate the matched workflow with judgm
 
 **Use as few tokens as possible in this session by using subagents.**
 
+Before creating or retaining card-level blocked state, load `runtime:blocker-contract`; its `<blocker-contract>` is authoritative. When every criterion holds, commit the actionable blocker comment and `blocked` tag together without changing gates.
+
 <judgment>
 Every reference offers a spectrum of weights: do the step inline, dispatch ad-hoc subagents, or run a multi-agent protocol (`./references/contest.md`, `./references/developer-wave.md`, `./references/evaluation-wave.md`). Choose the weight per step by unknowns, scope, and risk — unknowns, not work volume. Once you enter a protocol, follow it as written; discretion governs entry, not the protocol's internals.
 
@@ -17,7 +19,7 @@ Governs this session and every reference it loads. The runtime runs in a disposa
 
 **A symlinked path inside the worktree may be shared with the source checkout — resolve it before writing.** Ignored source paths are symlinked by default; eligible `.worktreeinclude` matches are private copies and `.worktreeignore` matches are absent. A copied or omitted descendant can make ancestors real directories, and `node_modules` may mix real directories, copies, omissions, and per-entry symlinks. Check the actual path with `ls -la`/`readlink` before writing; treat an unexpected symlink or missing file as a path-policy question, not a broken worktree.
 
-**Inside the worktree — proceed without per-action confirmation.** File mutations, branch operations, tag deletions, `git reset --hard` to a baseline tag, `git restore .`, `git clean -fd`, `git rm` of artifact files, workspace-local merges including `git merge --ff-only` against `$BASE_BRANCH`, and subagent termination (`TaskStop` or a `shutdown_request` DM). Still: investigate unfamiliar state before overwriting, prefer root-cause fixes over destructive shortcuts, and never use `--no-verify` or other safety bypasses to clear an obstacle.
+**Inside the worktree — proceed without per-action confirmation.** File mutations, branch operations, tag deletion, path-scoped cleanup, workspace-local merges, and subagent termination are authorized. Apply `<workspace-ownership>` before any broad reset, restore, clean, stash, or removal; never bypass safety hooks.
 
 **`CARD.meta.json` `gates.*` carry the user's scoped, durable authorization.** Read the gate and act within the scope it authorizes. Do not re-derive consent from context, scope, commit volume, or overlap with prior work. Never modify gate fields.
 
@@ -30,6 +32,22 @@ Governs this session and every reference it loads. The runtime runs in a disposa
 A matching gate overrides this default only for the action the gate names, and only within its scope.
 
 </execution-environment>
+
+<workspace-ownership>
+
+Before implementation, inspect `git diff`, `git diff --cached`, and `git ls-files --others --exclude-standard`; use `lstat` or equivalent for untracked symlink nodes. Classify paths against the card, plan, package scope, baseline, and recorded work. Snapshot pre-existing off-card paths.
+
+- Card-owned coherent work: recover and continue.
+- Card-owned incoherent work: preserve with a path-scoped stash or recovery commit, clean only those paths, and continue.
+- Unrelated user work or pre-existing off-card generated/provisioned artifacts: preserve; exclude from work detection and staging. Use explicit paths or an isolated worktree.
+- Generated deliverables required by the card: regenerate from their source, validate, and treat their explicit paths as card-owned.
+- Overlap: reconcile intent from source/history or isolate. Apply the blocker contract only if neither can preserve ownership and advance the card.
+
+For every commit, derive card-owned changed paths from the implementation diff and session-created files; stage only those explicit paths; inspect `git diff --cached --name-status` and `git diff --cached`; correct an off-card staged path locally and continue. Broad stash, restore, clean, or reset is allowed only after off-card paths are excluded or proven recoverable.
+
+When preserved off-card state could affect a check, use isolation. Before commit, materialize only the exact card-owned staged/working diff and session-created files over the current HEAD, then validate that candidate. For final certification and review, use an isolated worktree at the exact committed card HEAD.
+
+</workspace-ownership>
 
 <progress-check>
 At session start, if your environment exposes a scheduling tool, use it to schedule a recurring ~30-minute check that the card is still making progress. A stuck subagent, a hung background command (tests, builds), or a teammate that silently stopped otherwise goes unnoticed. On each fire: check live subagents/background tasks for actual progress since the last check, and nudge or re-dispatch anything stalled. Cancel the scheduled check before finishing.
@@ -58,8 +76,8 @@ Read `$CARD_REPO_PATH/CARD.meta.json` for current `gates.*` and `tags`. Obtain t
 | Signal | Derivation |
 |--------|------------|
 | HAS_QUESTION | Latest user comment contains a genuine information-seeking question (not rhetorical, not "Can you fix X?", not "Could you implement Y?") |
-| IS_BLOCKED | `tags` contains "blocked" |
-| HAS_WORK | `commits/` directory contains one or more commit files, OR `git status --porcelain` reports any uncommitted changes in the workspace |
+| HAS_BLOCKED_TAG | `tags` contains "blocked". Identify the blocker comment and all later user-authored comments; later handling instructions are reconciliation input even when not questions. |
+| HAS_WORK | `commits/` contains an attributed commit, or workspace changes remain after `<workspace-ownership>` classifies them as card-owned. Off-card paths never count. |
 | HAS_IMPLEMENTATION_FEEDBACK | `commits/` directory contains at least one commit file AND the latest user comment's modification time is more recent than the most recent agent comment's modification time. |
 | REVIEW_APPROVED | `gates.mergeApproved` in CARD.meta.json |
 | PLAN_REQUIRED | `gates.planRequired` in CARD.meta.json |
@@ -74,8 +92,8 @@ Select the **first** matching condition and note the matched reference:
 
 | Condition | Reference |
 |-----------|-----------|
+| HAS_BLOCKED_TAG | `blocked` |
 | HAS_QUESTION | `question-response` |
-| IS_BLOCKED | `blocked` |
 | HAS_IMPLEMENTATION_FEEDBACK | `implementation-feedback` |
 | REVIEW_APPROVED | `merge` |
 | PLAN_REQUIRED AND NOT PLAN_APPROVED AND USER_RESPONDED_TO_PLAN | `plan-feedback` |

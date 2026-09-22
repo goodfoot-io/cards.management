@@ -3,7 +3,7 @@
 
 ## 1. Research the Answer
 
-Read the most recent user comment in the card repository to identify the question.
+Read the exact unanswered user comment paths or IDs supplied by the caller. Without an explicit set, identify every unanswered user question since the last agent response; do not substitute a newer non-question comment.
 
 Investigate the workspace to find information relevant to the question. If the question opens several lines of inquiry, fork a subagent per line.
 
@@ -16,12 +16,12 @@ Commit to the card repository:
 ```bash
 cd $CARD_REPO_PATH
 cat <<'EOF' > comments/question-response.md
-[answer to the question with fragment links for code references per <markdown-guidelines>]
+[answer naming the source comment paths or IDs, with fragment links for code references per <markdown-guidelines>]
 EOF
 git add comments/question-response.md
 git commit -m "[single sentence summarizing the answer to the question]"  # <card-repo-commit-style>
 ```
 
-**STOP** — Question answered; do not proceed to implementation.
+Question answered. If the card still has `blocked`, re-run routing so reconciliation decides whether work resumes; otherwise **STOP**.
 
 </instructions>

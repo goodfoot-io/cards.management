@@ -23,7 +23,7 @@ lintSuppressions:
 
 Run `git status --porcelain`:
 - **Clean**: proceed.
-- **Dirty**: Read `./bug-dirty-tree.md`. Return here when its flow returns control (the **off-card** branch ends in **STOP**).
+- **Dirty**: Read `./bug-dirty-tree.md`, preserve its ownership snapshot, then return here.
 
 Create the baseline tag if one does not already exist. The baseline is pinned — it does not advance during bug resolution.
 
@@ -88,8 +88,8 @@ For each viable hypothesis, in turn:
 
 Based on the reproduction results:
 - **One or more tests fail**: Commit all failing tests in one commit, tag the state, capture `[TEST_FAILURE_OUTPUT]`, write a progress comment to the card repository listing each viable pathway and its test, commit the card repository, and proceed to Step 2: Resolve Bug.
-- **No tests fail, new evidence expanded the hypothesis set** (max 3 rounds total across Step 1.3–1.6): Return to Step 1.3: Identify Root Cause Hypotheses.
-- **No tests fail, hypotheses exhausted**: Write a comment explaining what was tried and why reproduction failed, and **STOP** — awaiting user direction.
+- **No tests fail, new evidence supports a new hypothesis**: Return to Step 1.3.
+- **No tests fail, hypotheses exhausted**: Record the evidence and read `./plan.md` for focused research or a different in-scope approach. Apply `<blocker-contract>` only if progress requires external ownership or a distinct prerequisite.
 
 ```bash
 git add [test files]
@@ -102,7 +102,7 @@ git tag -f "bug/$CARD_ID/reproduction" HEAD
 
 ## 2. Resolve Bug
 
-Resolve is a retry loop, bounded at 3 attempts. Each attempt runs Step 2.1: Trace Data Flow, Step 2.2: Fix, and Step 2.3: Validate and Commit.
+Each resolve attempt runs Steps 2.1–2.3. Retry only when accumulated evidence supports a new hypothesis; otherwise return to planning.
 
 ### 2.1 Trace Data Flow
 
@@ -136,25 +136,23 @@ Run every reproduction test. Then lint and typecheck per the project's <%= it.co
 
 Based on the combined result:
 - **All reproduction tests pass and all validations pass**: Commit the fix and proceed to Step 3: Validate.
-- **Reproduction test still fails, or validation fails on implementation grounds**: Treat as NEEDS_REVISION. Discard your uncommitted work and retry per Step 2. If retries are exhausted (3 attempts), write a comment explaining attempts and the specific technical obstacle, commit, and **STOP**.
-- **Cannot proceed** (structural obstacle): Write a comment with the reasoning, add `blocked` to `tags` in `CARD.meta.json`, commit, and **STOP**.
+- **Reproduction test still fails, or validation fails on implementation grounds**: Preserve the evidence, roll back only this attempt's owned changes, and retry a new hypothesis or read `./plan.md`.
+- **Cannot advance independently**: Load <%= it.skillRef('runtime:blocker-contract') %>. Block only if every criterion holds; otherwise repair, isolate, or re-plan.
 
 Commit on success:
 
+Stage only card-owned paths per `<workspace-ownership>`, then commit:
+
 ```bash
-git add -A
+git add -- [CARD_OWNED_PATHS...]
+git diff --cached
 git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG
 )"
 ```
 
-NEEDS_REVISION rollback:
-
-```bash
-git restore .
-git clean -fd
-```
+For revision, restore or remove only paths owned by this attempt. Preserve the recorded off-card set; use broad restore or clean only after proving every target recoverable.
 
 ### 2.4 Test Correction Flow
 
@@ -165,33 +163,20 @@ A reproduction test needs correction. Validate the correction before accepting i
 
 Based on the corrected test's result:
 - **Fails (valid correction)**: Commit the corrected test, update the tag (`git tag -f "bug/$CARD_ID/reproduction" HEAD`), capture new `[TEST_FAILURE_OUTPUT]`, and return to Step 2.2: Fix.
-- **Passes (invalid correction)**: Revert the test. If resolve attempts remain, return to Step 2.2: Fix. Otherwise write a comment explaining test-validation failure and **STOP**.
-- **Corrections exhausted (2 already applied)**: Write a comment reporting that the reproduction test became unreliable during the fix process, describing what went wrong and why it cannot be trusted to verify the fix, commit, and **STOP**.
+- **Passes (invalid correction)**: Revert the test. Retry only with a new hypothesis; otherwise return to planning with the evidence.
+- **Repeated corrections no longer test new evidence**: Record why the witness is unreliable and return to planning.
 
 ## 3. Validate
 
 Run workspace lint and typecheck, plus each package suite the fix touches.
 
 <validation-gate>
-**Gate requirement:** ALL validation commands must pass.
-
-| Rationalization | Why it is wrong |
-|-----------------|----------------|
-| "Pre-existing issue" | You must fix it or block |
-| "Unrelated to my changes" | Prove it by fixing it, or block |
-| "Infrastructure failure" | Infrastructure IS the product |
-| "Only linting/types pass" | Tests are required, not optional |
-| "Change is purely cosmetic" | Cosmetic changes can still break tests |
-| "Tests are flaky" | Flaky = race condition = production bug |
-| "Works in other environments" | Must work HERE |
-
-Validation is binary — there is no "probably fine" state.
+Every required command must run and pass. Diagnose and repair baseline, tooling, dependency, derived-artifact, infrastructure, and flaky-test failures; do not dismiss or bypass them.
 </validation-gate>
 
 Based on the result:
 - **All validations pass**: Proceed to Step 4: Finalize.
-- **Resolvable error**: Fix it and re-run validation.
-- **Unresolvable error**: Write a comment with the exact failure output, add `blocked` to `tags` in `CARD.meta.json`, commit, and **STOP** — do not retry hoping it resolves itself.
+- **Failure**: Fix it and re-run, or return to planning with new evidence. Load <%= it.skillRef('runtime:blocker-contract') %> only when independent progress is impossible.
 
 ## 4. Finalize
 

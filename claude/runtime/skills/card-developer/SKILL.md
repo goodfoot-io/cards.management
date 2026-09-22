@@ -45,6 +45,8 @@ Return exactly one status reflecting actual validated state. If dispatched as on
 | **NEEDS_REVISION** | Retries stop producing new information or requirements unmet | What was tried, exact failure output |
 | **BLOCKED** | Cannot complete in this session: scope exceeds one session, missing dependency, ambiguous requirement, or obstacle outside your control | Exact blocker, what was attempted, and — when scope is the cause — a proposed split into independently dispatchable sub-scopes (each reaches a validation gate on its own) |
 
+`BLOCKED` is worker-local scheduling evidence. It never authorizes a card tag or terminal outcome; the orchestrator re-plans, splits, reassigns, repairs, or applies the shared blocker contract.
+
 ### Report Format
 
 ```

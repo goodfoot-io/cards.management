@@ -122,7 +122,7 @@ After the `WINNER:` DM, before Step 5: DM each losing live planner a red-team as
 
 ### Other Outcomes from Step 3
 
-- **All planners blocked.** No viable plan. Document the blocking reasons in a card comment, add the `blocked` tag, commit. Skip to Step 5: End the Contest with no winner, then return `BLOCKED` to the caller.
+- **All planners locally blocked.** This proves only that the attempted planning set found no plan. Consolidate its evidence, run focused research or restart with corrected assumptions. Return `REPLAN`; return `BLOCKED` only after loading `runtime:blocker-contract`, proving one external predicate, and committing its record and tag.
 - **Contest in progress.** A live planner is mid-revision or under an outstanding `CHANGES_REQUESTED`. Continue monitoring. Do not intervene.
 - **Stalled planner.** A live planner stuck under `CHANGES_REQUESTED` without revising holds the contest open. The reviewer holds the disqualification authority and may BLOCK them per §5.1 of `runtime:card-plan-failure-mode`; you do not BLOCK planners yourself. You may DM the planner to ask its intent if its state is genuinely unclear to you.
 
@@ -197,6 +197,6 @@ git commit -m "[single sentence summarizing the winning approach]"
 ## 6. Return to Caller
 
 - **Winner**: return `APPROVED` so the caller routes to implementation.
-- **All planners blocked or no viable plan**: return `BLOCKED`.
+- **No viable plan**: return `REPLAN`, or `BLOCKED` only when the shared contract was applied and recorded.
 
 </instructions>

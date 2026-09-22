@@ -268,7 +268,7 @@ A revision can attack any of the three: narrow severity (shrink the blast radius
 }) %>- `VERDICT: CHANGES_REQUESTED` — at least one finding requires implementation changes. The body carries, per blocking finding, the mechanism the fix must implement (Step 4's fix direction) and its witness matrix — the orchestrator briefs the developer wave from the verdict body plus the streamed findings.
 - `VERDICT: BLOCKED` — an external constraint prevents the fix (unreachable service, missing system tools or credentials, hardware constraint, unresolved upstream bug). State the constraint in the body. Do not use BLOCKED for findings the developer should fix; use CHANGES_REQUESTED.
 
-The orchestrator routes fixes based on your verdict — it does not override it.
+The verdict is scheduling evidence. The orchestrator repairs, reassigns, or re-plans and independently applies the shared blocker contract before changing card state.
 
 <%= it.variant({
   "claude-code": "DM the chosen marker to `team-lead` per `<dm-envelope>`. Body: per blocking finding, its fix direction and witness matrix; approach-level concerns first, then line-level; any final thoughts not yet DM'd as a `FINDING:`; for BLOCKED, the external constraint.\n",

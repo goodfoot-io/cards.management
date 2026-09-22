@@ -1,0 +1,16 @@
+<instructions>
+
+Dirty state is an ownership and staging constraint. It is not a blocker by itself.
+
+Inspect tracked and staged changes with `git diff` and `git diff --cached`; list untracked paths with `git ls-files --others --exclude-standard`; use `lstat` or equivalent so provisioning symlinks are classified as nodes rather than followed. Compare each path with the card diff, plan, package scope, baseline, and prior recorded state. Snapshot the pre-existing off-card set.
+
+- **Card-owned coherent work:** recover, validate, and continue.
+- **Card-owned incoherent work:** preserve it with a path-scoped stash or recovery commit, clean only those paths, and continue.
+- **Unrelated user work:** preserve exactly; use explicit-path staging or a clean isolated worktree.
+- **Pre-existing off-card generated or provisioned artifacts:** leave untouched; exclude them from staging and work detection.
+- **Card-required generated deliverables:** regenerate from their source, validate, and stage only their explicit paths.
+- **Overlapping state:** reconcile intent from source/history or use an isolated worktree. Load <%= it.skillRef('runtime:blocker-contract') %> only if neither method can preserve ownership and advance the card.
+
+Return to the caller after recording the off-card set. Never infer ownership from a card-dedicated worktree or stage the whole tree.
+
+</instructions>

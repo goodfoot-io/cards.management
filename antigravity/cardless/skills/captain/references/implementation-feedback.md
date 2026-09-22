@@ -1,6 +1,6 @@
 # Triage Implementation Feedback
 
-Read new conversation input, the brief, current/prior plans, progress and source commits. Feedback must name an actionable change or an inferable outcome. Research ambiguity; if the requirement remains indeterminate, read `./blocked.md`.
+Read new conversation input, the brief, current/prior plans, progress and source commits. Feedback must name an actionable change or an inferable outcome. Research ambiguity; if a required user decision remains indeterminate, apply the shared blocker contract before reading `./blocked.md`.
 
 Use the same triage as a code review:
 

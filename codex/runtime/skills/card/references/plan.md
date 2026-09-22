@@ -33,7 +33,8 @@ Weight tracks **unknowns, not work volume**. Count genuine architectural forks �
 - **Solo (default)** — one approach dominates, or the forks resolve by reading source. Continue to Step 2.1.
 - **Contest** — two or more approaches with real trade-offs, or unknowns deep enough that diverse exploration pays for itself. Read `./contest.md`, choosing `[N_PLANNERS]` (2–4) by the size of the solution space and `[PLANNER_EFFORT]` per slot. Un-approved plan files already in `plans/` favor a contest with incumbent seeding — the prior work gets graded rather than re-derived. On return:
   - **`APPROVED`**: Skip to Step 5: Route to Implementation.
-  - **`BLOCKED`**: **STOP** — do not route to implementation.
+  - **`REPLAN`**: Use the contest evidence for focused research or a revised solo plan.
+  - **`BLOCKED`**: Stop only because the contest already applied and recorded `<blocker-contract>`.
 
 ### 2.1 Create Plan (Solo)
 

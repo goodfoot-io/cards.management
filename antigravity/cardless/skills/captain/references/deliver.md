@@ -2,11 +2,11 @@
 
 ## 1. Establish the Delivery Diff
 
-Read `session.md`; reverify the checkout, assigned branch, selected remote URL, repository and PR base. Confirm the required publication authorization and GitHub capabilities using `./github.md`. Drain all workers and account for each branch before publication. Inspect and commit remaining task-owned changes under the repository's conventions. The source tree must be clean.
+Read `session.md`; reverify the checkout, assigned branch, selected remote URL, repository and PR base. Confirm the required publication authorization and GitHub capabilities using `./github.md`. Drain all workers and account for each branch before publication. Commit or roll back every task-owned mutation and verify the off-task snapshot is unchanged. If preserved off-task state could affect commands, validation, or review, use an isolated checkout at the exact deliverable SHA for all three.
 
 Fetch the named PR base from the selected remote. Prefer the local base branch if it exists, but verify it contains the fetched base and has no unpublished base commits; if it does not, use the fetched base ref for delivery. Do not modify another checkout's base branch. Record the exact base SHA used.
 
-Check whether this task branch is already published. Before its first push, rebase onto the verified base; resolve conflicts by listing them, inspecting each resolution, staging resolved files by name and continuing the rebase. Once published, preserve its history: integrate a newly advanced base with a regular merge on the task branch, never a rebase requiring force-push. On unresolved conflicts, preserve the evidence, abort the in-progress operation to its prior state and read `blocked.md`.
+Check whether this task branch is already published. Before its first push, rebase onto the verified base; inspect both intents and history, resolve derivable conflicts, stage resolved files by name, and continue. Use an isolated integration worktree when unrelated checkout state interferes. Once published, preserve its history: integrate a newly advanced base with a regular merge on the task branch, never a rebase requiring force-push. If neither resolution nor isolation can advance delivery, preserve the evidence and apply the shared blocker contract.
 
 Count commits and inspect the complete PR diff against the selected base, including any supplied commits preceding this session's baseline. If no requested change remains because it is already present on the base, verify the acceptance criteria and report that evidence. Do not fabricate an empty PR or claim a PR was opened; record a no-change outcome separately from successful PR delivery.
 
@@ -14,19 +14,19 @@ Count commits and inspect the complete PR diff against the selected base, includ
 
 Run the validation gates the project's AGENTS.md declares. Commands must actually execute and pass. Resolve every warning and failure, including prior failures. An infrastructure error is blocking, not a pass.
 
-Fix and rerun the failed checks; when fixes change dependencies or cross-package behavior, repeat the affected integration checks. Bound repeated attempts that produce no new evidence at three; save exact output and route to `blocked.md` if no safe remedy remains. No branch publication or PR creation follows a failed required check.
+Fix and rerun failed checks; when fixes change dependencies or cross-package behavior, repeat affected integration checks. Retry only with new evidence; otherwise re-plan or apply the shared blocker contract when external action is required. No branch publication or PR creation follows a failed required check.
 
 Review the final HEAD and complete PR diff against acceptance criteria, failure modes and delivered experience. Reuse recorded review evidence only for unchanged reviewed content; a rebase, conflict resolution, base merge or validation fix requires rechecking its affected behavior. Use fresh reviewers for substantial or uncertain changes. Fix findings, validate them and re-review until none remain. Record final base SHA, HEAD and gate/review evidence.
 
 ## 3. Push Only the Task Branch
 
-Immediately before pushing, recheck authorization, clean status, unchanged HEAD and the selected remote URL. Push explicitly:
+Immediately before pushing, recheck authorization, unchanged HEAD and remote URL, no pending task-owned mutation, and the preserved off-task snapshot. Push explicitly:
 
 ```bash
 git push --set-upstream "$TASK_REMOTE" "HEAD:refs/heads/$TASK_BRANCH"
 ```
 
-Never push all branches, tags, the base branch, or use force. If a host proxy rejects the assigned branch or authentication, record the exact blocker. If another writer advanced the remote task branch, fetch and inspect it; integrate only verified same-task work, then repeat validation/review before retrying. Unfamiliar changes block publication.
+Never push all branches, tags, the base branch, or use force. If a host proxy rejects the assigned branch or authentication, diagnose safe remedies before applying the shared blocker contract. If another writer advanced the remote task branch, fetch and inspect it; integrate only verified same-task work, then repeat validation/review before retrying. Reconcile unfamiliar changes or use an isolated integration worktree before publication.
 
 Verify the remote branch SHA equals the validated HEAD using `git ls-remote --heads` for that exact ref. Record the pushed SHA. A successful local commit alone is not delivery.
 
@@ -36,7 +36,7 @@ Write `TASK_STATE/reports/pr-body.md` with the concrete problem and resulting be
 
 Use the selected interface in `./github.md` to query existing open PRs for the exact repository, head branch and base. Reuse only the matching same-repository PR; multiple matches or an unexpected cross-repository head require investigation. Update its description when this task's new commits changed the result. Otherwise create it with the explicit head and base. A host tool needs the body text, whereas a CLI's `--body-file` reads the local file; do not send the path as a PR description.
 
-If creation times out or its outcome is uncertain, query for the exact existing PR before retrying, to avoid duplicates. Read authoritative PR metadata and verify it is open, both head and base repositories match the recorded repository, its refs match the recorded branch/base, and its head SHA equals the pushed, validated HEAD. CI or mergeability claims require their own observed evidence; local validation is not proof of either. If post-push PR creation fails, preserve the branch and report delivery as blocked with the pushed SHA; do not call the task complete.
+If creation times out or its outcome is uncertain, query for the exact existing PR before retrying, to avoid duplicates. Read authoritative PR metadata and verify it is open, both head and base repositories match the recorded repository, its refs match the recorded branch/base, and its head SHA equals the pushed, validated HEAD. CI or mergeability claims require their own observed evidence; local validation is not proof of either. If post-push creation still requires external action, preserve the branch and apply the shared blocker contract with the pushed SHA; do not call the task complete.
 
 ## 5. Finalize
 

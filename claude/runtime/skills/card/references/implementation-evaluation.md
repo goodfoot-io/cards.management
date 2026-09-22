@@ -8,7 +8,8 @@
 Commit any uncommitted workspace changes:
 
 ```bash
-git add -A
+git add -- [CARD_OWNED_PATHS...]
+git diff --cached
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines> — describe the uncommitted changes]
 COMMITMSG
@@ -51,7 +52,8 @@ Lint and typecheck per the project's CLAUDE.md validation conventions. Re-run on
 - **Failure**: Fix and re-run.
 
 ```bash
-git add -A
+git add -- [CARD_OWNED_PATHS...]
+git diff --cached
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG

@@ -4,6 +4,8 @@
 
 Verify the pinned baseline and checkout against `session.md`. The baseline does not advance during implementation. Record the implementation phase before starting.
 
+Classify current changes through `./bug-dirty-tree.md` and snapshot off-task paths. Stage only paths intentionally changed for this task; review `git diff --cached` before every commit.
+
 ```bash
 git rev-parse --verify "implement/$TASK_KEY/baseline^{commit}"
 ```
@@ -46,7 +48,7 @@ The task is not COMPLETED until delivery succeeds. Passing Step 2's completion g
 **Stage remaining changes.** If a developer team is live, drain it per `./developer-wave.md` `<lifecycle>` first. Stage any uncommitted implementation artifacts and commit per the workspace commit style:
 
 ```bash
-git add -A
+git add -- [reviewed task-owned paths]
 git diff --cached --quiet || git commit -m "$(cat <<'COMMITMSG'
 [commit message per <workspace-commit-style>; fragment-link every named file, function, and type per <markdown-guidelines>]
 COMMITMSG
@@ -101,7 +103,7 @@ Follow `./worktrees.md` to create a disposable detached worktree at `implement/$
 
 - **Reproduces on baseline** — the failure predates this task's changes. Try cheap remedies first (sync with the local base branch, reinstall dependencies, rebuild derived artifacts); if that doesn't clear it, repair the root cause in the active workspace, then re-run the failing command.
 - **Does not reproduce on baseline** — the failure is in scope of this task's work; fix it and re-run.
-- **Structural obstacle** (unreachable services, missing system tools or credentials, hardware constraints, an unresolved upstream bug on the base branch) — save the failure output and diagnosis under `TASK_STATE/reports/` and read `./blocked.md`. Do not proceed past a required check that could not run.
+- **Independent progress is impossible** — save the evidence, load `blocker-contract`, and block only if every criterion holds. Otherwise repair, isolate, delegate, or re-plan.
 
 </pre-existing-diagnosis>
 
@@ -118,8 +120,8 @@ At any point during implementation, stop and return to planning if any of the fo
 When any condition holds, **stop implementation immediately**. If a developer team is live, drain it per `./developer-wave.md` `<lifecycle>` first. Save the triggering evidence and worker reports in task state. For an unpublished attempt containing only verified task-owned changes, revert to the pinned baseline and discard this attempt's exact recorded step tags. Published or supplied commits must be preserved; plan a corrective follow-on instead of rewriting them.
 
 ```bash
-git reset --hard "implement/$TASK_KEY/baseline"
-git clean -fd
+git restore --source="implement/$TASK_KEY/baseline" -- [verified task-owned paths]
+git clean --force -d -- [verified task-owned scratch paths]
 git tag -d "implement/$TASK_KEY/step-N"  # each recorded task-owned step tag
 ```
 

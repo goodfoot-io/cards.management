@@ -149,7 +149,7 @@ Begin the report with the verdict marker. Three values are valid:
 - `VERDICT: CHANGES_REQUESTED` — at least one user-facing failure requires implementation changes. The body carries, per blocking failure, the fix requirement (what the user must encounter differently) and its witness matrix — the orchestrator briefs the developer wave from the verdict body plus the streamed findings.
 - `VERDICT: BLOCKED` — an external constraint prevents exercising the user entry points (unreachable service, missing credentials, hardware constraint). State the constraint in the body. Do not use BLOCKED for failures the developer should fix; use CHANGES_REQUESTED.
 
-The orchestrator routes fixes based on your verdict — it does not override it.
+The verdict is scheduling evidence. The orchestrator repairs, reassigns, or re-plans and independently applies the shared blocker contract before changing card state.
 
 ```
 VERDICT: APPROVED | CHANGES_REQUESTED | BLOCKED
