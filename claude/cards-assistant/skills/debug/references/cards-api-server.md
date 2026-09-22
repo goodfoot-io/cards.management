@@ -22,7 +22,13 @@ Scope: the Cards API server's discovery file schema, database settings, liveness
   "accessToken": "<bearer-token>",
   "startedAt": "2026-06-26T14:45:00.000Z",
   "buildTime": 1719432000000,
-  "reposPath": "/home/user/.cards/cards-repos"
+  "reposPath": "/home/user/.cards/cards-repos",
+  "serverIdentity": {
+    "serverInstanceId": "owner-lifetime-id",
+    "ownerEpoch": 42,
+    "protocolVersion": 1,
+    "buildTime": 1719432000000
+  }
 }
 ```
 
@@ -35,18 +41,19 @@ Scope: the Cards API server's discovery file schema, database settings, liveness
 | `startedAt` | string | Yes | ISO 8601 startup timestamp |
 | `buildTime` | number | No | Extension build timestamp (epoch ms from `__BUILD_TIME__` esbuild define) |
 | `reposPath` | string | No | Path to card repositories directory |
+| `serverIdentity` | object | No | Complete owner identity: lifetime ID, durable ownership epoch, protocol version, and matching build time |
 
-`buildTime` is used for stale-server takeover: a newer build kills the old server and takes ownership.
+Production clients require a complete, protocol-compatible `serverIdentity` for a live owner and verify that authenticated readiness echoes that exact identity before following the descriptor. `buildTime` expresses upgrade preference; it does not establish ownership by itself.
 
 ### Lifecycle Watcher
 
 **Source**: the extension's discovery-file watcher (`watchDiscoveryFile()`), run by every window connected to the server.
 
-A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes and:
+A watcher (`fs.watch` on parent dir + 5s polling fallback) observes the complete endpoint fingerprint (`port`, `accessToken`, `buildTime`, and `serverIdentity`) and:
 
-- **Self-demotes** when a newer `buildTime` appears, or an equal `buildTime` with a different `port`/`accessToken` (a same-build peer took over during a health stall).
-- **Claims a dead-PID discovery file atomically**: renames to `{path}.{6rand}.stale`, compares content, deletes only if matching.
-- **Re-asserts on external deletion** (ENOENT) after a debounce window, with a peer-existence check so it won't clobber a peer's fresh file.
+- **Requests reconciliation** when the observed endpoint changes or becomes unavailable; the notification does not itself authorize demotion or takeover.
+- **Serializes and coalesces observations** so filesystem events and polling cannot race concurrent reconciliation callbacks.
+- **Never writes, renames, or deletes discovery**. Only a proven owner may publish or remove its descriptor.
 
 ## Liveness States
 
@@ -54,12 +61,12 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) detects peer writes a
 |-------|------|-----|---------------|--------------|---------|
 | Healthy owner | present | alive | reachable | — | Server running — connect as client |
 | Slow but healthy | present | alive | timeout | passes within 200ms | Server running under CPU load — connect as client |
-| Stale PID | present | alive | dead | — | Port definitively refused/reset/closed. Stale — treated as not_found |
-| Crashed owner | present | dead | — | — | Discovery file cleaned up. Trigger recovery poll |
-| Hung port | present | alive | timeout | fails within 200ms | Port hung — treated as stale |
+| Stale PID | present | alive | dead | — | Port definitively refused/reset/closed — report `not_found`; leave descriptor untouched |
+| Crashed owner | present | dead | — | — | Report `not_found`; leave descriptor untouched for owner-authorized recovery |
+| Hung port | present | alive | timeout | fails within 200ms | Report `not_found`; health failure alone never authorizes unlink |
 | No server | absent | — | — | — | Server never started or crashed |
 
-**Source**: the extension's server-liveness check, which combines a PID check, a TCP pre-probe, and an HTTP health check.
+**Source**: the extension's read-only server-liveness check combines a PID check, a TCP pre-probe, and an HTTP health check. Before binding, connection preparation also validates the complete descriptor identity against authenticated readiness and re-reads the descriptor to reject an owner change during verification.
 
 ## Database Settings
 
