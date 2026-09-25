@@ -1,166 +1,28 @@
 {
-  "messages": [
-    {
-      "id": "cc-msg-0",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "boundary",
-          "data": {
-            "kind": "turn",
-            "label": "Session started · 2 tools"
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "createdAt": "2026-08-21T12:00:00.000Z",
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
-    },
-    {
-      "id": "cc-msg-1",
-      "role": "user",
-      "content": [
-        {
-          "type": "text",
-          "text": "one\n\ntwo"
-        }
-      ],
-      "createdAt": "2026-08-21T12:00:01.000Z"
-    },
-    {
-      "id": "cc-msg-2",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "text",
-          "text": "part A"
-        },
-        {
-          "type": "text",
-          "text": "part B"
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      }
-    },
-    {
-      "id": "cc-msg-3",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "status-line",
-          "data": {
-            "text": "Mode: interactive"
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
-    },
-    {
-      "id": "cc-msg-4",
-      "role": "user",
-      "content": [
-        {
-          "type": "data",
-          "name": "status-line",
-          "data": {
-            "text": "user: task id"
-          }
-        }
-      ]
-    },
-    {
-      "id": "cc-msg-5",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "status-line",
-          "data": {
-            "text": "Mode: auto"
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
-    },
-    {
-      "id": "cc-msg-6",
-      "role": "user",
-      "content": [
-        {
-          "type": "text",
-          "text": "real question"
-        }
-      ],
-      "createdAt": "2026-08-21T12:05:00.000Z"
-    },
-    {
-      "id": "cc-msg-7",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "text",
-          "text": "answer"
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      }
-    },
-    {
-      "id": "cc-msg-8",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "boundary",
-          "data": {
-            "kind": "result",
-            "label": "Session complete · 3 turns · 300s · $0.5000"
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
-    }
+  "header": {
+    "model": "claude-fable-5",
+    "cwd": "/work",
+    "status": "done"
+  },
+  "text": [
+    "one",
+    "two",
+    "part A",
+    "part B",
+    "real question",
+    "answer"
   ],
-  "isRunning": false,
-  "model": "claude-fable-5",
-  "cwd": "/work",
-  "status": "success"
+  "reasoning": [],
+  "labels": [
+    "Session started \u00b7 2 tools",
+    "Mode: interactive",
+    "user: task id",
+    "Mode: auto",
+    "Session complete \u00b7 3 turns \u00b7 300s \u00b7 $0.5000"
+  ],
+  "attachments": [],
+  "outputs": [],
+  "supplemental": [],
+  "tools": [],
+  "raw": []
 }

@@ -234,6 +234,9 @@ describe('mounted session interaction', () => {
     await symlink(resolve(packageDirectory, '../../..', 'node_modules'), join(directory, 'node_modules'), 'junction');
     const viewportPath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/SessionViewport.tsx'));
     const contentPath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/SessionContent.tsx'));
+    const claudePath = JSON.stringify(
+      join(packageDirectory, 'src/streams/claude-code-session/www/components/expanded/ExpandedView.tsx')
+    );
     await writeFile(
       join(directory, 'main.jsx'),
       `
@@ -241,6 +244,15 @@ describe('mounted session interaction', () => {
       import { createRoot } from 'react-dom/client';
       import { SessionViewport } from ${viewportPath};
       import { SessionContent } from ${contentPath};
+      import { ClaudeSourceView } from ${claudePath};
+      function ClaudeApp() {
+        const [lines, setLines] = useState(() => [
+          {type:'assistant',uuid:'call-event',message:{content:[{type:'tool_use',id:'call',name:'Bash',input:{command:'pwd'}}]}},
+          {type:'attachment',uuid:'hook-event',attachment:{type:'hook_success',hookName:'Check',toolUseID:'call',hookEvent:'PostToolUse',stdout:'a'.repeat(16384)+'b'.repeat(83616),stderr:'',content:'',exitCode:0}}
+        ].map(value => JSON.stringify(value)));
+        window.claudeHarness = { append: () => setLines(previous => [...previous, JSON.stringify({type:'user',uuid:'result-event',message:{content:[{type:'tool_result',tool_use_id:'call',content:'done'}]}})]) };
+        return <ClaudeSourceView source={{sourceKey:'test/claude',generation:'one',filename:'fixture',lines,headLineNumber:1,meta:null,isLoading:false,error:null}} />;
+      }
       const makeRow = n => ({ id: 'row-' + n, kind: 'message', role: 'user', anchor: 'turn',
         provenance: [{ sourceKey: 'main', generation: 'one', lineNumber: n, selector: 'record' }],
         parts: [{ id: 'text-' + n, kind: 'text', text: 'Message ' + n, provenance: [] },
@@ -266,12 +278,12 @@ describe('mounted session interaction', () => {
       }
       window.sessionErrors = [];
       addEventListener('error', event => window.sessionErrors.push(event.message));
-      createRoot(document.getElementById('root')).render(<App />);
+      createRoot(document.getElementById('root')).render(location.search === '?claude' ? <ClaudeApp /> : <App />);
     `
     );
     await writeFile(
       join(directory, 'index.html'),
-      '<!doctype html><html><head><link rel="icon" href="data:,"><link rel="stylesheet" href="main.css"><style>html,body,#root{height:100%;margin:0}:root{--vscode-font-size:13px;--stream-content-max-width:900px}</style></head><body><div id="root"></div><script type="module" src="main.js"></script></body></html>'
+      '<!doctype html><html><head><link rel="icon" href="data:,"><link rel="stylesheet" href="main.css"><style>html,body,#root{height:100%;margin:0}:root{--vscode-font-size:13px;--stream-content-max-width:900px}</style></head><body><div id="root"></div><script>window.__STREAM_INIT__={primary:"fixture",files:{},availableFiles:[],mode:"expanded",themeKind:"dark",cssVariables:{}}</script><script type="module" src="main.js"></script></body></html>'
     );
     await promisify(execFile)(
       'yarn',
@@ -368,6 +380,41 @@ describe('mounted session interaction', () => {
       page: 'Characters 16385–32768 of 49152',
       focus: 'Next',
       selection: 'bbbbbbbb',
+      errors: []
+    });
+  });
+
+  it('retains hook inspection when a pending call receives its result and adopts the hook', async () => {
+    await browser('open', `${origin}/?claude`);
+    await browser('wait', '--text', 'Check');
+    const result = await evaluate<{
+      page: string;
+      focus: string;
+      selection: string;
+      open: string;
+      spacers: number;
+      errors: string[];
+    }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      const buttons = () => [...document.querySelectorAll('button')];
+      buttons().find(button => button.textContent.includes('Bash')).click();
+      buttons().find(button => button.textContent.includes('Check')).click(); await frame();
+      const hook = buttons().find(button => button.textContent.includes('Check')).closest('[data-session-disclosure]');
+      const id = hook.getAttribute('data-session-disclosure');
+      const next = [...hook.querySelectorAll('button')].find(button => button.textContent === 'Next');
+      next.click(); await frame(); next.focus();
+      const text = hook.querySelector('pre').firstChild;
+      document.getSelection().setBaseAndExtent(text, 10, text, 18); await frame();
+      claudeHarness.append(); await frame();
+      const current = [...document.querySelectorAll('[data-session-disclosure]')].find(element => element.getAttribute('data-session-disclosure') === id);
+      return { page: current.querySelector('.session-inspection-controls span').textContent, focus: document.activeElement.textContent, selection: document.getSelection().toString(), open: current.querySelector('button').getAttribute('aria-expanded'), spacers: document.querySelectorAll('[data-message-scroller-spacer]').length, errors: sessionErrors };
+    })()`);
+    expect(result).toEqual({
+      page: 'Characters 16385–32768 of 100000',
+      focus: 'Next',
+      selection: 'bbbbbbbb',
+      open: 'true',
+      spacers: 1,
       errors: []
     });
   });

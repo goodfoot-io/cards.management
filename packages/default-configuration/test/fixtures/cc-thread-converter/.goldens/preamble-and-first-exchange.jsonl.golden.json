@@ -1,183 +1,64 @@
 {
-  "messages": [
+  "header": {
+    "model": "claude-sonnet-4",
+    "cwd": "/workspace",
+    "status": "done"
+  },
+  "text": [
+    "Please fix the flaky test.",
+    "Running the suite.",
+    "Fixed the ordering bug."
+  ],
+  "reasoning": [
+    "Reproducing first."
+  ],
+  "labels": [
+    "Session started \u00b7 3 tools",
+    "Session started \u00b7 normal \u00b7 \"Fix the flaky test\" \u00b7 2 skills \u00b7 1 hook",
+    "Mode: normal",
+    "Title: \"Fix the flaky test\"",
+    "Turn \u00b7 61.2s \u00b7 8 messages",
+    "Session complete \u00b7 4 turns \u00b7 65s \u00b7 $0.1234"
+  ],
+  "attachments": [
     {
-      "id": "cc-msg-0",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "boundary",
-          "data": {
-            "kind": "turn",
-            "label": "Session started · 3 tools"
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "createdAt": "2026-08-20T09:00:00.000Z",
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
+      "type": "hook_success",
+      "hookName": "SessionStart",
+      "toolUseID": "SessionStart:startup",
+      "hookEvent": "SessionStart",
+      "content": "",
+      "stdout": "session started",
+      "stderr": "",
+      "exitCode": 0
     },
     {
-      "id": "cc-msg-2",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "cc-session-start",
-          "data": {
-            "summary": "Session started · normal · \"Fix the flaky test\" · 2 skills · 1 hook",
-            "entries": [
-              {
-                "name": "status-line",
-                "data": {
-                  "text": "Mode: normal"
-                }
-              },
-              {
-                "name": "cc-hook",
-                "data": {
-                  "hook": {
-                    "type": "hook_success",
-                    "hookName": "SessionStart",
-                    "toolUseID": "SessionStart:startup",
-                    "hookEvent": "SessionStart",
-                    "content": "",
-                    "stdout": "session started",
-                    "stderr": "",
-                    "exitCode": 0
-                  }
-                }
-              },
-              {
-                "name": "cc-attachment",
-                "data": {
-                  "attachment": {
-                    "type": "skill_listing",
-                    "content": "- copywriting\n- css-animations",
-                    "skillCount": 2,
-                    "isInitial": true
-                  }
-                }
-              },
-              {
-                "name": "status-line",
-                "data": {
-                  "text": "Title: \"Fix the flaky test\""
-                }
-              }
-            ]
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
+      "type": "skill_listing",
+      "content": "- copywriting\n- css-animations",
+      "skillCount": 2,
+      "isInitial": true
     },
     {
-      "id": "cc-msg-1",
-      "role": "user",
-      "content": [
-        {
-          "type": "text",
-          "text": "Please fix the flaky test."
-        }
-      ],
-      "createdAt": "2026-08-20T09:01:00.000Z"
-    },
+      "type": "hook_success",
+      "hookName": "PostToolUse:Bash",
+      "toolUseID": "T1",
+      "hookEvent": "PostToolUse",
+      "content": "",
+      "stdout": "hook ran",
+      "stderr": "",
+      "exitCode": 0
+    }
+  ],
+  "outputs": [
+    "3 passed, 1 failed"
+  ],
+  "supplemental": [],
+  "tools": [
     {
-      "id": "cc-msg-3",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "reasoning",
-          "text": "Reproducing first."
-        },
-        {
-          "type": "text",
-          "text": "Running the suite."
-        },
-        {
-          "type": "tool-call",
-          "toolCallId": "T1",
-          "toolName": "Bash",
-          "args": {
-            "command": "yarn vitest run flaky"
-          },
-          "result": {
-            "output": "3 passed, 1 failed",
-            "supplementalResult": null,
-            "hooks": [
-              {
-                "type": "hook_success",
-                "hookName": "PostToolUse:Bash",
-                "toolUseID": "T1",
-                "hookEvent": "PostToolUse",
-                "content": "",
-                "stdout": "hook ran",
-                "stderr": "",
-                "exitCode": 0
-              }
-            ]
-          },
-          "isError": false
-        },
-        {
-          "type": "text",
-          "text": "Fixed the ordering bug."
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "createdAt": "2026-08-20T09:01:05.000Z"
-    },
-    {
-      "id": "cc-msg-4",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "status-line",
-          "data": {
-            "text": "Turn · 61.2s · 8 messages"
-          }
-        },
-        {
-          "type": "data",
-          "name": "boundary",
-          "data": {
-            "kind": "result",
-            "label": "Session complete · 4 turns · 65s · $0.1234"
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "metadata": {
-        "custom": {
-          "service": true
-        }
+      "name": "Bash",
+      "input": {
+        "command": "yarn vitest run flaky"
       }
     }
   ],
-  "isRunning": false,
-  "model": "claude-sonnet-4",
-  "cwd": "/workspace",
-  "status": "success"
+  "raw": []
 }

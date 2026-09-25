@@ -24,7 +24,7 @@ import {
 } from 'react';
 import { renderMarkdownNodes } from '../markdown';
 import './session.css';
-import { InspectionPages, useLeafViewState } from './leaf-view-state';
+import { InspectionPages, LeafViewState, useLeafViewState, useOwnedLeafViewState } from './leaf-view-state';
 import type {
   SessionDisclosureState,
   SessionInsertion,
@@ -76,6 +76,30 @@ export interface SessionContentProps<Payloads extends object = Record<string, un
  * @returns Content suitable for an owning viewport or outer page.
  */
 export function SessionContent<Payloads extends object>(props: SessionContentProps<Payloads>): ReactElement {
+  const state = useContext(LeafViewState);
+  return state ? <SessionContentBody {...props} /> : <SessionContentOwner {...props} />;
+}
+
+/**
+ * Owns inspection state once for the entire expanded content tree.
+ * @param props - Content and controlled disclosure identities.
+ * @returns Content with shared leaf inspection ownership.
+ */
+function SessionContentOwner<Payloads extends object>(props: SessionContentProps<Payloads>): ReactElement {
+  const state = useOwnedLeafViewState(props.rows, props.disclosures);
+  return (
+    <LeafViewState.Provider value={state}>
+      <SessionContentBody {...props} />
+    </LeafViewState.Provider>
+  );
+}
+
+/**
+ * Renders content using the enclosing view's inspection state and local framing.
+ * @param props - Render-only content and provider presentation hooks.
+ * @returns The framed rows and nested render-only content.
+ */
+function SessionContentBody<Payloads extends object>(props: SessionContentProps<Payloads>): ReactElement {
   const {
     rows,
     disclosures,
@@ -110,7 +134,7 @@ export function SessionContent<Payloads extends object>(props: SessionContentPro
     }),
     []
   );
-  const { root: rootElement, pages, elements } = useLeafViewState(rows);
+  const { root: rootElement, pages, elements } = useLeafViewState();
   const latestLayout = useRef({ layout, rows });
   latestLayout.current = { layout, rows };
   useEffect(() => {
@@ -289,7 +313,7 @@ function SessionLeafFrame({
  * @param root0.children - Lazy body mounted only when open.
  * @returns Rendered session presentation.
  */
-function SessionDisclosure({
+export function SessionDisclosure({
   id,
   label,
   context,
@@ -341,7 +365,7 @@ function SessionDisclosure({
  * @param root0.slot - Independent inspection region within a leaf.
  * @returns Rendered session presentation.
  */
-function BoundedText({
+export function BoundedText({
   text,
   id,
   context,

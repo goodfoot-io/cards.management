@@ -8,7 +8,7 @@
  *
  * Extracted from the former `CoordinationLine.tsx` (which rendered these as
  * JSX) when the expanded transcript moved to assistant-ui: the converter
- * (./to-thread-messages.ts) needs plain text for `status-line` data parts,
+ * (./project-session.ts) needs plain text for `status-line` data parts,
  * not React elements, so this module carries no React dependency.
  *
  * @summary Pure JSON/XML coordination-content detection and text summarization

@@ -97,7 +97,7 @@ interface ContextStateRowProps {
  * @param attachment - The raw attachment payload.
  * @returns The body text, or null when there is nothing to expand.
  */
-function bodyText(attachment: AttachmentPayload): string | null {
+export function contextBodyText(attachment: AttachmentPayload): string | null {
   switch (attachment.type) {
     case 'team_context': {
       const a = attachment as TeamContextAttachment;
@@ -150,7 +150,7 @@ function bodyText(attachment: AttachmentPayload): string | null {
  * @returns Rendered ambient row element.
  */
 export function ContextStateRow({ descriptor, attachment }: ContextStateRowProps): React.ReactElement {
-  const body = descriptor.expandable ? bodyText(attachment) : null;
+  const body = descriptor.expandable ? contextBodyText(attachment) : null;
   const header = (
     <span
       className="overflow-hidden text-ellipsis whitespace-nowrap"

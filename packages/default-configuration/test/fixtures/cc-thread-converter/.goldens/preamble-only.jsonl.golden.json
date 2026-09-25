@@ -1,72 +1,26 @@
 {
-  "messages": [
+  "header": {
+    "model": "claude-haiku-3",
+    "cwd": "/scratch",
+    "status": "running"
+  },
+  "text": [],
+  "reasoning": [],
+  "labels": [
+    "Session started \u00b7 plan \u00b7 1 skill",
+    "Mode: plan",
+    "Session started \u00b7 1 tool"
+  ],
+  "attachments": [
     {
-      "id": "cc-msg-0",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "cc-session-start",
-          "data": {
-            "summary": "Session started · plan · 1 skill",
-            "entries": [
-              {
-                "name": "status-line",
-                "data": {
-                  "text": "Mode: plan"
-                }
-              },
-              {
-                "name": "cc-attachment",
-                "data": {
-                  "attachment": {
-                    "type": "skill_listing",
-                    "content": "- research",
-                    "skillCount": 1,
-                    "isInitial": true
-                  }
-                }
-              }
-            ]
-          }
-        }
-      ],
-      "status": {
-        "type": "complete",
-        "reason": "stop"
-      },
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
-    },
-    {
-      "id": "cc-msg-1",
-      "role": "assistant",
-      "content": [
-        {
-          "type": "data",
-          "name": "boundary",
-          "data": {
-            "kind": "turn",
-            "label": "Session started · 1 tool"
-          }
-        }
-      ],
-      "status": {
-        "type": "running"
-      },
-      "createdAt": "2026-08-22T08:00:00.000Z",
-      "metadata": {
-        "custom": {
-          "service": true
-        }
-      }
+      "type": "skill_listing",
+      "content": "- research",
+      "skillCount": 1,
+      "isInitial": true
     }
   ],
-  "isRunning": true,
-  "model": "claude-haiku-3",
-  "cwd": "/scratch",
-  "status": "running"
+  "outputs": [],
+  "supplemental": [],
+  "tools": [],
+  "raw": []
 }

@@ -43,7 +43,7 @@ interface DisclosureRowProps {
  * @param attachment - The raw attachment payload.
  * @returns The body text, or null when there is nothing to expand.
  */
-function bodyText(attachment: AttachmentPayload): string | null {
+export function disclosureBodyText(attachment: AttachmentPayload): string | null {
   switch (attachment.type) {
     case 'nested_memory': {
       const a = attachment as NestedMemoryAttachment;
@@ -90,7 +90,7 @@ function bodyText(attachment: AttachmentPayload): string | null {
  * @returns Rendered disclosure row element.
  */
 export function DisclosureRow({ descriptor, attachment }: DisclosureRowProps): React.ReactElement {
-  const body = bodyText(attachment);
+  const body = disclosureBodyText(attachment);
   const header = (
     <span className="overflow-hidden text-ellipsis whitespace-nowrap" style={{ color: 'var(--stream-fg-muted)' }}>
       {descriptor.summary}

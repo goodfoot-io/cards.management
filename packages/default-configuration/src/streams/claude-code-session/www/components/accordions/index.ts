@@ -6,5 +6,3 @@
  */
 
 export { HookRow } from './HookRow';
-export { HookSection } from './HookSection';
-export { ToolAccordion } from './ToolAccordion';

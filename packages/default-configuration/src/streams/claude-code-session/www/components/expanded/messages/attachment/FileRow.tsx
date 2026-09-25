@@ -101,7 +101,7 @@ interface FileRowProps {
  * @param attachment - The raw attachment payload.
  * @returns The body text, or null when there is nothing to expand.
  */
-function bodyText(attachment: AttachmentPayload): string | null {
+export function fileBodyText(attachment: AttachmentPayload): string | null {
   switch (attachment.type) {
     case 'file': {
       const a = attachment as FileAttachment;
@@ -177,7 +177,7 @@ export function FileRow({ descriptor, attachment }: FileRowProps): React.ReactEl
     return <ExpandableRow header={header} expandable={false} />;
   }
 
-  const body = bodyText(attachment);
+  const body = fileBodyText(attachment);
 
   // selected_lines_in_ide keeps the rule-6 `·` reference affordance — a linkified
   // path at link weight — in its collapsed header, but the `content` it carries
