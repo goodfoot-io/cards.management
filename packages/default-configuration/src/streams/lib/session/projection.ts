@@ -26,7 +26,7 @@ export interface NativeTranscriptProjector<State, Parsed, Payloads extends objec
   parseRecord(record: NativeTranscriptRecord): Parsed;
   /** Applies one ordered record, retaining all replay provenance and stable leaf identities. */
   reduce(state: State, parsed: Parsed, record: NativeTranscriptRecord): void;
-  /** Projects current state and fresh metadata without parsing unchanged native lines. */
+  /** Projects current state and metadata; reuse untouched immutable rows so appends avoid rerendering history. */
   project(state: State, source: NativeTranscriptSource): SessionProjection<Payloads>;
   /** Releases provider-owned caches when the generation changes, a rebuild occurs, or disposed. */
   disposeState?(state: State): void;
@@ -55,32 +55,106 @@ export interface TranscriptProjectionController<Payloads extends object> {
  * same-generation incompatible ranges rebuild through the same reducer using cached parsing.
  * @param projector - Provider-specific parser and semantic reducer.
  * @param sourceKey - Immutable qualified source identity for this controller.
- * @throws Until the contract implementation is completed.
  * @returns Disposable projection lifecycle.
  */
 export function createTranscriptProjection<State, Parsed, Payloads extends object>(
   projector: NativeTranscriptProjector<State, Parsed, Payloads>,
   sourceKey: string
 ): TranscriptProjectionController<Payloads> {
-  void projector;
-  void sourceKey;
-  throw new Error('Not Implemented');
+  let previous: NativeTranscriptSource | undefined;
+  let state: State | undefined;
+  let projection: SessionProjection<Payloads> | undefined;
+  let disposed = false;
+  let cache = new Map<number, { text: string; parsed: Parsed; record: NativeTranscriptRecord }>();
+  const release = (): void => {
+    if (state !== undefined) projector.disposeState?.(state);
+    state = undefined;
+  };
+  return {
+    update(source) {
+      if (disposed) throw new Error('Transcript projection is disposed');
+      if (source.sourceKey !== sourceKey) throw new Error('Transcript source key cannot change');
+      validateSource(source);
+      const reset = previous !== undefined && previous.generation !== source.generation;
+      const sameStart = previous?.headLineNumber === source.headLineNumber;
+      const prefix =
+        !reset &&
+        sameStart &&
+        previous !== undefined &&
+        previous.lines.length <= source.lines.length &&
+        previous.lines.every((line, index) => source.lines[index] === line);
+      const sameLines = prefix && previous?.lines.length === source.lines.length;
+      if (sameLines && previous && projection && sameMetadata(previous, source)) {
+        return { projection, kind: 'unchanged', invalidatedIds: [] };
+      }
+      const kind: ProjectionUpdateKind = !previous
+        ? 'initial'
+        : reset
+          ? 'reset'
+          : sameLines
+            ? 'metadata'
+            : prefix
+              ? 'append'
+              : 'replay';
+      const oldProjection = projection;
+      if (!prefix) {
+        release();
+        if (reset) cache.clear();
+        state = projector.createState(source);
+      }
+      const current = state as State;
+      const start = prefix ? (previous?.lines.length ?? 0) : 0;
+      for (let index = start; index < source.lines.length; index++) {
+        const text = source.lines[index]!;
+        const lineNumber = source.headLineNumber + index;
+        let entry = cache.get(lineNumber);
+        if (!entry || entry.text !== text) {
+          const record: NativeTranscriptRecord = {
+            text,
+            provenance: { sourceKey, generation: source.generation, lineNumber, selector: 'record' }
+          };
+          entry = { text, record, parsed: projector.parseRecord(record) };
+          cache.set(lineNumber, entry);
+        }
+        projector.reduce(current, entry.parsed, entry.record);
+      }
+      if (!prefix) {
+        const end = source.headLineNumber + source.lines.length;
+        cache = new Map([...cache].filter(([line]) => line >= source.headLineNumber && line < end));
+      }
+      projection = projector.project(current, source);
+      previous = source;
+      const survivors = projectionIds(projection);
+      const invalidatedIds = oldProjection ? [...projectionIds(oldProjection)].filter((id) => !survivors.has(id)) : [];
+      return { projection, kind, invalidatedIds };
+    },
+    dispose() {
+      if (disposed) return;
+      disposed = true;
+      release();
+      cache.clear();
+      previous = undefined;
+      projection = undefined;
+    }
+  };
 }
 
 /**
  * Replays a complete native range through exactly the same reducer used by the cache.
  * @param projector - Provider parser and semantic reducer.
  * @param source - Complete current native range.
- * @throws Until the contract implementation is completed.
  * @returns Display semantics used as the incremental conformance oracle.
  */
 export function replayTranscript<State, Parsed, Payloads extends object>(
   projector: NativeTranscriptProjector<State, Parsed, Payloads>,
   source: NativeTranscriptSource
 ): SessionProjection<Payloads> {
-  void projector;
-  void source;
-  throw new Error('Not Implemented');
+  const controller = createTranscriptProjection(projector, source.sourceKey);
+  try {
+    return controller.update(source).projection;
+  } finally {
+    controller.dispose();
+  }
 }
 
 /**
@@ -88,7 +162,6 @@ export function replayTranscript<State, Parsed, Payloads extends object>(
  * @param source - Caller-qualified source identity and generation.
  * @param namespace - Provider-owned semantic entity namespace, such as tool or message.
  * @param selector - Proven semantic key or deterministic physical line/block selector.
- * @throws Until the contract implementation is completed.
  * @returns Stable source/generation-scoped display identity.
  */
 export function sessionIdentity(
@@ -96,8 +169,48 @@ export function sessionIdentity(
   namespace: string,
   selector: string
 ): SessionIdentity {
-  void source;
-  void namespace;
-  void selector;
-  throw new Error('Not Implemented');
+  return JSON.stringify([source.sourceKey, source.generation, namespace, selector]);
+}
+
+/** Compare source metadata without making unrelated store changes trigger replay.
+ * @param left - Previous source metadata.
+ * @param right - Current source metadata.
+ * @returns Metadata equality.
+ */
+function sameMetadata(left: NativeTranscriptSource, right: NativeTranscriptSource): boolean {
+  return (
+    left.filename === right.filename &&
+    left.isLoading === right.isLoading &&
+    left.error === right.error &&
+    JSON.stringify(left.meta) === JSON.stringify(right.meta)
+  );
+}
+
+/** Collect row and stable leaf identities so regrouping can preserve surviving disclosure state.
+ * @param projection - Current display rows and parts.
+ * @returns Unique displayed row and leaf identities.
+ */
+function projectionIds<Payloads extends object>(projection: SessionProjection<Payloads>): Set<SessionIdentity> {
+  const ids = new Set<SessionIdentity>();
+  for (const row of projection.rows) {
+    ids.add(row.id);
+    for (const part of row.parts) ids.add(part.id);
+  }
+  return ids;
+}
+
+/**
+ * Reject invalid physical coordinates before mutating provider state.
+ * @throws When a nonempty native range lacks a positive safe absolute coordinate.
+ * @param source - Native contiguous source range.
+ */
+function validateSource(source: NativeTranscriptSource): void {
+  if (
+    source.lines.length > 0 &&
+    (!Number.isSafeInteger(source.headLineNumber) ||
+      source.headLineNumber < 1 ||
+      !Number.isSafeInteger(source.headLineNumber + source.lines.length - 1))
+  ) {
+    throw new Error('Native transcript line coordinates must be positive safe integers');
+  }
 }

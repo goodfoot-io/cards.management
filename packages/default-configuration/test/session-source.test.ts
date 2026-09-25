@@ -46,7 +46,7 @@ function file(extra: Partial<StreamFile> = {}): StreamFile {
 const binding = { sourceKey: 'card/main', generation: 'caller-generation', filename: 'main' };
 
 describe('native source subscription', () => {
-  it.skip('reads missing, historical, and metadata-only snapshots coherently', () => {
+  it('reads missing, historical, and metadata-only snapshots coherently', () => {
     const store = nativeStore();
     const adapter = createNativeTranscriptSubscription(store, binding);
     expect(adapter.getSnapshot().lines).toEqual([]);
@@ -65,7 +65,7 @@ describe('native source subscription', () => {
     expect(store.listeners.size).toBe(0);
   });
 
-  it.skip('observes updates between the first read and subscription without a missed snapshot', () => {
+  it('observes updates between the first read and subscription without a missed snapshot', () => {
     const store = nativeStore();
     const adapter = createNativeTranscriptSubscription(store, binding);
     const before = adapter.getSnapshot();
@@ -77,7 +77,7 @@ describe('native source subscription', () => {
     adapter.dispose();
   });
 
-  it.skip('ignores other files, disposes all listeners and rejects late subscriptions', () => {
+  it('ignores other files, disposes all listeners and rejects late subscriptions', () => {
     const store = nativeStore();
     const adapter = createNativeTranscriptSubscription(store, binding);
     let notifications = 0;
@@ -95,9 +95,10 @@ describe('native source subscription', () => {
     store.update(file());
     expect(notifications).toBe(0);
     expect(() => adapter.subscribe(() => undefined)).toThrow(/disposed/i);
+    expect(() => adapter.getSnapshot()).toThrow(/disposed/i);
   });
 
-  it.skip('keeps caller generation unchanged for shorter native snapshots', () => {
+  it('keeps caller generation unchanged for shorter native snapshots', () => {
     const store = nativeStore();
     store.update(file());
     const adapter = createNativeTranscriptSubscription(store, binding);
@@ -105,5 +106,25 @@ describe('native source subscription', () => {
     expect(adapter.getSnapshot().generation).toBe(binding.generation);
     expect(adapter.getSnapshot().lines).toEqual([]);
     adapter.dispose();
+  });
+  it('notifies every subscriber and makes already queued callbacks inert after cleanup', () => {
+    const store = nativeStore();
+    const adapter = createNativeTranscriptSubscription(store, binding);
+    const notifications = [0, 0];
+    const first = adapter.subscribe(() => {
+      notifications[0]++;
+    });
+    adapter.subscribe(() => {
+      notifications[1]++;
+    });
+    const queued = [...store.listeners];
+    store.update(file());
+    expect(notifications).toEqual([1, 1]);
+    first();
+    adapter.dispose();
+    store.update(file({ lines: ['changed'] }));
+    for (const callback of queued) callback();
+    expect(notifications).toEqual([1, 1]);
+    expect(store.listeners.size).toBe(0);
   });
 });

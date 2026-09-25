@@ -1,0 +1,56 @@
+/*!
+ * @shadcn/react 0.3.1
+ * MIT License
+ * 
+ * Copyright (c) 2023 shadcn
+ * 
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ * 
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ * 
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+.session-root { display: flex; flex-direction: column; height: 100%; min-height: 0; color: var(--vscode-editor-foreground); font-size: var(--stream-text-body, var(--vscode-font-size)); line-height: 1.5; }
+.session-viewport { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; padding: 12px 14px; }
+.session-content { max-width: var(--stream-content-max-width); margin-inline: auto; width: 100%; overflow-wrap: anywhere; }
+.session-row { margin-block: 12px; }
+.session-part { min-width: 0; margin-block: 6px; }
+.session-label { font-weight: 600; font-size: var(--stream-text-label, var(--vscode-font-size)); }
+.session-muted { color: var(--vscode-descriptionForeground); }
+.session-tone--error { color: var(--vscode-errorForeground); }
+.session-tone--boundary { border-block-start: 1px solid var(--vscode-panel-border, transparent); padding-block-start: 12px; }
+.session-disclosure-button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: transparent; color: inherit; }
+.session-content button, .session-controls button { font: inherit; padding: 4px 8px; min-height: 26px; cursor: pointer; border: 1px solid var(--vscode-button-border, transparent); border-radius: var(--vscode-cornerRadius-small, 4px); }
+.session-content button:hover { background: var(--vscode-toolbar-hoverBackground); }
+.session-content button:focus-visible, .session-controls button:focus-visible, .session-viewport:focus-visible, .session-content a:focus-visible { outline: 1px solid var(--vscode-focusBorder); outline-offset: 2px; }
+.session-content button:disabled { color: var(--vscode-disabledForeground); cursor: default; }
+.session-disclosure-body { padding: 6px 8px; border-inline-start: 1px solid var(--vscode-tree-indentGuidesStroke, transparent); }
+.session-raw { white-space: pre-wrap; overflow-wrap: anywhere; margin: 6px 0; font-family: var(--vscode-editor-font-family); font-size: var(--stream-text-code, var(--vscode-font-size)); }
+.session-inspection-controls, .session-controls, .session-attachment { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.session-inspection-controls button, .session-controls button { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+.session-inspection-controls button:hover, .session-controls button:hover { background: var(--vscode-button-secondaryHoverBackground); }
+.session-controls { flex: none; justify-content: flex-end; padding: 6px 12px; border-block-start: 1px solid var(--vscode-panel-border, transparent); }
+.session-markdown p { margin: 0 0 12px; }
+.session-markdown p:last-child { margin-bottom: 0; }
+.session-markdown pre { white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 12px; background: var(--vscode-textCodeBlock-background); border: 1px solid var(--vscode-panel-border, transparent); }
+.session-markdown code { font-family: var(--vscode-editor-font-family); }
+.session-markdown a { color: var(--vscode-textLink-foreground); }
+.session-markdown table { border-collapse: collapse; width: 100%; }
+.session-markdown th, .session-markdown td { text-align: left; padding: 4px 8px; border: 1px solid var(--vscode-panel-border, transparent); }
+.session-markdown img { max-width: 100%; }
+.session-markdown blockquote { padding-inline-start: 12px; border-inline-start: 1px solid var(--vscode-textBlockQuote-border, transparent); background: var(--vscode-textBlockQuote-background); }
+:root[data-vscode-theme-kind="high-contrast"] .session-content button:hover, :root[data-vscode-theme-kind="high-contrast"] .session-controls button:hover { background: transparent; outline: 1px dashed var(--vscode-contrastActiveBorder); }
+/* Keep native DOM and accessibility content while letting Chromium skip offscreen layout. */
+.session-row { content-visibility: auto; contain-intrinsic-block-size: auto 92px; }

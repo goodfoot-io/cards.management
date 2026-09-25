@@ -7,12 +7,29 @@
  * @module streams/lib/session/SessionContent
  */
 
-import type { ReactElement, ReactNode } from 'react';
+import {
+  type ComponentProps,
+  type ComponentType,
+  createContext,
+  memo,
+  type ReactElement,
+  type ReactNode,
+  useContext,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react';
+import { renderMarkdownNodes } from '../markdown';
+import './session.css';
 import type {
   SessionDisclosureState,
   SessionInsertion,
   SessionLayoutHooks,
   SessionLeaf,
+  SessionPart,
   SessionRow,
   SessionToolPart
 } from './types';
@@ -55,10 +72,537 @@ export interface SessionContentProps<Payloads extends object = Record<string, un
  * Missing witnessed anchors are omitted rather than guessed; explicit sections remain valid.
  * Raw oversized content is inspected in bounded pages with an explicit amount-shown label.
  * @param props - Render-only content and provider presentation hooks.
- * @throws Until the contract implementation is completed.
  * @returns Content suitable for an owning viewport or outer page.
  */
 export function SessionContent<Payloads extends object>(props: SessionContentProps<Payloads>): ReactElement {
-  void props;
-  throw new Error('Not Implemented');
+  const {
+    rows,
+    disclosures,
+    providerParts,
+    providerRows,
+    renderTool,
+    insertions = EMPTY_INSERTIONS,
+    renderInsertion,
+    layout = {},
+    emptyContent,
+    className
+  } = props;
+  const frames = useContext(SessionFrames);
+  const Root = frames?.Root ?? 'div';
+  const Row = frames?.Row ?? 'div';
+  const liveContext = useRef({ disclosures, layout });
+  liveContext.current = { disclosures, layout };
+  const context = useMemo<SessionRenderContext>(
+    () => ({
+      disclosures: {
+        get open() {
+          return liveContext.current.disclosures.open;
+        },
+        onOpenChange: (id, open) => liveContext.current.disclosures.onOpenChange(id, open)
+      },
+      layout: {
+        onBeforeLayoutChange: (id) => liveContext.current.layout.onBeforeLayoutChange?.(id),
+        onAfterLayoutChange: (id) => liveContext.current.layout.onAfterLayoutChange?.(id),
+        onAnchorElement: (id, element) => liveContext.current.layout.onAnchorElement?.(id, element),
+        onFocusChange: (id) => liveContext.current.layout.onFocusChange?.(id)
+      }
+    }),
+    []
+  );
+  const focus = useRef<{ id: string; element: HTMLElement } | null>(null);
+  const elements = useRef(new Map<string, HTMLElement>());
+  const rootElement = useRef<HTMLDivElement>(null);
+  const latestLayout = useRef({ layout, rows });
+  latestLayout.current = { layout, rows };
+  useEffect(() => {
+    if (!rootElement.current || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(() => {
+      const current = latestLayout.current;
+      const id = current.rows[0]?.parts[0]?.id ?? current.rows[0]?.id;
+      if (id) current.layout.onAfterLayoutChange?.(id);
+    });
+    observer.observe(rootElement.current);
+    return () => observer.disconnect();
+  }, []);
+  useLayoutEffect(() => {
+    const previous = focus.current;
+    if (previous && !previous.element.isConnected && document.activeElement === document.body) {
+      const element = elements.current
+        .get(previous.id)
+        ?.querySelector<HTMLElement>('button, a[href], input, [tabindex="0"]');
+      element?.focus({ preventScroll: true });
+    }
+  });
+  const insertion = (entry: SessionInsertion): ReactNode => (
+    <SessionDisclosure key={entry.placementId} id={entry.placementId} label={entry.label} context={context}>
+      {renderInsertion?.(entry, context)}
+    </SessionDisclosure>
+  );
+  const sections = (position: 'start' | 'end'): ReactNode =>
+    insertions
+      .filter((entry) => entry.placement.kind === 'section' && entry.placement.position === position)
+      .map(insertion);
+  const witnessed = (row: SessionRow<Payloads>, position: 'before' | 'after', partId?: string): ReactNode =>
+    insertions
+      .filter((entry) => {
+        const target = entry.placement;
+        return (
+          target.kind === 'witnessed' &&
+          target.rowId === row.id &&
+          target.partId === partId &&
+          target.position === position &&
+          row.provenance.some((origin) => origin.sourceKey === target.parentSourceKey)
+        );
+      })
+      .map(insertion);
+  return (
+    <Root ref={rootElement} className={`session-content ${className ?? ''}`}>
+      {sections('start')}
+      {rows.length === 0 ? (emptyContent ?? <p className="session-muted">No output yet.</p>) : null}
+      {presentationBatches(rows).map((batch) => (
+        <MemoSessionBatch
+          key={batch.id}
+          rows={batch.rows}
+          open={disclosures.open}
+          providerParts={providerParts}
+          providerRows={providerRows}
+          renderTool={renderTool}
+          insertions={insertions}
+          renderInsertion={renderInsertion}
+        >
+          {() => (
+            <Row className="session-batch" data-session-id={batch.id}>
+              {batch.rows.map((row) => (
+                <MemoSessionRow
+                  key={row.id}
+                  row={row}
+                  open={disclosures.open}
+                  providerParts={providerParts}
+                  providerRows={providerRows}
+                  renderTool={renderTool}
+                  insertions={insertions}
+                  renderInsertion={renderInsertion}
+                >
+                  {() => (
+                    <Row
+                      data-session-id={row.id}
+                      data-session-turn={row.anchor === 'turn' ? 'true' : undefined}
+                      className={`session-row session-row--${row.kind}`}
+                    >
+                      {witnessed(row, 'before')}
+                      {row.kind === 'provider' && providerRows?.[row.providerKind] ? (
+                        providerRows[row.providerKind]({ leaf: row, data: row.data, ...context })
+                      ) : row.kind === 'message' ? (
+                        <div className="session-label">{row.label ?? row.role}</div>
+                      ) : row.kind === 'structural' ? (
+                        <div className={`session-label session-tone--${row.tone}`}>{row.label}</div>
+                      ) : (
+                        <ProviderFallback leaf={row} data={row.data} context={context} />
+                      )}
+                      {row.parts.map((part) => (
+                        <SessionLeafFrame
+                          key={part.id}
+                          leaf={part}
+                          context={context}
+                          onElement={(element) => {
+                            if (element) elements.current.set(part.id, element);
+                            else elements.current.delete(part.id);
+                          }}
+                          onFocus={(element) => {
+                            focus.current = { id: part.id, element };
+                          }}
+                        >
+                          {witnessed(row, 'before', part.id)}
+                          <SessionPartView
+                            part={part}
+                            context={context}
+                            registry={providerParts}
+                            renderTool={renderTool}
+                          />
+                          {witnessed(row, 'after', part.id)}
+                        </SessionLeafFrame>
+                      ))}
+                      {witnessed(row, 'after')}
+                    </Row>
+                  )}
+                </MemoSessionRow>
+              ))}
+            </Row>
+          )}
+        </MemoSessionBatch>
+      ))}
+      {sections('end')}
+    </Root>
+  );
 }
+
+/** Internal structural slots let the viewport supply MessageScroller's direct-child wrappers. */
+export const SessionFrames = createContext<{
+  Root: ComponentType<ComponentProps<'div'>>;
+  Row: ComponentType<ComponentProps<'div'>>;
+} | null>(null);
+
+/** Registers stable leaf geometry independently of group container identity.
+ * @param root0 - Stable leaf registration props.
+ * @param root0.leaf - Identity and provenance of this leaf.
+ * @param root0.context - Controlled disclosure and layout hooks.
+ * @param root0.children - Already projected leaf presentation.
+ * @param root0.onElement - Receives the current leaf element or its removal.
+ * @param root0.onFocus - Records the actual focused control.
+ * @returns Rendered session presentation.
+ */
+function SessionLeafFrame({
+  leaf,
+  context,
+  children,
+  onElement,
+  onFocus
+}: {
+  leaf: SessionLeaf;
+  context: SessionRenderContext;
+  children: ReactNode;
+  onElement: (element: HTMLElement | null) => void;
+  onFocus: (element: HTMLElement) => void;
+}): ReactElement {
+  const element = useRef<HTMLDivElement>(null);
+  const latest = useRef({ onElement, context });
+  latest.current = { onElement, context };
+  useLayoutEffect(() => {
+    const node = element.current;
+    latest.current.onElement(node);
+    latest.current.context.layout.onAnchorElement?.(leaf.id, node);
+    return () => {
+      latest.current.onElement(null);
+      latest.current.context.layout.onAnchorElement?.(leaf.id, null);
+    };
+  }, [leaf.id]);
+  return (
+    <div
+      ref={element}
+      data-session-id={leaf.id}
+      className="session-part"
+      onFocus={(event) => {
+        onFocus(event.target as HTMLElement);
+        context.layout.onFocusChange?.(leaf.id);
+      }}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) context.layout.onFocusChange?.(null);
+      }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Controlled native button disclosure; closed bodies do no expensive rendering.
+ * @param root0 - Controlled disclosure props.
+ * @param root0.id - Stable leaf or placement identity.
+ * @param root0.label - Accessible disclosure label.
+ * @param root0.context - Controlled open state and layout hooks.
+ * @param root0.children - Lazy body mounted only when open.
+ * @returns Rendered session presentation.
+ */
+function SessionDisclosure({
+  id,
+  label,
+  context,
+  children
+}: {
+  id: string;
+  label: string;
+  context: SessionRenderContext;
+  children: ReactNode;
+}): ReactElement {
+  const bodyId = useId();
+  const open = context.disclosures.open.get(id) ?? false;
+  const latest = useRef(context.layout);
+  latest.current = context.layout;
+  const previousOpen = useRef(open);
+  useLayoutEffect(() => {
+    if (previousOpen.current !== open) latest.current.onAfterLayoutChange?.(id);
+    previousOpen.current = open;
+  }, [id, open]);
+  return (
+    <div className="session-disclosure" data-session-disclosure={id}>
+      <button
+        type="button"
+        className="session-disclosure-button"
+        aria-expanded={open}
+        aria-controls={bodyId}
+        onClick={() => {
+          context.layout.onBeforeLayoutChange?.(id);
+          context.disclosures.onOpenChange(id, !open);
+        }}
+      >
+        <span aria-hidden="true" className={`codicon codicon-chevron-${open ? 'down' : 'right'}`} />
+        <span>{label}</span>
+      </button>
+      {open ? (
+        <div id={bodyId} className="session-disclosure-body">
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** A fixed character window keeps even multi-megabyte details fully inspectable with bounded DOM.
+ * @param root0 - Paged inspection props.
+ * @param root0.text - Complete retained text.
+ * @param root0.id - Leaf owning the layout change.
+ * @param root0.context - Layout notification hooks.
+ * @returns Rendered session presentation.
+ */
+function BoundedText({ text, id, context }: { text: string; id: string; context: SessionRenderContext }): ReactElement {
+  const [page, setPage] = useState(0);
+  const size = 16384;
+  const lastPage = Math.max(0, Math.ceil(text.length / size) - 1);
+  const current = Math.min(page, lastPage);
+  let start = current * size;
+  let end = Math.min(start + size, text.length);
+  // Keep a UTF-16 surrogate pair on the preceding page instead of splitting its glyph.
+  if (start > 0 && /[\uDC00-\uDFFF]/.test(text.charAt(start)) && /[\uD800-\uDBFF]/.test(text.charAt(start - 1)))
+    start++;
+  if (end < text.length && /[\uDC00-\uDFFF]/.test(text.charAt(end)) && /[\uD800-\uDBFF]/.test(text.charAt(end - 1)))
+    end++;
+  const change = (next: number): void => {
+    context.layout.onBeforeLayoutChange?.(id);
+    setPage(next);
+  };
+  useLayoutEffect(() => {
+    void current; // Page navigation changes layout even when text identity stays the same.
+    context.layout.onAfterLayoutChange?.(id);
+  }, [context.layout, current, id]);
+  return (
+    <div>
+      {text.length > size ? (
+        <div className="session-inspection-controls">
+          <span>
+            Characters {start + 1}–{end} of {text.length}
+          </span>
+          <button type="button" disabled={current === 0} onClick={() => change(current - 1)}>
+            Previous
+          </button>
+          <button type="button" disabled={current === lastPage} onClick={() => change(current + 1)}>
+            Next
+          </button>
+        </div>
+      ) : null}
+      <pre className="session-raw">{text.slice(start, end)}</pre>
+    </div>
+  );
+}
+
+/** Memoized Markdown avoids reparsing stable historical text during appends.
+ * @param root0 - Safe Markdown props.
+ * @param root0.text - Native textual content.
+ * @param root0.id - Stable key prefix.
+ * @returns Rendered session presentation.
+ */
+function Markdown({ text, id }: { text: string; id: string }): ReactElement {
+  const content = useMemo(() => renderMarkdownNodes(text, id), [text, id]);
+  return <div className="session-markdown">{content}</div>;
+}
+
+/** Unknown provider payloads remain inspectable if a consumer omits its typed renderer.
+ * @param root0 - Unsupported provider presentation props.
+ * @param root0.leaf - Stable payload identity.
+ * @param root0.data - Retained provider payload.
+ * @param root0.context - Controlled disclosure and layout hooks.
+ * @returns Rendered session presentation.
+ */
+function ProviderFallback({
+  leaf,
+  data,
+  context
+}: {
+  leaf: SessionLeaf;
+  data: unknown;
+  context: SessionRenderContext;
+}): ReactElement {
+  return (
+    <SessionDisclosure id={leaf.id} label="Unsupported provider content" context={context}>
+      <UnknownPayload data={data} id={leaf.id} context={context} />
+    </SessionDisclosure>
+  );
+}
+
+/** Serialization is lazy and memoized rather than repeated for closed details or every append.
+ * @param root0 - Lazy payload inspection props.
+ * @param root0.data - Native provider payload to inspect.
+ * @param root0.id - Stable payload identity.
+ * @param root0.context - Layout notification hooks.
+ * @returns Rendered session presentation.
+ */
+function UnknownPayload({
+  data,
+  id,
+  context
+}: {
+  data: unknown;
+  id: string;
+  context: SessionRenderContext;
+}): ReactElement {
+  const text = useMemo(() => (typeof data === 'string' ? data : (JSON.stringify(data) ?? String(data))), [data]);
+  return <BoundedText text={text} id={id} context={context} />;
+}
+
+/** Shared rendering keeps tool state and provider payloads outside any conversation runtime.
+ * @param root0 - Typed leaf rendering props.
+ * @param root0.part - Cards-owned shared or provider part.
+ * @param root0.context - Controlled disclosure and layout hooks.
+ * @param root0.registry - Typed provider-specific part renderers.
+ * @param root0.renderTool - Optional shared-tool presentation override.
+ * @returns Rendered session presentation.
+ */
+function SessionPartView<Payloads extends object>({
+  part,
+  context,
+  registry,
+  renderTool
+}: {
+  part: SessionPart<Payloads>;
+  context: SessionRenderContext;
+  registry?: SessionProviderRegistry<Payloads>;
+  renderTool?: SessionContentProps<Payloads>['renderTool'];
+}): ReactNode {
+  switch (part.kind) {
+    case 'text':
+      return part.text.length > 65536 ? (
+        <BoundedText text={part.text} id={part.id} context={context} />
+      ) : (
+        <Markdown text={part.text} id={part.id} />
+      );
+    case 'reasoning':
+      return (
+        <SessionDisclosure id={part.id} label="Reasoning" context={context}>
+          <BoundedText text={part.text} id={part.id} context={context} />
+        </SessionDisclosure>
+      );
+    case 'raw':
+      return (
+        <SessionDisclosure id={part.id} label={part.label} context={context}>
+          <BoundedText text={part.text} id={part.id} context={context} />
+        </SessionDisclosure>
+      );
+    case 'attachment':
+      return (
+        <div className="session-attachment">
+          <span className="session-label">{part.label}</span>
+          <span>{part.description}</span>
+        </div>
+      );
+    case 'provider':
+      return registry?.[part.providerKind] ? (
+        registry[part.providerKind]({ leaf: part, data: part.data, ...context })
+      ) : (
+        <ProviderFallback leaf={part} data={part.data} context={context} />
+      );
+    case 'tool':
+      return renderTool ? (
+        renderTool(part, context)
+      ) : (
+        <SessionDisclosure id={part.id} label={`${part.name} · ${part.status}`} context={context}>
+          <div className="session-label">Input</div>
+          <BoundedText text={part.input} id={part.id} context={context} />
+          {part.output !== undefined ? (
+            <>
+              <div className="session-label">Output</div>
+              <BoundedText text={part.output} id={part.id} context={context} />
+            </>
+          ) : null}
+        </SessionDisclosure>
+      );
+  }
+}
+
+const EMPTY_INSERTIONS: readonly SessionInsertion[] = [];
+
+/** Props affecting one immutable row; the render closure is evaluated only when those inputs change. */
+interface MemoSessionRowProps {
+  readonly row: SessionRow;
+  readonly open: ReadonlyMap<string, boolean>;
+  readonly providerParts?: object;
+  readonly providerRows?: object;
+  readonly renderTool?: unknown;
+  readonly insertions: readonly SessionInsertion[];
+  readonly renderInsertion?: unknown;
+  readonly children: () => ReactElement;
+}
+
+/** Render immutable historical rows only when content or their disclosure state actually changes. */
+const MemoSessionRow = memo(
+  function MemoSessionRow(props: MemoSessionRowProps): ReactElement {
+    return props.children();
+  },
+  (previous, next) => {
+    if (
+      previous.row !== next.row ||
+      previous.providerParts !== next.providerParts ||
+      previous.providerRows !== next.providerRows ||
+      previous.renderTool !== next.renderTool ||
+      previous.insertions !== next.insertions ||
+      previous.renderInsertion !== next.renderInsertion
+    )
+      return false;
+    if (previous.open === next.open) return true;
+    // Custom provider presentation may own nested disclosure keys not present in shared parts.
+    if (next.providerParts || next.providerRows || next.renderTool || next.insertions.length > 0) return false;
+    return [next.row.id, ...next.row.parts.map((part) => part.id)].every(
+      (id) => previous.open.get(id) === next.open.get(id)
+    );
+  }
+);
+
+/**
+ * Physical buckets preserve native order and mounted leaf keys across append and prepend.
+ * @param rows - Immutable display rows in native source order.
+ * @returns Contiguous groups with stable source/coordinate keys.
+ */
+function presentationBatches<Payloads extends object>(
+  rows: readonly SessionRow<Payloads>[]
+): { id: string; rows: SessionRow<Payloads>[] }[] {
+  const batches: { id: string; rows: SessionRow<Payloads>[] }[] = [];
+  const occurrences = new Map<string, number>();
+  let previousKey: string | undefined;
+  for (const row of rows) {
+    const origin = row.provenance[0];
+    const key = origin
+      ? JSON.stringify([origin.sourceKey, origin.generation, Math.floor((origin.lineNumber - 1) / 128)])
+      : row.id;
+    if (key === previousKey) batches[batches.length - 1]!.rows.push(row);
+    else {
+      const occurrence = occurrences.get(key) ?? 0;
+      occurrences.set(key, occurrence + 1);
+      batches.push({ id: JSON.stringify([key, occurrence]), rows: [row] });
+      previousKey = key;
+    }
+  }
+  return batches;
+}
+
+/** Memoized native-coordinate groups keep unchanged history out of React reconciliation. */
+const MemoSessionBatch = memo(
+  function MemoSessionBatch(
+    props: Omit<MemoSessionRowProps, 'row' | 'children'> & { rows: readonly SessionRow[]; children: () => ReactNode }
+  ): ReactNode {
+    return props.children();
+  },
+  (previous, next) => {
+    if (
+      previous.rows.length !== next.rows.length ||
+      previous.rows.some((row, index) => row !== next.rows[index]) ||
+      previous.providerParts !== next.providerParts ||
+      previous.providerRows !== next.providerRows ||
+      previous.renderTool !== next.renderTool ||
+      previous.insertions !== next.insertions ||
+      previous.renderInsertion !== next.renderInsertion
+    )
+      return false;
+    if (previous.open === next.open) return true;
+    if (next.providerParts || next.providerRows || next.renderTool || next.insertions.length > 0) return false;
+    return next.rows.every((row) =>
+      [row.id, ...row.parts.map((part) => part.id)].every((id) => previous.open.get(id) === next.open.get(id))
+    );
+  }
+);

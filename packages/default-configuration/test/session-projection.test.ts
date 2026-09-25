@@ -64,7 +64,7 @@ function fixture(): {
 }
 
 describe('native transcript projection', () => {
-  it.skip('uses collision-free source and generation scoped identities', () => {
+  it('uses collision-free source and generation scoped identities', () => {
     expect(sessionIdentity(source([]), 'a/b', 'c')).not.toBe(sessionIdentity(source([]), 'a', 'b/c'));
     expect(sessionIdentity(source([]), 'message', '1')).not.toBe(
       sessionIdentity(source([], { sourceKey: 'other' }), 'message', '1')
@@ -74,7 +74,7 @@ describe('native transcript projection', () => {
     );
   });
 
-  it.skip('matches full replay across append, replay, prepend, overlap, truncation and replacement', () => {
+  it('matches full replay across append, replay, prepend, overlap, truncation and replacement', () => {
     const { projector, counts } = fixture();
     const controller = createTranscriptProjection(projector, 'card/source');
     const snapshots = [
@@ -94,7 +94,7 @@ describe('native transcript projection', () => {
     controller.dispose();
   });
 
-  it.skip('parses each appended physical record once and preserves identical id-less lines', () => {
+  it('parses each appended physical record once and preserves identical id-less lines', () => {
     const { projector, counts } = fixture();
     const controller = createTranscriptProjection(projector, 'card/source');
     controller.update(source(['same']));
@@ -106,7 +106,7 @@ describe('native transcript projection', () => {
     controller.dispose();
   });
 
-  it.skip('refreshes metadata without parsing and returns unchanged projection for identical input', () => {
+  it('refreshes metadata without parsing and returns unchanged projection for identical input', () => {
     const { projector, counts } = fixture();
     const controller = createTranscriptProjection(projector, 'card/source');
     const initial = controller.update(source(['a']));
@@ -118,7 +118,7 @@ describe('native transcript projection', () => {
     controller.dispose();
   });
 
-  it.skip('discards generation state and reports only invalidated row and leaf IDs', () => {
+  it('discards generation state and reports only invalidated row and leaf IDs', () => {
     const { projector, counts } = fixture();
     const controller = createTranscriptProjection(projector, 'card/source');
     const first = controller.update(source(['a', 'b']));
@@ -135,7 +135,7 @@ describe('native transcript projection', () => {
     expect(() => controller.update(source([]))).toThrow(/disposed/i);
   });
 
-  it.skip('rejects another source or invalid absolute coordinates before processing', () => {
+  it('rejects another source or invalid absolute coordinates before processing', () => {
     const { projector, counts } = fixture();
     const controller = createTranscriptProjection(projector, 'card/source');
     expect(() => controller.update(source(['a'], { sourceKey: 'other' }))).toThrow(/source/i);
