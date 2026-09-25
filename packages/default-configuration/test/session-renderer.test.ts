@@ -250,7 +250,13 @@ describe('mounted session interaction', () => {
           {type:'assistant',uuid:'call-event',message:{content:[{type:'tool_use',id:'call',name:'Bash',input:{command:'pwd'}}]}},
           {type:'attachment',uuid:'hook-event',attachment:{type:'hook_success',hookName:'Check',toolUseID:'call',hookEvent:'PostToolUse',stdout:'a'.repeat(16384)+'b'.repeat(83616),stderr:'',content:'',exitCode:0}}
         ].map(value => JSON.stringify(value)));
-        window.claudeHarness = { append: () => setLines(previous => [...previous, JSON.stringify({type:'user',uuid:'result-event',message:{content:[{type:'tool_result',tool_use_id:'call',content:'done'}]}})]) };
+        window.claudeHarness = {
+          append: () => setLines(previous => [...previous, JSON.stringify({type:'user',uuid:'result-event',message:{content:[{type:'tool_result',tool_use_id:'call',content:'done'}]}})]),
+          malformed: () => setLines([
+            {type:'assistant', message:{content:'start'}},
+            ...[{type:'skill_listing',names:'oops'}, {type:'invoked_skills',skills:'oops'}, {type:'command_permissions',allowedTools:'oops'}].map(attachment => ({type:'attachment',attachment}))
+          ].map(value => JSON.stringify(value)))
+        };
         return <ClaudeSourceView source={{sourceKey:'test/claude',generation:'one',filename:'fixture',lines,headLineNumber:1,meta:null,isLoading:false,error:null}} />;
       }
       const makeRow = n => ({ id: 'row-' + n, kind: 'message', role: 'user', anchor: 'turn',
@@ -417,6 +423,76 @@ describe('mounted session interaction', () => {
       spacers: 1,
       errors: []
     });
+  });
+
+  it('reveals an inspected hook adopted by a closed tool once and respects a later user collapse', async () => {
+    await browser('open', `${origin}/?claude`);
+    await browser('wait', '--text', 'Check');
+    const result = await evaluate<{
+      before: string;
+      page: string | null;
+      focus: string;
+      selection: string;
+      open: string | null;
+      visible: boolean;
+      toolOpen: string;
+      afterCollapse: string;
+      hiddenAfterCollapse: boolean;
+      errors: string[];
+    }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      const buttons = () => [...document.querySelectorAll('button')];
+      const tool = () => buttons().find(button => button.textContent.includes('Bash'));
+      const before = tool().getAttribute('aria-expanded');
+      buttons().find(button => button.textContent.includes('Check')).click(); await frame();
+      const hook = buttons().find(button => button.textContent.includes('Check')).closest('[data-session-disclosure]');
+      const id = hook.getAttribute('data-session-disclosure');
+      const current = () => [...document.querySelectorAll('[data-session-disclosure]')].find(element => element.getAttribute('data-session-disclosure') === id);
+      const next = [...hook.querySelectorAll('button')].find(button => button.textContent === 'Next');
+      next.click(); await frame(); next.focus();
+      const text = hook.querySelector('pre').firstChild;
+      document.getSelection().setBaseAndExtent(text, 10, text, 18); await frame();
+      claudeHarness.append(); await frame();
+      const adopted = current();
+      const state = {before, page: adopted?.querySelector('.session-inspection-controls span')?.textContent ?? null,
+        focus: document.activeElement.tagName === 'BODY' ? 'BODY' : document.activeElement.textContent,
+        selection: document.getSelection().toString(), open: adopted?.querySelector('button').getAttribute('aria-expanded') ?? null,
+        visible: !!adopted?.querySelector('pre')?.getClientRects().length, toolOpen: tool().getAttribute('aria-expanded')};
+      if (state.toolOpen === 'true') tool().click(); await frame();
+      claudeHarness.append(); await frame();
+      return {...state, afterCollapse: tool().getAttribute('aria-expanded'), hiddenAfterCollapse: !current(), errors: sessionErrors};
+    })()`);
+    expect(result).toEqual({
+      before: 'false',
+      page: 'Characters 16385–32768 of 100000',
+      focus: 'Next',
+      selection: 'bbbbbbbb',
+      open: 'true',
+      visible: true,
+      toolOpen: 'true',
+      afterCollapse: 'false',
+      hiddenAfterCollapse: true,
+      errors: []
+    });
+  });
+
+  it('opens malformed skill and permission records as raw details without crashing', async () => {
+    await browser('open', `${origin}/?claude`);
+    await browser('wait', '--text', 'Check');
+    const result = await evaluate<{ labels: number; details: string[]; errors: string[] }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      claudeHarness.malformed(); await frame();
+      const buttons = [...document.querySelectorAll('button')].filter(button => button.textContent === 'Malformed attachment');
+      buttons.forEach(button => button.click()); await frame();
+      return {labels: buttons.length, details: [...document.querySelectorAll('pre')].map(pre => pre.textContent), errors: sessionErrors};
+    })()`);
+    expect(result.labels).toBe(3);
+    expect(result.details.map((text) => JSON.parse(text).attachment)).toEqual([
+      { type: 'skill_listing', names: 'oops' },
+      { type: 'invoked_skills', skills: 'oops' },
+      { type: 'command_permissions', allowedTools: 'oops' }
+    ]);
+    expect(result.errors).toEqual([]);
   });
 
   it('keeps following when Space activates a disclosure but holds for viewport Space navigation', async () => {

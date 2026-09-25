@@ -402,13 +402,51 @@ function content(state: ClaudeProjectionState, event: Event): void {
   });
 }
 /**
+ * Validates collection fields before typed attachment summaries or lazy bodies consume them.
+ * @param payload - Untrusted native attachment object.
+ * @returns Whether its known collection fields have their required runtime shapes.
+ */
+function validAttachmentCollections(payload: Json): boolean {
+  const lists: Record<string, readonly string[]> = {
+    skill_listing: ['names'],
+    command_permissions: ['allowedTools'],
+    deferred_tools_delta: ['addedNames', 'readdedNames', 'removedNames'],
+    mcp_instructions_delta: ['addedNames', 'addedBlocks'],
+    agent_listing_delta: ['addedTypes', 'removedTypes'],
+    dynamic_skill: ['skillNames']
+  };
+  const type = string(payload['type']);
+  for (const field of lists[type] ?? []) {
+    const value = payload[field];
+    if (value === undefined && !(type === 'command_permissions' && field === 'allowedTools')) continue;
+    if (!Array.isArray(value) || !value.every((item) => typeof item === 'string')) return false;
+  }
+  if (type === 'invoked_skills' && payload['skills'] !== undefined) {
+    const skills = payload['skills'];
+    if (
+      !Array.isArray(skills) ||
+      !skills.every((value) => {
+        const skill = object(value);
+        return (
+          skill &&
+          ['name', 'path', 'content'].every((field) => skill[field] === undefined || typeof skill[field] === 'string')
+        );
+      })
+    )
+      return false;
+  }
+  if (type === 'task_reminder' && payload['content'] !== undefined && !Array.isArray(payload['content'])) return false;
+  return true;
+}
+
+/**
  * Preserves classifier-driven attachment tiers, orphan hooks and tool nesting.
  * @param state - Source-local semantic reducer state.
  * @param event - Native event and all verified physical occurrences.
  */
 function attachment(state: ClaudeProjectionState, event: Event): void {
   const payload = object(event.value['attachment']);
-  if (!payload || typeof payload['type'] !== 'string') {
+  if (!payload || typeof payload['type'] !== 'string' || !validAttachmentCollections(payload)) {
     add(state, event, 'attachment', 'service', [
       detail(state, event, 'attachment', 'malformed', 'Malformed attachment')
     ]);

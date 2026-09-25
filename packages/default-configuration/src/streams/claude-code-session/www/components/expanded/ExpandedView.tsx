@@ -12,8 +12,26 @@ import { SessionViewport } from '../../../../lib/session/SessionViewport';
 import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
 import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
 import { useStreamStore } from '../../hooks/useStreamStore';
-import { type ClaudePayloads, claudeSessionProjector } from '../../lib/project-session';
+import { type ClaudePayloads, type ClaudeRow, claudeSessionProjector } from '../../lib/project-session';
 import { CLAUDE_PARTS, claudeDisclosureIds } from './ClaudePresentation';
+
+/**
+ * Records hook adoption independently of mutable disclosure choices.
+ * @param rows - Native projected rows, including render-only grouping containers.
+ * @returns The enclosing tool identity for each adopted hook.
+ */
+function hookToolOwners(rows: readonly ClaudeRow[]): Map<string, string> {
+  const owners = new Map<string, string>();
+  const visit = (row: ClaudeRow): void => {
+    for (const part of row.parts) {
+      if (part.kind === 'provider' && part.providerKind === 'tool')
+        for (const hook of part.data.hooks) owners.set(hook.id, part.id);
+    }
+    if (row.kind === 'provider' && row.providerKind === 'group') row.data.rows.forEach(visit);
+  };
+  rows.forEach(visit);
+  return owners;
+}
 
 /**
  * Native source rendering is reusable without importing the store or discovering related sessions.
@@ -24,10 +42,12 @@ import { CLAUDE_PARTS, claudeDisclosureIds } from './ClaudePresentation';
 export function ClaudeSourceView({ source }: { source: NativeTranscriptSource }): ReactElement {
   const controller = useRef<TranscriptProjectionController<ClaudePayloads> | null>(null);
   const [projection, setProjection] = useState<SessionProjection<ClaudePayloads> | null>(null);
+  const hookOwners = useRef(new Map<string, string>());
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
   useEffect(() => {
     const next = createTranscriptProjection(claudeSessionProjector, source.sourceKey);
     controller.current = next;
+    hookOwners.current = new Map();
     return () => {
       next.dispose();
       controller.current = null;
@@ -37,9 +57,17 @@ export function ClaudeSourceView({ source }: { source: NativeTranscriptSource })
     const next = controller.current!.update(source).projection;
     setProjection(next);
     const ids = claudeDisclosureIds(next.rows);
-    setOpen((previous) =>
-      [...previous.keys()].every((id) => ids.has(id)) ? previous : new Map([...previous].filter(([id]) => ids.has(id)))
-    );
+    const owners = hookToolOwners(next.rows);
+    const adoptions = [...owners].filter(([hookId, toolId]) => hookOwners.current.get(hookId) !== toolId);
+    hookOwners.current = owners;
+    setOpen((previous) => {
+      const revealed = adoptions.filter(([hookId, toolId]) => previous.get(hookId) && !previous.get(toolId));
+      if (!revealed.length && [...previous.keys()].every((id) => ids.has(id))) return previous;
+      const retained = new Map([...previous].filter(([id]) => ids.has(id)));
+      // Reveal an inspected leaf only on its adoption transition. Later user collapses remain authoritative.
+      for (const [, toolId] of revealed) retained.set(toolId, true);
+      return retained;
+    });
   }, [source]);
   const current =
     projection?.sourceKey === source.sourceKey && projection.generation === source.generation ? projection : null;

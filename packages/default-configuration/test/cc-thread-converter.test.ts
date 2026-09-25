@@ -269,6 +269,40 @@ describe('Claude semantic preservation', () => {
   ])('retains unsupported record %j', (event) => {
     expect(parts(project([event]).rows).some((part) => part.kind === 'raw' && part.reason === 'unknown')).toBe(true);
   });
+  it.each([
+    { type: 'skill_listing', names: 'oops' },
+    { type: 'invoked_skills', skills: 'oops' },
+    { type: 'command_permissions', allowedTools: 'oops' },
+    { type: 'skill_listing', names: [null] },
+    { type: 'invoked_skills', skills: [null] },
+    { type: 'invoked_skills', skills: [{ name: { bad: true } }] },
+    { type: 'command_permissions', allowedTools: [null] },
+    { type: 'command_permissions' },
+    { type: 'deferred_tools_delta', addedNames: 'oops' },
+    { type: 'mcp_instructions_delta', addedBlocks: 'oops' },
+    { type: 'agent_listing_delta', addedTypes: 'oops' },
+    { type: 'dynamic_skill', skillNames: 'oops' },
+    { type: 'task_reminder', content: 'oops' }
+  ])('keeps malformed known attachment %j inspectable without invoking its typed presenter', (payload) => {
+    const values = [assistant('start'), attachment(payload)];
+    expect(() => render(values)).not.toThrow();
+    const leaves = parts(project(values).rows);
+    expect(leaves.some((part) => part.kind === 'provider' && part.providerKind === 'attachment')).toBe(false);
+    expect(
+      leaves.some((part) => part.kind === 'raw' && part.reason === 'malformed' && part.text.includes(payload.type))
+    ).toBe(true);
+    expect(render(values)).toContain('Malformed attachment');
+  });
+  it('bounds malformed known attachment details without losing the native record', () => {
+    const payload = { type: 'skill_listing', names: 'x'.repeat(5 * 1024 * 1024) };
+    const values = [assistant('start'), attachment(payload)];
+    const html = render(values);
+    expect(html).toContain('Characters 1–16384');
+    expect(html.length).toBeLessThan(70000);
+    expect(parts(project(values).rows).some((part) => part.kind === 'raw' && part.text.includes(payload.names))).toBe(
+      true
+    );
+  });
   it('renders Markdown and reasoning safely while preserving native details', () => {
     const html = render([
       {
