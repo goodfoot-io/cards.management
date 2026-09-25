@@ -2,9 +2,16 @@
  * Render-only session preservation, trust-boundary and composition checks.
  * @summary Cards session content contract
  */
+import { execFile, spawn } from 'node:child_process';
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { createServer, type Server } from 'node:http';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { SessionContent, type SessionContentProps } from '../src/streams/lib/session/SessionContent';
 import type { SessionRow } from '../src/streams/lib/session/types';
 
@@ -183,5 +190,204 @@ describe('session content', () => {
     });
     expect(html).toContain('😀');
     expect(html).not.toContain('rest');
+  });
+});
+
+// These integration witnesses use the actual React/MessageScroller browser bundle,
+// not DOM or framework mocks. Bun and the browser skill's agent-browser CLI are required.
+// Each 250 ms settle allows the primitive's 180 ms programmatic-scroll guard and resize frames to finish.
+describe('mounted session interaction', () => {
+  const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const session = `session-review-${process.pid}`;
+  let directory: string;
+  let server: Server;
+  let origin: string;
+
+  async function browser(...args: string[]): Promise<string> {
+    const result = await promisify(execFile)('agent-browser', ['--session', session, ...args]);
+    return result.stdout;
+  }
+
+  async function evaluate<T>(script: string): Promise<T> {
+    const output = await new Promise<string>((resolveOutput, reject) => {
+      const child = spawn('agent-browser', ['--session', session, 'eval', '--stdin']);
+      let output = '';
+      let errors = '';
+      child.stdout.on('data', (chunk) => {
+        output += chunk;
+      });
+      child.stderr.on('data', (chunk) => {
+        errors += chunk;
+      });
+      child.once('error', reject);
+      child.once('close', (code) => {
+        if (code === 0) resolveOutput(output);
+        else reject(new Error(errors || output));
+      });
+      child.stdin.end(script);
+    });
+    return JSON.parse(output) as T;
+  }
+
+  beforeAll(async () => {
+    directory = await mkdtemp(join(tmpdir(), 'cards-session-review-'));
+    await symlink(resolve(packageDirectory, '../../..', 'node_modules'), join(directory, 'node_modules'), 'junction');
+    const viewportPath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/SessionViewport.tsx'));
+    const contentPath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/SessionContent.tsx'));
+    await writeFile(
+      join(directory, 'main.jsx'),
+      `
+      import React, { useState, useRef } from 'react';
+      import { createRoot } from 'react-dom/client';
+      import { SessionViewport } from ${viewportPath};
+      import { SessionContent } from ${contentPath};
+      const makeRow = n => ({ id: 'row-' + n, kind: 'message', role: 'user', anchor: 'turn',
+        provenance: [{ sourceKey: 'main', generation: 'one', lineNumber: n, selector: 'record' }],
+        parts: [{ id: 'text-' + n, kind: 'text', text: 'Message ' + n, provenance: [] },
+          { id: 'raw-' + n, kind: 'raw', label: 'Details ' + n, reason: 'detail',
+            text: 'a'.repeat(16384) + 'b'.repeat(16384) + 'c'.repeat(16384), provenance: [] }] });
+      const childRows = [{ ...makeRow(1), id: 'child-row', provenance: [{ sourceKey: 'child', generation: 'one', lineNumber: 1, selector: 'record' }], parts: [{ id: 'child-text', kind: 'text', text: 'Child output', provenance: [] }] }];
+      const insertions = [{ placementId: 'child-placement', childSourceKey: 'child', label: 'Child activity', placement: { kind: 'section', position: 'end' } }];
+      function App() {
+        const [rows, setRows] = useState(() => Array.from({ length: 50 }, (_, i) => makeRow(i + 1)));
+        const [open, setOpen] = useState(new Map());
+        const handle = useRef(null);
+        const disclosures = { open, onOpenChange: (id, value) => setOpen(previous => new Map(previous).set(id, value)) };
+        window.sessionHarness = {
+          append: () => setRows(previous => [...previous, makeRow(previous.length + 1)]),
+          regroup: () => setRows(previous => previous.map(row => row.parts[0].id === 'text-40' ? { ...row, id: row.id + '-regrouped' } : row)),
+          toggle: id => setOpen(previous => new Map(previous).set(id, !previous.get(id))),
+          follow: () => handle.current.followLatest(),
+          navigate: id => handle.current.navigateTo(id),
+          capture: () => handle.current.captureAnchor()
+        };
+        return <SessionViewport rows={rows} viewportRef={handle} disclosures={disclosures} insertions={insertions}
+          renderInsertion={() => <SessionContent rows={childRows} disclosures={disclosures} />} />;
+      }
+      window.sessionErrors = [];
+      addEventListener('error', event => window.sessionErrors.push(event.message));
+      createRoot(document.getElementById('root')).render(<App />);
+    `
+    );
+    await writeFile(
+      join(directory, 'index.html'),
+      '<!doctype html><html><head><link rel="icon" href="data:,"><link rel="stylesheet" href="main.css"><style>html,body,#root{height:100%;margin:0}:root{--vscode-font-size:13px;--stream-content-max-width:900px}</style></head><body><div id="root"></div><script type="module" src="main.js"></script></body></html>'
+    );
+    await promisify(execFile)(
+      'yarn',
+      [
+        'exec',
+        'bun',
+        'build',
+        join(directory, 'main.jsx'),
+        '--outdir',
+        directory,
+        '--target',
+        'browser',
+        '--production'
+      ],
+      { cwd: packageDirectory }
+    );
+    server = createServer(async (request, response) => {
+      const filename = request.url === '/main.js' ? 'main.js' : request.url === '/main.css' ? 'main.css' : 'index.html';
+      response.setHeader(
+        'Content-Type',
+        filename.endsWith('.js') ? 'text/javascript' : filename.endsWith('.css') ? 'text/css' : 'text/html'
+      );
+      response.end(await readFile(join(directory, filename)));
+    });
+    await new Promise<void>((resolveListening) => server.listen(0, '127.0.0.1', resolveListening));
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('Browser test server did not bind a TCP port');
+    origin = `http://127.0.0.1:${address.port}`;
+  }, 30000);
+
+  beforeEach(async () => {
+    await browser('open', origin);
+    await browser('wait', '--text', 'Details 50');
+  });
+
+  afterAll(async () => {
+    try {
+      await browser('close');
+    } finally {
+      await new Promise<void>((resolveClosed) => (server ? server.close(() => resolveClosed()) : resolveClosed()));
+      if (directory) await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the parent scroller registered while child content opens, appends and closes', async () => {
+    const result = await evaluate<{
+      during: number;
+      after: number;
+      openAnchor: string;
+      openGap: number;
+      anchor: string;
+      gap: number;
+      errors: string[];
+    }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      sessionHarness.toggle('child-placement'); await frame();
+      const during = document.querySelectorAll('[data-message-scroller-spacer]').length;
+      sessionHarness.navigate('text-10'); await frame(); const openAnchor = sessionHarness.capture()?.id;
+      sessionHarness.follow(); await frame(); sessionHarness.append(); await frame();
+      const openViewport = document.querySelector('.session-viewport');
+      const openGap = openViewport.scrollHeight - openViewport.clientHeight - openViewport.scrollTop;
+      sessionHarness.toggle('child-placement'); await frame();
+      const after = document.querySelectorAll('[data-message-scroller-spacer]').length;
+      sessionHarness.navigate('text-20'); await frame(); const anchor = sessionHarness.capture()?.id;
+      sessionHarness.follow(); await frame(); sessionHarness.append(); await frame();
+      const viewport = document.querySelector('.session-viewport');
+      return { during, after, openAnchor, openGap, anchor, gap: viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop, errors: sessionErrors };
+    })()`);
+    expect(result).toEqual({
+      during: 1,
+      after: 1,
+      openAnchor: 'text-10',
+      openGap: 0,
+      anchor: 'text-20',
+      gap: 0,
+      errors: []
+    });
+  });
+
+  it('retains the raw page, exact focused pager and selected text when a parent row regroups', async () => {
+    const result = await evaluate<{ page: string; focus: string; selection: string; errors: string[] }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      sessionHarness.toggle('raw-40'); sessionHarness.navigate('raw-40'); await frame();
+      const raw = document.querySelector('[data-session-disclosure="raw-40"]');
+      const next = [...raw.querySelectorAll('button')].find(button => button.textContent === 'Next');
+      next.click(); await frame(); next.focus();
+      const text = raw.querySelector('pre').firstChild;
+      document.getSelection().setBaseAndExtent(text, 10, text, 18); await frame();
+      sessionHarness.regroup(); await frame();
+      const current = document.querySelector('[data-session-disclosure="raw-40"]');
+      return { page: current.querySelector('.session-inspection-controls span').textContent, focus: document.activeElement.textContent, selection: document.getSelection().toString(), errors: sessionErrors };
+    })()`);
+    expect(result).toEqual({
+      page: 'Characters 16385–32768 of 49152',
+      focus: 'Next',
+      selection: 'bbbbbbbb',
+      errors: []
+    });
+  });
+
+  it('keeps following when Space activates a disclosure but holds for viewport Space navigation', async () => {
+    await evaluate(`(async () => {
+      document.querySelector('[data-session-disclosure="raw-50"] button').focus();
+      sessionHarness.follow();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      return true;
+    })()`);
+    await browser('press', 'Space');
+    const afterDisclosure = await evaluate<{ open: string; status: string; gap: number }>(`(async () => {
+      sessionHarness.append(); await new Promise(resolve => setTimeout(resolve, 250));
+      const viewport = document.querySelector('.session-viewport');
+      return { open: document.querySelector('[data-session-disclosure="raw-50"] button').getAttribute('aria-expanded'), status: document.querySelector('[role="status"]').textContent, gap: viewport.scrollHeight - viewport.clientHeight - viewport.scrollTop };
+    })()`);
+    expect(afterDisclosure).toEqual({ open: 'true', status: 'Following latest', gap: 0 });
+    await evaluate(`document.querySelector('.session-viewport').focus(); sessionHarness.follow(); true`);
+    await browser('press', 'Space');
+    expect(await evaluate(`document.querySelector('[role="status"]').textContent`)).toBe('Reading history');
   });
 });

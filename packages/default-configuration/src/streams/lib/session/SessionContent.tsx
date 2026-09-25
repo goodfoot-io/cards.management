@@ -24,6 +24,7 @@ import {
 } from 'react';
 import { renderMarkdownNodes } from '../markdown';
 import './session.css';
+import { InspectionPages, useLeafViewState } from './leaf-view-state';
 import type {
   SessionDisclosureState,
   SessionInsertion,
@@ -109,9 +110,7 @@ export function SessionContent<Payloads extends object>(props: SessionContentPro
     }),
     []
   );
-  const focus = useRef<{ id: string; element: HTMLElement } | null>(null);
-  const elements = useRef(new Map<string, HTMLElement>());
-  const rootElement = useRef<HTMLDivElement>(null);
+  const { root: rootElement, pages, elements } = useLeafViewState(rows);
   const latestLayout = useRef({ layout, rows });
   latestLayout.current = { layout, rows };
   useEffect(() => {
@@ -123,16 +122,7 @@ export function SessionContent<Payloads extends object>(props: SessionContentPro
     });
     observer.observe(rootElement.current);
     return () => observer.disconnect();
-  }, []);
-  useLayoutEffect(() => {
-    const previous = focus.current;
-    if (previous && !previous.element.isConnected && document.activeElement === document.body) {
-      const element = elements.current
-        .get(previous.id)
-        ?.querySelector<HTMLElement>('button, a[href], input, [tabindex="0"]');
-      element?.focus({ preventScroll: true });
-    }
-  });
+  }, [rootElement]);
   const insertion = (entry: SessionInsertion): ReactNode => (
     <SessionDisclosure key={entry.placementId} id={entry.placementId} label={entry.label} context={context}>
       {renderInsertion?.(entry, context)}
@@ -156,83 +146,84 @@ export function SessionContent<Payloads extends object>(props: SessionContentPro
       })
       .map(insertion);
   return (
-    <Root ref={rootElement} className={`session-content ${className ?? ''}`}>
-      {sections('start')}
-      {rows.length === 0 ? (emptyContent ?? <p className="session-muted">No output yet.</p>) : null}
-      {presentationBatches(rows).map((batch) => (
-        <MemoSessionBatch
-          key={batch.id}
-          rows={batch.rows}
-          open={disclosures.open}
-          providerParts={providerParts}
-          providerRows={providerRows}
-          renderTool={renderTool}
-          insertions={insertions}
-          renderInsertion={renderInsertion}
-        >
-          {() => (
-            <Row className="session-batch" data-session-id={batch.id}>
-              {batch.rows.map((row) => (
-                <MemoSessionRow
-                  key={row.id}
-                  row={row}
-                  open={disclosures.open}
-                  providerParts={providerParts}
-                  providerRows={providerRows}
-                  renderTool={renderTool}
-                  insertions={insertions}
-                  renderInsertion={renderInsertion}
-                >
-                  {() => (
-                    <Row
-                      data-session-id={row.id}
-                      data-session-turn={row.anchor === 'turn' ? 'true' : undefined}
-                      className={`session-row session-row--${row.kind}`}
+    <SessionFrames.Provider value={null}>
+      <InspectionPages.Provider value={pages}>
+        <Root ref={rootElement} className={`session-content ${className ?? ''}`}>
+          {sections('start')}
+          {rows.length === 0 ? (emptyContent ?? <p className="session-muted">No output yet.</p>) : null}
+          {presentationBatches(rows).map((batch) => (
+            <MemoSessionBatch
+              key={batch.id}
+              rows={batch.rows}
+              open={disclosures.open}
+              providerParts={providerParts}
+              providerRows={providerRows}
+              renderTool={renderTool}
+              insertions={insertions}
+              renderInsertion={renderInsertion}
+            >
+              {() => (
+                <Row className="session-batch" data-session-id={batch.id}>
+                  {batch.rows.map((row) => (
+                    <MemoSessionRow
+                      key={row.id}
+                      row={row}
+                      open={disclosures.open}
+                      providerParts={providerParts}
+                      providerRows={providerRows}
+                      renderTool={renderTool}
+                      insertions={insertions}
+                      renderInsertion={renderInsertion}
                     >
-                      {witnessed(row, 'before')}
-                      {row.kind === 'provider' && providerRows?.[row.providerKind] ? (
-                        providerRows[row.providerKind]({ leaf: row, data: row.data, ...context })
-                      ) : row.kind === 'message' ? (
-                        <div className="session-label">{row.label ?? row.role}</div>
-                      ) : row.kind === 'structural' ? (
-                        <div className={`session-label session-tone--${row.tone}`}>{row.label}</div>
-                      ) : (
-                        <ProviderFallback leaf={row} data={row.data} context={context} />
-                      )}
-                      {row.parts.map((part) => (
-                        <SessionLeafFrame
-                          key={part.id}
-                          leaf={part}
-                          context={context}
-                          onElement={(element) => {
-                            if (element) elements.current.set(part.id, element);
-                            else elements.current.delete(part.id);
-                          }}
-                          onFocus={(element) => {
-                            focus.current = { id: part.id, element };
-                          }}
+                      {() => (
+                        <Row
+                          data-session-id={row.id}
+                          data-session-turn={row.anchor === 'turn' ? 'true' : undefined}
+                          className={`session-row session-row--${row.kind}`}
                         >
-                          {witnessed(row, 'before', part.id)}
-                          <SessionPartView
-                            part={part}
-                            context={context}
-                            registry={providerParts}
-                            renderTool={renderTool}
-                          />
-                          {witnessed(row, 'after', part.id)}
-                        </SessionLeafFrame>
-                      ))}
-                      {witnessed(row, 'after')}
-                    </Row>
-                  )}
-                </MemoSessionRow>
-              ))}
-            </Row>
-          )}
-        </MemoSessionBatch>
-      ))}
-      {sections('end')}
-    </Root>
+                          {witnessed(row, 'before')}
+                          {row.kind === 'provider' && providerRows?.[row.providerKind] ? (
+                            providerRows[row.providerKind]({ leaf: row, data: row.data, ...context })
+                          ) : row.kind === 'message' ? (
+                            <div className="session-label">{row.label ?? row.role}</div>
+                          ) : row.kind === 'structural' ? (
+                            <div className={`session-label session-tone--${row.tone}`}>{row.label}</div>
+                          ) : (
+                            <ProviderFallback leaf={row} data={row.data} context={context} />
+                          )}
+                          {row.parts.map((part) => (
+                            <SessionLeafFrame
+                              key={part.id}
+                              leaf={part}
+                              context={context}
+                              onElement={(element) => {
+                                if (element) elements.set(part.id, element);
+                                else elements.delete(part.id);
+                              }}
+                            >
+                              {witnessed(row, 'before', part.id)}
+                              <SessionPartView
+                                part={part}
+                                context={context}
+                                registry={providerParts}
+                                renderTool={renderTool}
+                              />
+                              {witnessed(row, 'after', part.id)}
+                            </SessionLeafFrame>
+                          ))}
+                          {witnessed(row, 'after')}
+                        </Row>
+                      )}
+                    </MemoSessionRow>
+                  ))}
+                </Row>
+              )}
+            </MemoSessionBatch>
+          ))}
+          {sections('end')}
+        </Root>
+      </InspectionPages.Provider>
+    </SessionFrames.Provider>
   );
 }
 
@@ -248,21 +239,18 @@ export const SessionFrames = createContext<{
  * @param root0.context - Controlled disclosure and layout hooks.
  * @param root0.children - Already projected leaf presentation.
  * @param root0.onElement - Receives the current leaf element or its removal.
- * @param root0.onFocus - Records the actual focused control.
  * @returns Rendered session presentation.
  */
 function SessionLeafFrame({
   leaf,
   context,
   children,
-  onElement,
-  onFocus
+  onElement
 }: {
   leaf: SessionLeaf;
   context: SessionRenderContext;
   children: ReactNode;
   onElement: (element: HTMLElement | null) => void;
-  onFocus: (element: HTMLElement) => void;
 }): ReactElement {
   const element = useRef<HTMLDivElement>(null);
   const latest = useRef({ onElement, context });
@@ -281,8 +269,7 @@ function SessionLeafFrame({
       ref={element}
       data-session-id={leaf.id}
       className="session-part"
-      onFocus={(event) => {
-        onFocus(event.target as HTMLElement);
+      onFocus={() => {
         context.layout.onFocusChange?.(leaf.id);
       }}
       onBlur={(event) => {
@@ -351,10 +338,22 @@ function SessionDisclosure({
  * @param root0.text - Complete retained text.
  * @param root0.id - Leaf owning the layout change.
  * @param root0.context - Layout notification hooks.
+ * @param root0.slot - Independent inspection region within a leaf.
  * @returns Rendered session presentation.
  */
-function BoundedText({ text, id, context }: { text: string; id: string; context: SessionRenderContext }): ReactElement {
-  const [page, setPage] = useState(0);
+function BoundedText({
+  text,
+  id,
+  context,
+  slot = 'content'
+}: {
+  text: string;
+  id: string;
+  context: SessionRenderContext;
+  slot?: string;
+}): ReactElement {
+  const pages = useContext(InspectionPages);
+  const [page, setPage] = useState(() => pages?.get(id)?.get(slot) ?? 0);
   const size = 16384;
   const lastPage = Math.max(0, Math.ceil(text.length / size) - 1);
   const current = Math.min(page, lastPage);
@@ -367,6 +366,14 @@ function BoundedText({ text, id, context }: { text: string; id: string; context:
     end++;
   const change = (next: number): void => {
     context.layout.onBeforeLayoutChange?.(id);
+    if (pages) {
+      let leaf = pages.get(id);
+      if (!leaf) {
+        leaf = new Map();
+        pages.set(id, leaf);
+      }
+      leaf.set(slot, next);
+    }
     setPage(next);
   };
   useLayoutEffect(() => {
@@ -504,11 +511,11 @@ function SessionPartView<Payloads extends object>({
       ) : (
         <SessionDisclosure id={part.id} label={`${part.name} · ${part.status}`} context={context}>
           <div className="session-label">Input</div>
-          <BoundedText text={part.input} id={part.id} context={context} />
+          <BoundedText text={part.input} id={part.id} context={context} slot="input" />
           {part.output !== undefined ? (
             <>
               <div className="session-label">Output</div>
-              <BoundedText text={part.output} id={part.id} context={context} />
+              <BoundedText text={part.output} id={part.id} context={context} slot="output" />
             </>
           ) : null}
         </SessionDisclosure>

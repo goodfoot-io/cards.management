@@ -78,7 +78,25 @@ export function SessionViewport<Payloads extends object>(props: SessionViewportP
  * @returns Rendered session presentation.
  */
 function ScrollerContent(props: ComponentProps<'div'>): ReactElement {
-  return <MessageScroller.Content {...props} role="region" aria-label="Transcript content" aria-live="off" />;
+  return (
+    <MessageScroller.Content
+      {...props}
+      role="region"
+      aria-label="Transcript content"
+      aria-live="off"
+      onKeyDown={(event) => {
+        props.onKeyDown?.(event);
+        // Let the target activate normally, but do not let MessageScroller interpret it as scrolling.
+        if (
+          event.key === ' ' &&
+          (event.target as HTMLElement).closest(
+            'button, input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="checkbox"], [role="switch"], [role="menuitem"], [role="option"]'
+          )
+        )
+          event.stopPropagation();
+      }}
+    />
+  );
 }
 
 /** Incoming anchors are commands in this primitive, so Cards never marks unsolicited rows as anchors.
