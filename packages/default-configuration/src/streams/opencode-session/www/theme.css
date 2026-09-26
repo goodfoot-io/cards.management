@@ -6,7 +6,6 @@
 @import '../../lib/json-block.css';
 @import '../../lib/boundary.css';
 @import '../../lib/turns.css';
-@import '../../lib/aui/aui.css';
 
 /* =============================================================================
    OPENCODE SESSION RENDERER STYLES (`.oc-*` classes)
@@ -16,11 +15,9 @@
    surfaces, text, and accents stay in lockstep with the claude-code-session
    (`.cc-*`) and codex-session (`.cx-*`) styling.
 
-   The transcript renders entirely through the shared foundation: turn anatomy,
-   markdown, reasoning, tool calls, and the four shared `data` parts all come
-   from aui.css/turns.css/accordions.css/boundary.css imported above. This
-   file carries only what has no shared shape yet: the empty-transcript
-   placeholder.
+   Expanded transcript semantics and rendering come from Cards' session
+   foundation. Compact-card surfaces and shared tokens remain in the imports
+   above; this file carries only the empty-transcript placeholder.
    ============================================================================= */
 
 html,
@@ -42,7 +39,7 @@ body.mode-compact {
   font-size: var(--vscode-font-size, 13px);
 }
 
-/* Expanded transcript: sticky SessionHeader + scrolling StreamThread. */
+/* Expanded transcript: sticky SessionHeader + Cards-owned SessionViewport. */
 body.mode-expanded {
   margin: 0;
 }

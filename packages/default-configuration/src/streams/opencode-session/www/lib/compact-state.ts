@@ -16,7 +16,7 @@
 
 import type { OpencodeLine } from './parser.js';
 import { parseOpencodeLine } from './parser.js';
-import { extractToolPart } from './render-transcript.js';
+import { extractToolPart } from './tool-part.js';
 
 /**
  * A single bounded entry in the compact view's recent-activity tail.
