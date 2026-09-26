@@ -4,7 +4,7 @@
  * @module streams/antigravity-session/www/components/expanded/AntigravitySessionView
  */
 
-import type { ReactElement } from 'react';
+import { type ReactElement, useMemo } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import {
   BoundedText,
@@ -83,21 +83,40 @@ function AntigravityToolCallRow({
   layout
 }: ProviderPresentationProps<AntigravityToolCallPayload>): ReactElement {
   const context: SessionRenderContext = { disclosures, layout };
-  const input = safeJson(data.arguments);
   return (
     <div>
       <div className="session-label">
         Tool · {data.name} · step {data.idx} · status {data.status}
       </div>
       <SessionDisclosure id={leaf.id} label="Tool arguments" context={context}>
-        <BoundedText text={input} id={leaf.id} context={context} slot="arguments" />
+        <AntigravityToolArguments argumentsValue={data.arguments} id={leaf.id} context={context} />
       </SessionDisclosure>
     </div>
   );
 }
 
+/** Serializes tool arguments only while their disclosure body is mounted, then reuses stable input text.
+ * @param root0 - Lazy argument inspection props.
+ * @param root0.argumentsValue - Native tool input retained by the semantic row.
+ * @param root0.id - Stable tool row identity.
+ * @param root0.context - Controlled disclosure and layout hooks.
+ * @returns Bounded readable argument content.
+ */
+function AntigravityToolArguments({
+  argumentsValue,
+  id,
+  context
+}: {
+  argumentsValue: unknown;
+  id: string;
+  context: SessionRenderContext;
+}): ReactElement {
+  const input = useMemo(() => safeJson(argumentsValue), [argumentsValue]);
+  return <BoundedText text={input} id={id} context={context} slot="arguments" />;
+}
+
 /**
- * Serializes decoded JSON arguments only when the disclosure is rendered.
+ * Produces readable JSON with a scalar fallback for values that cannot be serialized.
  * @param value - JSON-compatible native invocation arguments.
  * @returns Stable readable JSON or a scalar fallback.
  */
