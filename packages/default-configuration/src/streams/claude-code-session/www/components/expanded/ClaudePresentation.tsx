@@ -229,10 +229,16 @@ function ToolBody({
           )}
         </>
       ) : null}
-      {data.supplemental !== undefined || data.output !== undefined ? (
+      {data.output !== undefined ? (
         <>
           <div className="session-label">Result</div>
-          <Body text={data.supplemental ?? data.output ?? ''} leaf={leaf} context={context} slot="result" />
+          <Body text={data.output} leaf={leaf} context={context} slot="result" />
+        </>
+      ) : null}
+      {data.supplemental !== undefined ? (
+        <>
+          <div className="session-label">Supplemental content</div>
+          <Body text={data.supplemental} leaf={leaf} context={context} slot="supplemental" />
         </>
       ) : null}
       {data.hooks.length ? (

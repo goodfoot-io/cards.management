@@ -87,6 +87,26 @@ describe('Claude semantic preservation', () => {
     expect(parts(projected.rows).some((part) => part.kind === 'provider' && part.providerKind === 'prose')).toBe(false);
     expect(render([supplemental])).toContain('full instructions');
   });
+  it.each([
+    ['T9', 'Skill', 'full skill instructions', 'skill ran'],
+    ['T10', 'Bash', 'Summarized earlier work', 'native command output']
+  ])('renders the native result for %s separately from user and supplemental content', (id, name, surrounding, output) => {
+    const values = [
+      call(id, name),
+      user(surrounding),
+      { type: 'user', isMeta: true, sourceToolUseID: id, message: { content: surrounding } },
+      result(id, output)
+    ];
+    const projected = project(values);
+    expect(tools(projected.rows)[0]!.data).toMatchObject({ output, supplemental: surrounding });
+    expect(parts(projected.rows).some((part) => part.kind === 'text' && part.text === surrounding)).toBe(true);
+    const html = render(values);
+    expect(html).toContain(`<div class="session-label">Result</div><pre class="session-raw">${output}</pre>`);
+    expect(html).toContain(
+      `<div class="session-label">Supplemental content</div><pre class="session-raw">${surrounding}</pre>`
+    );
+    expect(html).not.toContain(`<div class="session-label">Result</div><pre class="session-raw">${surrounding}</pre>`);
+  });
   it('retains an unqualified supplemental message as its own disclosure', () => {
     expect(render([{ type: 'user', isMeta: true, message: { content: 'orphan' } }])).toContain('Supplemental content');
   });

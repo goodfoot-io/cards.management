@@ -138,6 +138,52 @@ describe('Claude native projection conformance', () => {
     expect(parts(projected.rows).filter((part) => part.kind === 'raw' && part.reason === 'malformed')).toHaveLength(3);
     expect(parts(projected.rows).some((part) => part.kind === 'raw' && part.text.includes('retained'))).toBe(true);
   });
+  it('associates interleaved results by native ID through replay and every append boundary', () => {
+    const values = [
+      call('T9', 'Skill'),
+      user('full skill instructions'),
+      call('T10', 'Bash'),
+      user('Summarized earlier work'),
+      result('T10', 'native command output'),
+      result('T9', 'skill ran')
+    ].map(line);
+    const controller = createTranscriptProjection(claudeSessionProjector, 'card/claude/main');
+    for (let end = 1; end <= values.length; end++) {
+      const snapshot = source(values.slice(0, end));
+      expect(controller.update(snapshot).projection).toEqual(replayTranscript(claudeSessionProjector, snapshot));
+    }
+    const projected = controller.update(source(values)).projection;
+    expect(tools(projected.rows).map((part) => [part.semanticKey, part.data.output])).toEqual([
+      ['tool/T9', 'skill ran'],
+      ['tool/T10', 'native command output']
+    ]);
+    expect(parts(projected.rows).flatMap((part) => (part.kind === 'text' ? [part.text] : []))).toEqual([
+      'full skill instructions',
+      'Summarized earlier work'
+    ]);
+    controller.dispose();
+  });
+  it('consumes native tool-result blocks even when their user record also contains supplemental text', () => {
+    const values = [
+      call('T9', 'Skill'),
+      {
+        type: 'user',
+        isMeta: true,
+        sourceToolUseID: 'T9',
+        message: {
+          content: [
+            { type: 'text', text: 'full skill instructions' },
+            { type: 'tool_result', tool_use_id: 'T9', content: 'skill ran' }
+          ]
+        }
+      }
+    ];
+    expect(tools(project(values).rows)[0]!.data).toMatchObject({
+      output: 'skill ran',
+      supplemental: 'full skill instructions',
+      status: 'complete'
+    });
+  });
   it('refreshes metadata-only sidecar facts without changing native content', () => {
     const controller = createTranscriptProjection(claudeSessionProjector, 'card/claude/main');
     const before = controller.update(source(mixed)).projection;

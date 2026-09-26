@@ -335,7 +335,8 @@ function content(state: ClaudeProjectionState, event: Event): void {
     ]);
     return;
   }
-  if (role === 'user' && value['isMeta'] === true) {
+  const supplemental = role === 'user' && value['isMeta'] === true;
+  if (supplemental && blocks.some((block) => object(block)?.['type'] === 'text')) {
     const text = blocks
       .map((block) => {
         const b = object(block);
@@ -357,10 +358,11 @@ function content(state: ClaudeProjectionState, event: Event): void {
       event.tools.add(id);
       refreshTool(state, entry);
     }
-    return;
   }
   blocks.forEach((block, index) => {
     const b = object(block);
+    // Supplemental classification applies to text, never to native tool-result blocks.
+    if (supplemental && b?.['type'] === 'text') return;
     const selector = `message/content/${index}`;
     if (b?.['type'] === 'text' && typeof b['text'] === 'string') {
       if (isCoordinationContent(b['text'])) {
