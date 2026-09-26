@@ -595,12 +595,11 @@ describe('policy-aware rerouting of symlinked workspace packages', () => {
     await addNamedWorkspacePackagesWithNestedLinks();
     await fs.writeFile(
       path.join(repoDir, '.worktreeignore'),
-      [
-        'node_modules/pkgA/.cache/x.js',
-        'node_modules/@scope/a/.cache/tmp',
-        'packages/pkgA/node_modules/@scope/a/.cache/tmp',
-        'packages/a/node_modules/pkgA/.cache/x.js'
-      ].join('\n') + '\n'
+      `node_modules/pkgA/.cache/x.js
+node_modules/@scope/a/.cache/tmp
+packages/pkgA/node_modules/@scope/a/.cache/tmp
+packages/a/node_modules/pkgA/.cache/x.js
+`
     );
 
     const first = await createWorktree('feature/workspace-links-source', { cwd: repoDir });
