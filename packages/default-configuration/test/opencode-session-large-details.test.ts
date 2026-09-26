@@ -32,7 +32,7 @@ import {
   type OpencodeRow,
   opencodeSessionProjector
 } from '../src/streams/opencode-session/www/lib/project-session';
-import { extractToolPart, toolOutputText } from '../src/streams/opencode-session/www/lib/tool-part';
+import * as toolPart from '../src/streams/opencode-session/www/lib/tool-part';
 
 const PAYLOAD_SIZE = 5 * 1024 * 1024;
 const FIXTURE_TEMPLATE = readFileSync(
@@ -128,6 +128,43 @@ function serializesOversizedObject(value: unknown): boolean {
 }
 
 describe('OpenCode oversized tool details', () => {
+  it('renders small structured input and result in the tool body and reuses unchanged input previews', () => {
+    const input = '{"command":"printf hello","options":{"verbose":true}}';
+    const result = '{"exitCode":0,"stdout":"small result"}';
+    const lines = FIXTURE_TEMPLATE.replaceAll('__LARGE_INPUT__', input).replace('__LARGE_RESULT__', result).split('\n');
+    const controller = createTranscriptProjection(opencodeSessionProjector, 'cards/opencode/small-tool');
+    const formatPreview = vi.spyOn(toolPart, 'formatToolValuePreview');
+
+    try {
+      const pending = controller.update(
+        source(lines.slice(0, 2), { sourceKey: 'cards/opencode/small-tool' })
+      ).projection;
+      expect((parts(pending.rows).find((part) => part.kind === 'tool') as SessionToolPart).status).toBe('pending');
+
+      const running = controller.update(
+        source(lines.slice(0, 3), { sourceKey: 'cards/opencode/small-tool' })
+      ).projection;
+      expect((parts(running.rows).find((part) => part.kind === 'tool') as SessionToolPart).status).toBe('running');
+
+      const completed = controller.update(source(lines, { sourceKey: 'cards/opencode/small-tool' })).projection;
+      const toolLeaf = parts(completed.rows).find((part) => part.kind === 'tool') as SessionToolPart;
+      expect(toolLeaf.status).toBe('complete');
+      expect(toolLeaf.input).toContain('"command": "printf hello"');
+      expect(toolLeaf.input).toContain('"verbose": true');
+      expect(toolLeaf.output).toContain('"exitCode": 0');
+      expect(toolLeaf.output).toContain('"stdout": "small result"');
+      expect(formatPreview).toHaveBeenCalledTimes(2);
+
+      const opened = renderProjection(completed.rows, completed.header);
+      expect(opened).toContain('&quot;command&quot;: &quot;printf hello&quot;');
+      expect(opened).toContain('&quot;exitCode&quot;: 0');
+      expect(opened).toContain('&quot;stdout&quot;: &quot;small result&quot;');
+    } finally {
+      formatPreview.mockRestore();
+      controller.dispose();
+    }
+  });
+
   it('keeps 5 MiB input and result bounded through pending, running, and completed projection updates', () => {
     const lines = oversizedFixtureLines();
     const controller = createTranscriptProjection(opencodeSessionProjector, 'cards/opencode/large-tool');
@@ -191,7 +228,7 @@ describe('OpenCode oversized tool details', () => {
     const stringify = vi.spyOn(JSON, 'stringify');
 
     try {
-      const extracted = extractToolPart(parsed.data);
+      const extracted = toolPart.extractToolPart(parsed.data);
       expect(extracted.argumentsText).toHaveLength(4001);
       expect(extracted.argumentsText.endsWith('…')).toBe(true);
       expect(extracted.outputText).toHaveLength(4001);
@@ -207,7 +244,7 @@ describe('OpenCode oversized tool details', () => {
       [{ nested: true }, null, 'escaped\ntext'],
       JSON.parse('{"toString":"own key","constructor":"another own key","value":"😀"}')
     ]) {
-      expect(toolOutputText(value)).toBe(JSON.stringify(value, null, 2));
+      expect(toolPart.toolOutputText(value)).toBe(JSON.stringify(value, null, 2));
     }
   });
 });

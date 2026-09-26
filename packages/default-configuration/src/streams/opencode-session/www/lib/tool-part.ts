@@ -14,6 +14,12 @@ interface BoundedJsonWriter {
   truncated: boolean;
 }
 
+/** Encoded JSON preview whose text never exceeds its caller-provided inspection bound. */
+export interface BoundedToolValuePreview {
+  readonly text: string;
+  readonly truncated: boolean;
+}
+
 /** Appends a JSON fragment while retaining at most the requested prefix.
  * @param writer - Bounded streaming output buffer.
  * @param text - Next already-encoded JSON fragment.
@@ -149,12 +155,22 @@ function appendJsonValue(writer: BoundedJsonWriter, value: unknown, depth: numbe
 /** Returns a pretty JSON prefix bounded before large native payloads are expanded.
  * @param value - JSON-compatible native value.
  * @param limit - Maximum retained prefix length.
+ * @returns Prefix text and whether additional encoded data remains.
+ */
+export function formatToolValuePreview(value: unknown, limit: number): BoundedToolValuePreview {
+  const writer: BoundedJsonWriter = { chunks: [], length: 0, truncated: false };
+  appendJsonValue(writer, value, 0, limit);
+  return { text: writer.chunks.join(''), truncated: writer.truncated };
+}
+
+/** Returns a pretty JSON prefix with an ellipsis when the compact limit is exceeded.
+ * @param value - JSON-compatible native value.
+ * @param limit - Maximum retained prefix length.
  * @returns Prefix text with an ellipsis when additional encoded data remains.
  */
 function boundedPrettyJson(value: unknown, limit: number): string {
-  const writer: BoundedJsonWriter = { chunks: [], length: 0, truncated: false };
-  appendJsonValue(writer, value, 0, limit);
-  return `${writer.chunks.join('')}${writer.truncated ? '…' : ''}`;
+  const preview = formatToolValuePreview(value, limit);
+  return `${preview.text}${preview.truncated ? '…' : ''}`;
 }
 
 /** Reads tool name and call identity without touching input or result values.

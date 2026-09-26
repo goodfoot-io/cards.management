@@ -25,7 +25,11 @@ import type {
 import { appendOpencodeNativeUpdate, type OpencodeNativeUpdates } from './native-updates';
 import type { OpencodePart as NativeOpencodePart, OpencodeLine, OpencodeMessageInfo } from './parser';
 import { parseOpencodeLine } from './parser';
-import { toolPartIdentity } from './tool-part';
+import { formatToolValuePreview, toolPartIdentity } from './tool-part';
+
+/** Maximum pretty-printed native tool value retained in its primary disclosure. */
+const MAX_INLINE_TOOL_VALUE_TEXT = 65_536;
+const LARGE_TOOL_VALUE_SUMMARY = 'Structured value exceeds the inline preview; open native details';
 
 /** Native session identity and exporter facts kept outside conversation prose. */
 export interface OpencodeSessionData {
@@ -125,6 +129,7 @@ interface PartState {
   revision: number;
   projectedRevision: number;
   projectedParts?: readonly OpencodeSessionPart[];
+  toolValuePreviews?: Partial<Record<'input' | 'result', { readonly source: string; readonly summary: string }>>;
 }
 
 interface MessageState {
@@ -237,14 +242,162 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Keeps primitive tool values visible and directs structured values to native disclosures.
- * @param value - Native value to display.
- * @returns Small direct summary or an empty string for absent values.
+/** Skips JSON whitespace from a starting offset.
+ * @param source - Original native JSONL line.
+ * @param offset - Current source offset.
+ * @returns First non-whitespace offset.
  */
-function toolValueSummary(value: unknown): string {
+function skipJsonWhitespace(source: string, offset: number): number {
+  while (
+    offset < source.length &&
+    (source[offset] === ' ' || source[offset] === '\n' || source[offset] === '\r' || source[offset] === '\t')
+  ) {
+    offset++;
+  }
+  return offset;
+}
+
+/** Finds the end of a JSON string without decoding or copying its contents.
+ * @param source - Original native JSONL line.
+ * @param start - Opening quote offset.
+ * @param maximumEnd - Scan bound that prevents oversized payload walks.
+ * @returns Exclusive string end, or undefined when it exceeds the bound.
+ */
+function jsonStringEnd(source: string, start: number, maximumEnd: number): number | undefined {
+  for (let offset = start + 1; offset < source.length && offset < maximumEnd; offset++) {
+    if (source[offset] === '\\') {
+      offset++;
+    } else if (source[offset] === '"') {
+      return offset + 1;
+    }
+  }
+  return undefined;
+}
+
+/** Finds a JSON value end while stopping as soon as the preview bound is crossed.
+ * @param source - Original native JSONL line.
+ * @param start - First value character.
+ * @param limit - Maximum number of source characters to inspect.
+ * @returns Exclusive value end, or undefined when the source value is oversized.
+ */
+function jsonValueEnd(source: string, start: number, limit: number): number | undefined {
+  const maximumEnd = Math.min(source.length, start + limit);
+  const first = source[start];
+  if (first === '"') return jsonStringEnd(source, start, maximumEnd);
+  if (first !== '{' && first !== '[') {
+    for (let offset = start; offset < maximumEnd; offset++) {
+      const character = source[offset];
+      if (
+        character === ',' ||
+        character === '}' ||
+        character === ']' ||
+        character === ' ' ||
+        character === '\n' ||
+        character === '\r' ||
+        character === '\t'
+      ) {
+        return offset;
+      }
+    }
+    return undefined;
+  }
+
+  const stack: string[] = [first === '{' ? '}' : ']'];
+  for (let offset = start + 1; offset < maximumEnd; offset++) {
+    const character = source[offset];
+    if (character === '"') {
+      const end = jsonStringEnd(source, offset, maximumEnd);
+      if (end === undefined) return undefined;
+      offset = end - 1;
+    } else if (character === '{') {
+      stack.push('}');
+    } else if (character === '[') {
+      stack.push(']');
+    } else if (character === '}' || character === ']') {
+      if (stack.pop() !== character) return undefined;
+      if (stack.length === 0) return offset + 1;
+    }
+  }
+  return undefined;
+}
+
+/** Locates one plain JSON property without decoding its value.
+ * @param source - Original native JSONL line.
+ * @param objectStart - Opening brace offset.
+ * @param property - Canonical property name emitted by the OpenCode writer.
+ * @param limit - Maximum source characters inspected for a value.
+ * @param includeEnd - Whether to scan the target value to find its exclusive end.
+ * @returns Bounded property value span, `null` for an oversized value, or undefined when absent.
+ */
+function jsonObjectPropertySpan(
+  source: string,
+  objectStart: number,
+  property: string,
+  limit: number,
+  includeEnd = true
+): { readonly start: number; readonly end: number } | null | undefined {
+  if (source[objectStart] !== '{') return undefined;
+  let offset = objectStart + 1;
+  while (offset < source.length) {
+    offset = skipJsonWhitespace(source, offset);
+    if (source[offset] === '}') return undefined;
+    if (source[offset] !== '"') return undefined;
+    const keyEnd = jsonStringEnd(source, offset, Math.min(source.length, offset + 256));
+    if (keyEnd === undefined) return undefined;
+    const keyMatches = source.slice(offset, keyEnd) === JSON.stringify(property);
+    offset = skipJsonWhitespace(source, keyEnd);
+    if (source[offset] !== ':') return undefined;
+    const valueStart = skipJsonWhitespace(source, offset + 1);
+    if (keyMatches && !includeEnd) return { start: valueStart, end: valueStart };
+    const valueEnd = jsonValueEnd(source, valueStart, keyMatches ? limit : source.length);
+    if (keyMatches) return valueEnd === undefined ? null : { start: valueStart, end: valueEnd };
+    if (valueEnd === undefined) return undefined;
+    offset = skipJsonWhitespace(source, valueEnd);
+    if (source[offset] === ',') offset++;
+    else if (source[offset] !== '}') return undefined;
+  }
+  return undefined;
+}
+
+/** Finds a bounded native input/result span inside one OpenCode part update.
+ * @param source - Original native JSONL line.
+ * @param slot - Tool value field to locate.
+ * @returns Small source text, a large-value marker, or undefined when absent.
+ */
+function toolValueSourceText(
+  source: string,
+  slot: 'input' | 'result'
+): { readonly kind: 'small'; readonly source: string } | { readonly kind: 'large' } | undefined {
+  const rootData = jsonObjectPropertySpan(source, 0, 'data', source.length, false);
+  if (!rootData || rootData === null) return undefined;
+  const dataState = jsonObjectPropertySpan(source, rootData.start, 'state', source.length, false);
+  if (!dataState || dataState === null) return undefined;
+  const value = jsonObjectPropertySpan(source, dataState.start, slot, MAX_INLINE_TOOL_VALUE_TEXT);
+  if (value === null) return { kind: 'large' };
+  return value ? { kind: 'small', source: source.slice(value.start, value.end) } : undefined;
+}
+
+/** Keeps small values visible and directs oversized structured values to native disclosures.
+ * @param entry - Reduced native tool part and its source-backed updates.
+ * @param slot - Tool value cache slot.
+ * @param value - Native value to display.
+ * @returns Bounded summary or an empty string for absent values.
+ */
+function toolValueSummary(entry: PartState, slot: 'input' | 'result', value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === undefined || value === null) return '';
-  if (typeof value === 'object') return 'Structured value available in native details';
+  if (typeof value === 'object') {
+    const source = toolValueSourceText(entry.nativeUpdates.line, slot);
+    if (source?.kind === 'large') return LARGE_TOOL_VALUE_SUMMARY;
+    const cached = entry.toolValuePreviews?.[slot];
+    if (source?.kind === 'small' && cached?.source === source.source) return cached.summary;
+    const preview = formatToolValuePreview(value, MAX_INLINE_TOOL_VALUE_TEXT);
+    const summary = `${preview.text}${preview.truncated ? '…' : ''}`;
+    if (source?.kind === 'small') {
+      entry.toolValuePreviews = { ...entry.toolValuePreviews, [slot]: { source: source.source, summary } };
+    }
+    return summary;
+  }
   return String(value);
 }
 
@@ -456,14 +609,16 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
             ? error['message']
             : '';
       const resultValue = state['result'] !== undefined ? state['result'] : state['output'];
-      const outputParts = [errorText, toolValueSummary(resultValue)].filter((value) => value.length > 0);
+      const outputParts = [errorText, toolValueSummary(entry, 'result', resultValue)].filter(
+        (value) => value.length > 0
+      );
       const tool: SessionToolPart = {
         ...base,
         semanticKey: `opencode/tool/${entry.selector}`,
         kind: 'tool',
         callId: identity.callId || entry.selector,
         name: identity.name,
-        input: toolValueSummary(state['input']),
+        input: toolValueSummary(entry, 'input', state['input']),
         output: outputParts.length > 0 ? outputParts.join('\n') : undefined,
         status
       };
