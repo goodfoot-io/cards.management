@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { CODEX_PARTS } from '../src/streams/codex-session/www/components/expanded/CodexPresentation';
+import { CODEX_PARTS, CODEX_ROWS } from '../src/streams/codex-session/www/components/expanded/CodexPresentation';
 import {
   type CodexPayloads,
   type CodexRow,
@@ -15,9 +15,15 @@ import {
 } from '../src/streams/codex-session/www/lib/project-session';
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import { SessionContent } from '../src/streams/lib/session/SessionContent';
-import type { NativeTranscriptSource, SessionPart, SessionRow } from '../src/streams/lib/session/types';
+import type { NativeTranscriptSource, SessionRow } from '../src/streams/lib/session/types';
 
 const fixture = readFileSync(new URL('./fixtures/codex-session/native-session.jsonl', import.meta.url), 'utf8')
+  .trimEnd()
+  .split('\n');
+const duplicateToolFixture = readFileSync(
+  new URL('./fixtures/codex-session/duplicate-tool-results.jsonl', import.meta.url),
+  'utf8'
+)
   .trimEnd()
   .split('\n');
 
@@ -42,17 +48,19 @@ function projected(rows: readonly SessionRow<CodexPayloads>[]): CodexRow[] {
 function provider<T extends keyof CodexPayloads>(
   rows: readonly SessionRow<CodexPayloads>[],
   kind: T
-): Extract<SessionPart<CodexPayloads>, { kind: 'provider'; providerKind: T }>[] {
-  return rows.flatMap((row) =>
-    row.parts.filter(
-      (part): part is Extract<SessionPart<CodexPayloads>, { kind: 'provider'; providerKind: T }> =>
-        part.kind === 'provider' && part.providerKind === kind
-    )
-  );
+): { data: CodexPayloads[T] }[] {
+  const matches: { data: CodexPayloads[T] }[] = [];
+  for (const row of rows) {
+    if (row.kind === 'provider' && row.providerKind === kind) matches.push({ data: row.data as CodexPayloads[T] });
+    for (const part of row.parts) {
+      if (part.kind === 'provider' && part.providerKind === kind) matches.push({ data: part.data as CodexPayloads[T] });
+    }
+  }
+  return matches;
 }
 
 describe('Codex native session projection', () => {
-  it.skip('projects header, preamble, user content, reasoning, tool output, boundaries, and raw variants', () => {
+  it('projects header, preamble, user content, reasoning, tool output, boundaries, and raw variants', () => {
     const projection = replayTranscript(codexSessionProjector, source(fixture));
     expect(projection.header).toMatchObject({ model: 'gpt-5.5', cwd: '/repo' });
 
@@ -93,9 +101,12 @@ describe('Codex native session projection', () => {
         expect.objectContaining({ callId: 'patch-1', status: 'error', errorLabel: 'patch failed' })
       ])
     );
-    expect(rows.some((row) => row.parts.some((part) => part.kind === 'raw' && part.text === 'detached output'))).toBe(
-      true
-    );
+    expect(
+      provider(rows, 'tool').some(
+        (part) =>
+          part.data.callId === 'orphan-1' && part.data.status === 'orphan' && part.data.outputText === 'detached output'
+      )
+    ).toBe(true);
     expect(
       rows.some((row) => row.parts.some((part) => part.kind === 'raw' && part.text.includes('future_response_item')))
     ).toBe(true);
@@ -104,7 +115,7 @@ describe('Codex native session projection', () => {
     );
   });
 
-  it.skip('retains first-seen mirror identity and every physical line in a one-shot duplicate pair', () => {
+  it('retains first-seen mirror identity and every physical line in a one-shot duplicate pair', () => {
     const rows = projected(replayTranscript(codexSessionProjector, source(fixture)).rows);
     const echoes = rows.filter(
       (row) =>
@@ -117,7 +128,35 @@ describe('Codex native session projection', () => {
     expect(echoes[1]?.provenance.map((origin) => origin.lineNumber)).toEqual([7]);
   });
 
-  it.skip('keeps incremental append and full replay semantically equivalent', () => {
+  it('keeps duplicate call IDs physically distinct and preserves every result while the latest result wins', () => {
+    const rows = projected(replayTranscript(codexSessionProjector, source(duplicateToolFixture)).rows);
+    const tools = rows.filter((row) => row.kind === 'provider' && row.providerKind === 'tool');
+    expect(tools).toHaveLength(2);
+    const first = tools[0]!;
+    const second = tools[1]!;
+    expect(first).toMatchObject({
+      kind: 'provider',
+      data: { callId: 'reused-call', name: 'first_tool', outputText: 'first result', status: 'complete' }
+    });
+    expect(second).toMatchObject({
+      kind: 'provider',
+      data: {
+        callId: 'reused-call',
+        name: 'second_tool',
+        outputText: 'latest result',
+        details: [
+          expect.objectContaining({ label: 'Tool call' }),
+          expect.objectContaining({ text: expect.stringContaining('second result') }),
+          expect.objectContaining({ text: expect.stringContaining('latest result') })
+        ]
+      }
+    });
+    expect(first.provenance.map((origin) => origin.lineNumber)).toEqual([1, 2]);
+    expect(second.provenance.map((origin) => origin.lineNumber)).toEqual([3, 4, 5]);
+    expect(first.id).not.toBe(second.id);
+  });
+
+  it('keeps incremental append and full replay semantically equivalent', () => {
     const controller = createTranscriptProjection(codexSessionProjector, 'cards/codex/session');
     const prefix = source(fixture.slice(0, 10));
     controller.update(prefix);
@@ -127,16 +166,21 @@ describe('Codex native session projection', () => {
     controller.dispose();
   });
 
-  it.skip('renders native semantics and inspectable details through real Cards SessionContent', () => {
+  it('renders native semantics and inspectable details through real Cards SessionContent', () => {
     const rows = projected(replayTranscript(codexSessionProjector, source(fixture)).rows);
     const open = new Map<string, boolean>();
     for (const row of rows) {
+      open.set(row.id, true);
       for (const part of row.parts) open.set(part.id, true);
+      if (row.kind === 'provider' && row.providerKind === 'tool') {
+        for (const detail of row.data.details) open.set(detail.id, true);
+      }
     }
     const html = renderToStaticMarkup(
       createElement(SessionContent<CodexPayloads>, {
         rows,
         providerParts: CODEX_PARTS,
+        providerRows: CODEX_ROWS,
         disclosures: { open, onOpenChange: () => undefined }
       })
     );

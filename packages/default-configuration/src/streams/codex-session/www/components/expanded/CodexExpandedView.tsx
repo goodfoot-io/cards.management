@@ -1,113 +1,114 @@
 /**
- * Expanded session transcript view for the codex-session renderer.
- *
- * Mirrors the claude-code-session {@link ExpandedView} lifecycle: it parses the
- * primary file's initial `history`, subscribes to the stream store for
- * `stream:line` appends, and rebuilds on a file reset (`subscribe:response`).
- *
- * The render model comes from {@link renderCodexTranscript}, a pure transform
- * that rebuilds the full item list from the line array. Because it is stateless,
- * an append preserves prior items (they re-derive identically) and a reset
- * discards stale ones (the shorter replacement array produces fewer items). The
- * transform itself upholds the three Codex defensive contracts — raw/pretty
- * `arguments`, `string | ContentItem[]` output, and standalone orphan outputs.
- *
- * This file owns only the stream-store subscription and the sticky
- * `SessionHeader` composition; grouping the flat item list into
- * `ThreadMessageLike[]` messages (and the `deriveStatus` status derivation)
- * lives in the store-free {@link ../../lib/to-thread-messages} module so it
- * stays unit-testable without a live `window.__STREAM_INIT__` host context.
- * The messages render through the shared `StreamThread` (../../../../lib/aui),
- * with `image-note`/`event-activity` provider-specific data parts registered
- * via `dataComponents` (./CodexDataParts) and the domain tool-call preview
- * (shell/apply_patch/mcp summaries) registered via `toolFallback`
- * (./CodexToolFallbackPart) — Codex tool names are dynamic, so a per-name
- * `toolComponents` registry isn't feasible.
- *
- * @summary Expanded Codex session view: sticky header + shared StreamThread
- * @module streams/codex-session/www/components/expanded/CodexExpandedView
+ * Expanded Codex view projects the native rollout through Cards session primitives.
+ * The compact view keeps its existing bounded fold and the SDK remains the sole source store.
+ * @summary Expanded Codex native source, projection, and viewport
+ * @module components/expanded/CodexExpandedView
  */
 
 import { streamStore } from '@cards.management/sdk/stream-store';
 import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
-import { StreamThread } from '../../../../lib/aui';
+import { useEffect, useId, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
-import type { TranscriptItem } from '../../lib/render-transcript';
-import { renderCodexTranscript } from '../../lib/render-transcript';
-import { deriveStatus, toThreadMessages } from '../../lib/to-thread-messages';
-import { CxSessionStartPart, EventActivityDataPart, ImageNoteDataPart, TurnTimeDataPart } from './CodexDataParts';
-import { CodexToolFallbackPart } from './CodexToolFallbackPart';
+import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
+import { SessionViewport } from '../../../../lib/session/SessionViewport';
+import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
+import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
+import { useStreamStore } from '../../hooks/useStreamStore';
+import { type CodexPayloads, type CodexRow, codexHeader, codexSessionProjector } from '../../lib/project-session';
+import { CODEX_PARTS, CODEX_ROWS } from './CodexPresentation';
 
-/** Codex-specific `data` part renderers, merged over the shared four in `StreamThread`. */
-const CODEX_DATA_COMPONENTS = {
-  'image-note': ImageNoteDataPart,
-  'event-activity': EventActivityDataPart,
-  'turn-time': TurnTimeDataPart,
-  'cx-session-start': CxSessionStartPart
-};
-
-/**
- * Reads the primary stream file's lines and liveness from the store.
- * @returns The primary file's lines and `isActive` flag.
- */
-function readPrimary(): { lines: string[]; isActive: boolean } {
-  const s = streamStore.getState();
-  const file = s.files.get(s.primary);
-  return { lines: file ? file.lines : [], isActive: file?.meta.isActive ?? false };
+function disclosureIds(rows: readonly CodexRow[]): Set<string> {
+  const ids = new Set<string>();
+  for (const row of rows) {
+    ids.add(row.id);
+    for (const part of row.parts) {
+      ids.add(part.id);
+      if (part.kind === 'provider' && part.providerKind === 'tool') {
+        for (const detail of part.data.details) ids.add(detail.id);
+      }
+    }
+    if (row.kind === 'provider' && row.providerKind === 'tool') {
+      for (const detail of row.data.details) ids.add(detail.id);
+    }
+  }
+  return ids;
 }
 
 /**
- * Renders the ordered transcript items for a Codex session, with a sticky
- * {@link SessionHeader} above the scrolling transcript body.
- * @returns Rendered expanded transcript view element.
+ * Renders one caller-supplied Codex native snapshot without discovering another source.
+ * @param root0 - Source props.
+ * @param root0.source - Caller-qualified Codex native snapshot.
+ * @returns Expanded Codex session content and header.
  */
-export function CodexExpandedView(): React.ReactElement {
-  const [items, setItems] = useState<TranscriptItem[]>(() => renderCodexTranscript(readPrimary().lines));
-  const [isActive, setIsActive] = useState<boolean>(() => readPrimary().isActive);
-
-  // Bootstrap-then-subscribe. Rebuilding from the full line array on every
-  // update keeps append and reset both correct: appends re-derive prior items
-  // identically (so they are preserved) and a reset's shorter array yields a
-  // strictly smaller list (so stale items are discarded).
+export function CodexSourceView({ source }: { source: NativeTranscriptSource }): React.ReactElement {
+  const controller = useRef<TranscriptProjectionController<CodexPayloads> | null>(null);
+  const [projection, setProjection] = useState<SessionProjection<CodexPayloads> | null>(null);
+  const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
   useEffect(() => {
-    const sync = (): void => {
-      const primary = readPrimary();
-      setItems(renderCodexTranscript(primary.lines));
-      setIsActive(primary.isActive);
+    const next = createTranscriptProjection(codexSessionProjector, source.sourceKey);
+    controller.current = next;
+    return () => {
+      next.dispose();
+      controller.current = null;
     };
-    sync();
-    return streamStore.subscribe(sync);
-  }, []);
+  }, [source.sourceKey]);
+  useEffect(() => {
+    const next = controller.current!.update(source).projection;
+    setProjection(next);
+    const ids = disclosureIds(next.rows as CodexRow[]);
+    setOpen((previous) => {
+      if ([...previous.keys()].every((id) => ids.has(id))) return previous;
+      return new Map([...previous].filter(([id]) => ids.has(id)));
+    });
+  }, [source]);
 
-  const header = items.find(
-    (item): item is Extract<TranscriptItem, { kind: 'session_header' }> => item.kind === 'session_header'
-  );
-  const status = deriveStatus(items, isActive);
-  const { messages, isRunning } = useMemo(() => toThreadMessages(items, isActive), [items, isActive]);
-
+  const current =
+    projection?.sourceKey === source.sourceKey && projection.generation === source.generation ? projection : null;
+  const header = current?.header;
+  const metadata = codexHeader(source);
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <SessionHeader
         model={header?.model ?? ''}
         cwd={header?.cwd ?? ''}
-        status={status}
-        provider={header?.provider}
-        threadId={header?.threadId}
+        status={header?.status === 'done' ? 'success' : (header?.status ?? 'running')}
+        provider={metadata.provider}
+        threadId={metadata.threadId}
       />
-      <div className="font-vscode-editor flex-1 min-h-0">
-        {items.length === 0 ? (
-          <div className="cx-empty">No Codex session activity yet.</div>
-        ) : (
-          <StreamThread
-            messages={messages}
-            isRunning={isRunning}
-            dataComponents={CODEX_DATA_COMPONENTS}
-            toolFallback={CodexToolFallbackPart}
-            assistantName="Codex"
-          />
-        )}
+      {source.error ? (
+        <div className="session-tone--error" role="status">
+          {source.error}
+        </div>
+      ) : null}
+      <div className="flex-1 min-h-0">
+        <SessionViewport
+          rows={current?.rows ?? []}
+          providerParts={CODEX_PARTS}
+          providerRows={CODEX_ROWS}
+          disclosures={{ open, onOpenChange: (id, value) => setOpen((previous) => new Map(previous).set(id, value)) }}
+          emptyContent={
+            <p className="session-muted">
+              {source.isLoading ? 'Loading transcript…' : 'No Codex session activity yet.'}
+            </p>
+          }
+          ariaLabel="Codex session transcript"
+        />
       </div>
     </div>
   );
+}
+
+/**
+ * Expanded owner scopes the existing SDK store subscription to the selected Codex file.
+ * @returns Expanded Codex view bound to the selected SDK file.
+ */
+export function CodexExpandedView(): React.ReactElement {
+  const scope = useId();
+  const filename = useStreamStore((state) => state.primary);
+  const source = useTranscriptSource(streamStore, {
+    filename,
+    sourceKey: JSON.stringify(['codex-expanded', scope, filename]),
+    generation: 'native-store'
+  });
+  return <CodexSourceView key={source.sourceKey} source={source} />;
 }

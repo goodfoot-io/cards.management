@@ -6,7 +6,6 @@
 @import '../../lib/json-block.css';
 @import '../../lib/boundary.css';
 @import '../../lib/turns.css';
-@import '../../lib/aui/aui.css';
 
 /* =============================================================================
    CODEX SESSION RENDERER STYLES (`.cx-*` classes)
@@ -16,14 +15,9 @@
    surfaces, text, and accents stay in lockstep with claude-code-session's
    `.cc-*` styling and any future token change updates both at once.
 
-   The expanded transcript now renders through the shared `StreamThread`
-   (streams/lib/aui) — turn anatomy, markdown, reasoning, tool calls, and the
-   four shared `data` parts (boundary/raw/status-line/error-line) all come
-   from aui.css/turns.css/accordions.css/boundary.css/json-block.css imported
-   above. What remains below is only what the shared foundation has no shape
-   for: three provider-specific `data` parts (`image-note`, `event-activity`,
-   `turn-time` — see ./components/expanded/CodexDataParts.tsx) and the
-   empty-transcript placeholder.
+   Expanded content uses the Cards-owned SessionViewport and SessionContent
+   primitives. This file keeps only Codex-specific image and activity accents;
+   shared semantic rows, disclosures, and markdown use session.css.
    ============================================================================= */
 
 html,
@@ -52,40 +46,9 @@ body.mode-compact {
    ../../lib/compact-card.css (imported above). This renderer's theme.css
    carries zero `.compact-container` rules of its own. */
 
-/* ============================================================================
-   Expanded transcript
-
-   A sticky shared SessionHeader (rendered by the component, styled entirely
-   within streams/lib) above a scrolling ordered list of Codex rollout items:
-   turns, reasoning, tool calls with paired outputs, orphan outputs, structural
-   boundaries, and readable fallbacks for errors/unknown/malformed content.
-   ============================================================================ */
+/* Expanded Codex view shares the session header and viewport styling. */
 body.mode-expanded {
   margin: 0;
-}
-
-/* `.cx-transcript`/`.cx-message-text` are gone: the wrapper's font-size/
-   line-height/color folded into `.aui-thread-root` (aui.css) and its padding
-   was a doubled gutter over `.aui-thread-viewport`'s (removed, not folded).
-   The markdown ladder duplicated `.aui-markdown` (aui.css) byte-for-byte in
-   spirit — the one remaining usage (CodexDataParts.tsx's plan_update detail)
-   now renders through `.aui-markdown` directly. */
-
-/* `.cx-pre` — non-markdown branch of the `event-activity` data part
-   (CodexDataParts.tsx). Tool calls, orphan outputs, errors, and status lines
-   now all route through the shared aui/accordion/boundary components above;
-   this is the one remaining bespoke `<pre>` block. */
-.cx-pre {
-  font-family: var(--vscode-editor-font-family, monospace);
-  font-size: var(--stream-text-code);
-  background: var(--stream-surface-raised);
-  padding: 8px 10px;
-  margin: 0;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
-  color: var(--stream-fg);
-  tab-size: 4;
 }
 
 /* Visible placeholder for input_image content items dropped from text
@@ -114,15 +77,4 @@ body.mode-expanded {
   color: var(--stream-fg);
   padding: 4px 8px;
   background: var(--stream-surface-raised);
-}
-/* Markdown-rendered plan-update detail (looksLikeMarkdown branch). */
-.cx-event-detail {
-  padding: 3px 10px 8px;
-}
-
-.cx-empty {
-  font-size: var(--stream-text-label);
-  font-style: italic;
-  color: var(--stream-fg-muted);
-  padding: 12px;
 }

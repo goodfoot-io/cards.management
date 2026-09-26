@@ -42,8 +42,7 @@ export type TranscriptItem =
        * concept). Omitted (rather than `'assistant'`) for genuine assistant
        * output, so existing structural-equality fixtures asserting a plain
        * `{ kind: 'assistant_message', text }` are unaffected. The converter's
-       * session-preamble gathering (../to-thread-messages.ts) is the only
-       * reader of this field.
+       * session-preamble projection (./project-session.ts) is the reader of this field.
        */
       role?: 'developer';
     }

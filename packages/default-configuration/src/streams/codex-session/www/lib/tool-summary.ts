@@ -1,15 +1,10 @@
 /**
- * Codex tool-call preview summarization for the expanded transcript.
+ * Codex tool summaries displayed in collapsed native tool disclosures.
  *
- * Produces the one-line collapsed-header preview for a Codex `tool_call`
- * transcript item from its already-resolved `name` and `argumentsText` (see
- * `extractToolCall` in `render-transcript.ts`). Mirrors the Claude renderer's
- * `summarizeTool` (`claude-code-session/www/lib/tool-summary.ts`) but keys off
- * tool *name* rather than a structured input object, because Codex's
- * `argumentsText` is already a flattened display string (pretty-printed JSON, a
- * joined shell command, or raw patch text) rather than a key/value map.
+ * Codex native parsing resolves `name` and `argumentsText` before presentation;
+ * this helper keeps command, patch, search, and MCP summaries readable.
  *
- * @summary One-line preview generation for Codex tool_call rows
+ * @summary One-line summaries for Codex native tool rows
  * @module streams/codex-session/www/lib/tool-summary
  */
 
@@ -76,52 +71,4 @@ export function summarizeCodexTool(name: string, argumentsText: string): string 
     if (display !== undefined) return display;
   }
   return truncate(argumentsText, 60);
-}
-
-/**
- * Reconstructs a display-text approximation of a `tool_call` item's original
- * `argumentsText` from its already-converted `args` object (the shape
- * `to-thread-messages.ts`'s `buildToolArgs` produces), so
- * {@link summarizeCodexTool} can run at render time from the `ThreadMessageLike`
- * tool-call part's `args`, without threading a separate preview field through
- * the assistant-ui part contract.
- *
- * `buildToolArgs` wraps any non-object argument text (a raw shell command, an
- * `apply_patch` patch body, a query/url) under its single `argsLabel` key —
- * exactly the shape `summarizeCodexTool` expects as `argumentsText` for those
- * tool names. A real structured-object arguments blob (multiple keys) has no
- * single faithful string form, so it falls back to its JSON text — matching
- * the original pretty-printed `argumentsText` closely enough for the generic
- * truncated-preview case, which is all that shape ever reaches.
- * @param args - The tool-call part's `args` object.
- * @returns A best-effort `argumentsText` string for the preview.
- */
-export function argsPreviewText(args: Record<string, unknown>): string {
-  // A shell-style args object (exec_command's `{cmd, workdir, yield_time_ms…}`,
-  // or a `command` string/argv array) has one obviously-primary field — the
-  // command itself. Surface it directly rather than JSON-dumping the object.
-  if (typeof args['cmd'] === 'string') {
-    return args['cmd'];
-  }
-  if (typeof args['command'] === 'string') {
-    return args['command'];
-  }
-  if (Array.isArray(args['command']) && args['command'].every((part) => typeof part === 'string')) {
-    return (args['command'] as string[]).join(' ');
-  }
-  const values = Object.values(args);
-  if (values.length === 1 && typeof values[0] === 'string') {
-    return values[0];
-  }
-  if (values.length === 0) {
-    return '';
-  }
-  try {
-    return JSON.stringify(args);
-  } catch {
-    // Non-serializable args (e.g. a circular reference) are unexpected but
-    // not fatal to the transcript — an empty preview is preferable to
-    // crashing the render.
-    return '';
-  }
 }

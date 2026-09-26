@@ -1,0 +1,5 @@
+{"timestamp":"2026-09-01T10:00:00.000Z","type":"response_item","payload":{"type":"function_call","call_id":"reused-call","name":"first_tool","arguments":"{\"path\":\"one\"}"}}
+{"timestamp":"2026-09-01T10:00:01.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"reused-call","output":"first result"}}
+{"timestamp":"2026-09-01T10:00:02.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"reused-call","name":"second_tool","input":"second input"}}
+{"timestamp":"2026-09-01T10:00:03.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"reused-call","output":"second result"}}
+{"timestamp":"2026-09-01T10:00:04.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"reused-call","output":"latest result"}}
