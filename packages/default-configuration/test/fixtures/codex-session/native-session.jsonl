@@ -1,0 +1,20 @@
+{"timestamp":"2026-09-01T09:00:00.000Z","type":"session_meta","payload":{"id":"thread-1","cwd":"/repo","model_provider":"openai"}}
+{"timestamp":"2026-09-01T09:00:01.000Z","type":"turn_context","payload":{"turn_id":"turn-1","model":"gpt-5.5","cwd":"/repo"}}
+{"timestamp":"2026-09-01T09:00:02.000Z","type":"event_msg","payload":{"type":"user_message","message":"# AGENTS.md instructions for /repo\nKeep changes focused."}}
+{"timestamp":"2026-09-01T09:00:03.000Z","type":"response_item","payload":{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>\nRead files first.\n</permissions instructions>"}]}}
+{"timestamp":"2026-09-01T09:00:04.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Inspect this image."},{"type":"input_image","image_url":"file:///tmp/image.png","detail":"high"},{"type":"future_block","value":{"safe":true}}]}}
+{"timestamp":"2026-09-01T09:00:05.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Echo."}}
+{"timestamp":"2026-09-01T09:00:06.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Echo."}}
+{"timestamp":"2026-09-01T09:00:07.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Echo."}]}}
+{"timestamp":"2026-09-01T09:00:08.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"Reviewing patch."}],"content":[{"type":"reasoning_text","text":"Longer reasoning."}]}}
+{"timestamp":"2026-09-01T09:00:09.000Z","type":"response_item","payload":{"type":"local_shell_call","call_id":"shell-1","status":"completed","action":{"type":"exec","command":["cat","src/a.ts"]}}}
+{"timestamp":"2026-09-01T09:00:10.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"shell-1","output":[{"type":"output_text","text":"old source"},{"type":"input_image","image_url":"file:///tmp/result.png"},{"type":"future_output","value":7}]}}
+{"timestamp":"2026-09-01T09:00:11.000Z","type":"response_item","payload":{"type":"custom_tool_call","call_id":"patch-1","name":"apply_patch","input":"*** Begin Patch\n*** Update File: src/a.ts\n*** End Patch"}}
+{"timestamp":"2026-09-01T09:00:12.000Z","type":"event_msg","payload":{"type":"patch_apply_end","call_id":"patch-1","stdout":"","stderr":"patch failed","success":false}}
+{"timestamp":"2026-09-01T09:00:13.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"orphan-1","output":"detached output"}}
+{"timestamp":"2026-09-01T09:00:14.000Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn-1","duration_ms":65000,"last_agent_message":"Echo."}}
+{"timestamp":"2026-09-01T09:00:15.000Z","type":"compacted","payload":{"message":"Earlier work summarized."}}
+{"timestamp":"2026-09-01T09:00:16.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Unsupported blocks stay inspectable."},{"type":"future_audio","data":{"transcript":"not rendered as commands"}}]}}
+{"timestamp":"2026-09-01T09:00:17.000Z","type":"response_item","payload":{"type":"future_response_item","opaque":{"retained":true}}}
+{"timestamp":"2026-09-01T09:00:18.000Z","type":"future_root","payload":{"retained":true}}
+{"malformed":
