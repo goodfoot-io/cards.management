@@ -548,6 +548,53 @@ describe('policy-aware rerouting of symlinked workspace packages', () => {
     await fs.symlink('../../packages/b', path.join(repoDir, 'node_modules', '@scope', 'b'));
   }
 
+  it('keeps a workspace package bound to the new checkout when its source link was materialized in a prior worktree', async () => {
+    await makeSymlinkedWorkspace();
+    await fs.writeFile(path.join(repoDir, '.worktreeignore'), 'node_modules/pkgA/.cache/x.js\n');
+
+    const first = await createWorktree('feature/chained-package-source', { cwd: repoDir });
+    await expect(first.settle).resolves.toBeDefined();
+
+    // The omit rule forces the first worktree to materialize this node_modules
+    // package as a real directory containing links into that checkout.
+    const firstPackage = path.join(first.path, 'node_modules', 'pkgA');
+    const firstPackageStats = await fs.lstat(firstPackage);
+    expect(firstPackageStats.isDirectory()).toBe(true);
+    expect(firstPackageStats.isSymbolicLink()).toBe(false);
+
+    const second = await createWorktree('feature/chained-package-destination', { cwd: first.path });
+    await expect(second.settle).resolves.toBeDefined();
+
+    // Every chained worktree must resolve the workspace link through its own
+    // packages checkout instead of inheriting the source worktree's link.
+    await expect(fs.realpath(path.join(second.path, 'node_modules', 'pkgA', 'index.js'))).resolves.toBe(
+      path.join(second.path, 'packages', 'pkgA', 'index.js')
+    );
+
+    await removeWorktree(second.path);
+    await removeWorktree(first.path);
+  });
+
+  it('keeps a same-directory relative symlink inside a materialized workspace package local to the new checkout', async () => {
+    await makeSymlinkedWorkspace();
+    await fs.writeFile(path.join(repoDir, 'packages', 'pkgA', 'CLAUDE.md'), 'package instructions\n');
+    await fs.symlink('CLAUDE.md', path.join(repoDir, 'packages', 'pkgA', 'AGENTS.md'));
+    execFileSync('git', ['add', 'packages/pkgA/CLAUDE.md', 'packages/pkgA/AGENTS.md'], { cwd: repoDir });
+    execFileSync('git', ['commit', '-q', '-m', 'add workspace package instruction links'], { cwd: repoDir });
+    await fs.writeFile(path.join(repoDir, '.worktreeignore'), 'node_modules/pkgA/.cache/x.js\n');
+
+    const worktree = await createWorktree('feature/materialized-package-relative-link', { cwd: repoDir });
+    await expect(worktree.settle).resolves.toBeDefined();
+
+    // The package is materialized to enforce the omit rule; its relative child
+    // link must still resolve to this checkout's copy of the target file.
+    await expect(fs.realpath(path.join(worktree.path, 'node_modules', 'pkgA', 'AGENTS.md'))).resolves.toBe(
+      path.join(worktree.path, 'packages', 'pkgA', 'CLAUDE.md')
+    );
+
+    await removeWorktree(worktree.path);
+  });
+
   it('materializes a symlinked top-level package with an interior omit rule: ruled path absent, share files resolve into the worktree packages', async () => {
     // The workspaces shape: node_modules/pkgA is a LINK to ../packages/pkgA,
     // and git never reports the interior of a symlinked directory — the
