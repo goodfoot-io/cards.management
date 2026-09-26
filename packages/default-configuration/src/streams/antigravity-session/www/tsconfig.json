@@ -21,6 +21,6 @@
       "@cards.management/sdk/stream-store": ["../../../../../../../../../public/packages/sdk/src/stream-store/index.ts"]
     }
   },
-  "include": ["./**/*.ts", "./**/*.tsx"],
+  "include": ["./**/*.ts", "./**/*.tsx", "../../lib/session/styles.d.ts"],
   "exclude": ["node_modules"]
 }

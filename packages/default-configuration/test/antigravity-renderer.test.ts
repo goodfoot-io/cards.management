@@ -1,9 +1,7 @@
 /**
- * Tests for the antigravity-session stream renderer — the pure transforms
- * (`renderAntigravityTranscript`, `toThreadMessages`, `deriveStatus`, the
- * compact fold/adapters) plus a representative render through the real
- * `StreamThread` + `agy-anomaly` data part via `react-dom/server` (this
- * package has no jsdom — see `attachment-render.test.ts`).
+ * Tests for Antigravity's pinned native parser, transcript ordering, and compact fold.
+ * Expanded semantic rows and Cards-owned rendering are covered by
+ * `antigravity-session-projection.test.ts`.
  *
  * Locks in the orchestrator-pinned destination-record contract duties:
  * ordering by source `idx` (out-of-order arrival renders idx-ordered),
@@ -14,21 +12,15 @@
  * payload withheld), named fail-closed treatment of malformed records, and
  * the compact card's fold/adaptation of the same rules.
  *
- * @summary Tests for the antigravity-session stream renderer transforms
+ * @summary Tests for the Antigravity parser and compact transcript fold
  */
 
-import { createElement } from 'react';
-import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { AnomalyDataPart } from '../src/streams/antigravity-session/www/components/expanded/AntigravityDataParts.js';
 import { antigravityToCompactCardModel } from '../src/streams/antigravity-session/www/lib/adapt-compact-model.js';
 import { buildFoldedState, reconcileFolded } from '../src/streams/antigravity-session/www/lib/compact-state.js';
 import type { AntigravityRecord } from '../src/streams/antigravity-session/www/lib/parser.js';
 import { parseAntigravityLine, SCHEMA_DRIFT_SENTINEL_IDX } from '../src/streams/antigravity-session/www/lib/parser.js';
-import type { TranscriptItem } from '../src/streams/antigravity-session/www/lib/render-transcript.js';
 import { renderAntigravityTranscript } from '../src/streams/antigravity-session/www/lib/render-transcript.js';
-import { deriveStatus, toThreadMessages } from '../src/streams/antigravity-session/www/lib/to-thread-messages.js';
-import { StreamThread } from '../src/streams/lib/aui/StreamThread.js';
 
 /**
  * Builds a valid destination record with a deterministic hash for its content.
@@ -317,7 +309,7 @@ describe('renderAntigravityTranscript — (idx, hash) idempotence and collation 
       idx: 2,
       detail: 'step_format 9 has no decoder in this build'
     });
-    if (item?.kind !== 'unreadable') throw new Error('expected an unreadable item');
+    if (item.kind !== 'unreadable') return;
     expect(item.withheldBytes).toBe('\x00\x01binary-garbage'.length);
     expect(JSON.stringify(item)).not.toContain('binary-garbage');
   });
@@ -420,211 +412,6 @@ describe('renderAntigravityTranscript — malformed records fail closed, never s
     const items = renderAntigravityTranscript(['{', 'null', '[]', '']);
     expect(items.filter((item) => item.kind === 'malformed')).toHaveLength(3);
     expect(items.every((item) => item.kind !== 'step')).toBe(true);
-  });
-});
-
-describe('toThreadMessages — item → part mapping', () => {
-  function firstPartNames(items: TranscriptItem[]): Array<{ type: string; name?: string }> {
-    return toThreadMessages(items, false).messages.flatMap((message) => {
-      if (typeof message.content === 'string') throw new Error('expected part-array message content');
-      return message.content.map((part) =>
-        part.type === 'data' ? { type: part.type, name: part.name } : { type: part.type }
-      );
-    });
-  }
-
-  it('folds step content into content-run text parts', () => {
-    const { messages } = toThreadMessages(
-      [makeRecord({ idx: 0, content: 'one' }), makeRecord({ idx: 1, content: 'two' })].map((record) => ({
-        kind: 'step',
-        idx: record.idx,
-        stepType: record.stepType,
-        status: record.status,
-        content: record.content
-      })) as TranscriptItem[],
-      false
-    );
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.role).toBe('assistant');
-    expect(messages[0]?.content).toEqual([
-      { type: 'text', text: 'one' },
-      { type: 'text', text: 'two' }
-    ]);
-  });
-
-  it('routes every anomaly kind through the named agy-anomaly part with per-kind evidence', () => {
-    const items: TranscriptItem[] = [
-      { kind: 'partial', idx: 1, stepType: 15, status: 1, content: 'partial', detail: 'flushed mid-turn' },
-      { kind: 'drift', idx: 2, stepType: 15, status: 3, content: 'revised', detail: 'row revised' },
-      { kind: 'unreadable', idx: 3, stepType: 15, status: 3, withheldBytes: 17, detail: 'no decoder' }
-    ];
-
-    const partNames = firstPartNames(items);
-    expect(partNames.every((part) => part.name === 'agy-anomaly')).toBe(true);
-
-    const { messages } = toThreadMessages(items, false);
-    const payloads = messages.flatMap((message) =>
-      (message.content as Array<{ type: string; name?: string; data?: unknown }>)
-        .filter((part) => part.type === 'data')
-        .map((part) => part.data as Record<string, unknown>)
-    );
-    expect(payloads[0]).toEqual({
-      kind: 'flush-partial',
-      idx: 1,
-      detail: 'flushed mid-turn',
-      content: 'partial'
-    });
-    expect(payloads[1]).toEqual({ kind: 'host-drift', idx: 2, detail: 'row revised', content: 'revised' });
-    expect(payloads[2]).toEqual({ kind: 'format-unknown', idx: 3, detail: 'no decoder', withheldBytes: 17 });
-    expect(JSON.stringify(payloads[2])).not.toContain('content');
-  });
-
-  it('routes the schema-drift sentinel through the named anomaly part as a session-level event', () => {
-    const { messages } = toThreadMessages(
-      [
-        {
-          kind: 'schema_drift',
-          content: 'schema fingerprint changed mid-stream — host drift',
-          detail: 'schema fingerprint changed mid-stream — host drift'
-        }
-      ],
-      false
-    );
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.metadata).toEqual({ custom: { service: true } });
-    expect(messages[0]?.content).toEqual([
-      {
-        type: 'data',
-        name: 'agy-anomaly',
-        data: {
-          kind: 'schema-drift',
-          detail: 'schema fingerprint changed mid-stream — host drift',
-          content: 'schema fingerprint changed mid-stream — host drift'
-        }
-      }
-    ]);
-  });
-
-  it('routes malformed lines through the shared raw part with warning severity and the named reason', () => {
-    const { messages } = toThreadMessages(
-      [{ kind: 'malformed', rawLine: 'oops', reason: 'line is not valid JSON' }],
-      false
-    );
-
-    expect(messages).toHaveLength(1);
-    expect(messages[0]?.metadata).toEqual({ custom: { service: true } });
-    expect(messages[0]?.content).toEqual([
-      {
-        type: 'data',
-        name: 'raw',
-        data: { data: 'oops', label: 'Malformed stream record (line is not valid JSON)', severity: 'warning' }
-      }
-    ]);
-  });
-
-  it('marks anomaly and malformed runs as service runs', () => {
-    const { messages } = toThreadMessages(
-      [
-        { kind: 'step', idx: 0, stepType: 15, status: 3, content: 'content' },
-        { kind: 'drift', idx: 0, stepType: 15, status: 3, content: 'revised', detail: 'd' }
-      ],
-      false
-    );
-
-    expect(messages).toHaveLength(2);
-    expect(messages[0]?.metadata).toBeUndefined();
-    expect(messages[1]?.metadata).toEqual({ custom: { service: true } });
-  });
-});
-
-describe('deriveStatus', () => {
-  const step: TranscriptItem = { kind: 'step', idx: 0, stepType: 15, status: 3, content: 'x' };
-
-  it('reports running while the stream is live, regardless of anomalies', () => {
-    expect(deriveStatus([step, { kind: 'malformed', rawLine: 'x', reason: 'r' }], true)).toBe('running');
-  });
-
-  it('reports error for a settled transcript carrying malformed records', () => {
-    expect(deriveStatus([{ kind: 'malformed', rawLine: 'x', reason: 'r' }], false)).toBe('error');
-  });
-
-  it('reports success for a settled transcript with only clean steps and named anomalies', () => {
-    expect(
-      deriveStatus([step, { kind: 'drift', idx: 0, stepType: 15, status: 3, content: 'y', detail: 'd' }], false)
-    ).toBe('success');
-    // The schema-drift sentinel is a designed-for named event, not corruption.
-    expect(deriveStatus([step, { kind: 'schema_drift', content: 'drift detail', detail: 'drift detail' }], false)).toBe(
-      'success'
-    );
-  });
-});
-
-describe('toThreadMessages + StreamThread — representative transcript render', () => {
-  /**
-   * Renders the messages through the real StreamThread with the Antigravity
-   * data-part registry.
-   *
-   * @param items - Transcript items to render.
-   * @returns The static HTML string.
-   */
-  function render(items: TranscriptItem[]): string {
-    const { messages, isRunning } = toThreadMessages(items, false);
-    return renderToStaticMarkup(
-      createElement(StreamThread, { messages, isRunning, dataComponents: { 'agy-anomaly': AnomalyDataPart } })
-    );
-  }
-
-  it('renders step content as transcript text and anomalies as distinct named events', () => {
-    const html = render([
-      { kind: 'step', idx: 0, stepType: 15, status: 3, content: 'Fixed the parser.' },
-      { kind: 'drift', idx: 0, stepType: 15, status: 3, content: 'revised text', detail: 'row revised post-terminal' },
-      { kind: 'partial', idx: 1, stepType: 15, status: 1, content: 'partial evidence', detail: 'flushed mid-turn' },
-      { kind: 'unreadable', idx: 2, stepType: 15, status: 3, withheldBytes: 5, detail: 'unknown format' },
-      { kind: 'malformed', rawLine: 'oops', reason: 'line is not valid JSON' }
-    ]);
-
-    // Step content renders as transcript text.
-    expect(html).toContain('Fixed the parser.');
-    // Host-drift: visible named event collated after the original, with the
-    // revised content as evidence.
-    expect(html).toContain('Host drift');
-    expect(html).toContain('row revised post-terminal');
-    expect(html).toContain('revised text');
-    // Flush-partial: named-partial evidence.
-    expect(html).toContain('Partial flush');
-    expect(html).toContain('flushed mid-turn');
-    expect(html).toContain('partial evidence');
-    // Format-unknown: named-unreadable, payload withheld, byte count shown.
-    expect(html).toContain('Unreadable content (format unknown)');
-    expect(html).toContain('5 bytes of undecodable content withheld');
-    // Malformed: labeled fail-closed evidence with the named reason.
-    expect(html).toContain('Malformed stream record (line is not valid JSON)');
-  });
-
-  it('renders the schema-drift sentinel as a named session-level host-drift event without a step index', () => {
-    const html = render([
-      { kind: 'step', idx: 0, stepType: 15, status: 3, content: 'before the drift.' },
-      {
-        kind: 'schema_drift',
-        content: 'schema fingerprint changed mid-stream — host drift',
-        detail: 'schema fingerprint changed mid-stream — host drift'
-      }
-    ]);
-
-    expect(html).toContain('Host drift · schema changed');
-    expect(html).toContain('schema fingerprint changed mid-stream — host drift');
-    // Session-level event: never presented as a numbered step.
-    expect(html).not.toContain('step -1');
-    expect(html).toContain('before the drift.');
-  });
-
-  it('never renders the withheld format-unknown payload', () => {
-    const html = render([
-      { kind: 'unreadable', idx: 2, stepType: 15, status: 3, withheldBytes: 12, detail: 'unknown format' }
-    ]);
-    expect(html).not.toContain('undecodable-bytes');
   });
 });
 

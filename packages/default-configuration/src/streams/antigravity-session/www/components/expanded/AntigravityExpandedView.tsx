@@ -1,99 +1,77 @@
 /**
- * Expanded session transcript view for the antigravity-session renderer.
- *
- * Mirrors the codex-session expanded view's lifecycle: it parses the primary
- * file's initial history, subscribes to the stream store for appends, and
- * rebuilds on a file reset (`subscribe:response`).
- *
- * The render model comes from {@link renderAntigravityTranscript}, a pure
- * transform that rebuilds the full item list from the line array — ordering
- * by source `idx`, `(idx, hash)` idempotence, and deterministic anomaly
- * collation are all re-derived identically on every update, so appends
- * preserve prior items and a reset discards stale ones.
- *
- * This file owns only the stream-store subscription and the sticky
- * `SessionHeader` composition; grouping the flat item list into
- * `ThreadMessageLike[]` messages (and `deriveStatus`) lives in the store-free
- * {@link ../../lib/to-thread-messages} module. The messages render through
- * the shared `StreamThread` (../../../../lib/aui), with the `agy-anomaly`
- * named-anomaly part registered via `dataComponents`
- * (./AntigravityDataParts). The sticky header shows only liveness — the
- * destination-record contract carries no model/cwd/thread identity.
- *
- * @summary Expanded Antigravity session view: status header + shared StreamThread
+ * Antigravity expanded mode binds a coherent native SDK snapshot to its own projector.
+ * Compact rendering keeps its existing fold and summary path.
+ * @summary Antigravity native source subscription and semantic viewport
  * @module streams/antigravity-session/www/components/expanded/AntigravityExpandedView
  */
 
 import { streamStore } from '@cards.management/sdk/stream-store';
-import type React from 'react';
-import { useEffect, useMemo, useState } from 'react';
-import { StreamThread } from '../../../../lib/aui';
-import { SessionHeader } from '../../../../lib/SessionHeader';
-import type { TranscriptItem } from '../../lib/render-transcript';
-import { renderAntigravityTranscript } from '../../lib/render-transcript';
-import { deriveStatus, toThreadMessages } from '../../lib/to-thread-messages';
-import { AnomalyDataPart } from './AntigravityDataParts';
-
-/** Antigravity-specific `data` part renderers, merged over the shared four in `StreamThread`. */
-const ANTIGRAVITY_DATA_COMPONENTS = {
-  'agy-anomaly': AnomalyDataPart
-};
+import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
+import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
+import type { NativeTranscriptSource, SessionDisclosureState, SessionProjection } from '../../../../lib/session/types';
+import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
+import { useStreamStore } from '../../hooks/useStreamStore';
+import { type AntigravityPayloads, type AntigravityRow, antigravitySessionProjector } from '../../lib/project-session';
+import { AntigravitySessionView } from './AntigravitySessionView';
 
 /**
- * Reads the primary stream file's lines and liveness from the store.
- * @returns The primary file's lines and `isActive` flag.
+ * Collects stable disclosure owners from current semantic rows.
+ * @param rows - Projected source rows.
+ * @returns All top-level and leaf identities still present in this generation.
  */
-function readPrimary(): { lines: string[]; isActive: boolean } {
-  const s = streamStore.getState();
-  const file = s.files.get(s.primary);
-  return { lines: file ? file.lines : [], isActive: file?.meta.isActive ?? false };
+function disclosureIds(rows: readonly AntigravityRow[]): Set<string> {
+  return new Set(rows.flatMap((row) => [row.id, ...row.parts.map((part) => part.id)]));
 }
 
 /**
- * Renders the idx-ordered transcript items for an Antigravity session, with a
- * sticky {@link SessionHeader} (liveness status only) above the scrolling
- * transcript body.
- * @returns Rendered expanded transcript view element.
+ * Adapts one supplied native source without importing or rediscovering the SDK store.
+ * @param root0 - Caller-qualified source snapshot.
+ * @param root0.source - Native lines, metadata, and caller-supplied generation.
+ * @returns Expanded Antigravity session presentation.
  */
-export function AntigravityExpandedView(): React.ReactElement {
-  const [items, setItems] = useState<TranscriptItem[]>(() => renderAntigravityTranscript(readPrimary().lines));
-  const [isActive, setIsActive] = useState<boolean>(() => readPrimary().isActive);
+export function AntigravitySourceView({ source }: { source: NativeTranscriptSource }): ReactElement {
+  const controller = useRef<TranscriptProjectionController<AntigravityPayloads> | null>(null);
+  const [projection, setProjection] = useState<SessionProjection<AntigravityPayloads> | null>(null);
+  const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
 
-  // Bootstrap-then-subscribe. Rebuilding from the full line array on every
-  // update keeps append and reset both correct: appends re-derive prior items
-  // identically (so they are preserved) and a reset's shorter array yields a
-  // strictly smaller list (so stale items are discarded).
   useEffect(() => {
-    const sync = (): void => {
-      const primary = readPrimary();
-      setItems(renderAntigravityTranscript(primary.lines));
-      setIsActive(primary.isActive);
+    const next = createTranscriptProjection(antigravitySessionProjector, source.sourceKey);
+    controller.current = next;
+    return () => {
+      next.dispose();
+      controller.current = null;
     };
-    sync();
-    return streamStore.subscribe(sync);
-  }, []);
+  }, [source.sourceKey]);
 
-  const status = deriveStatus(items, isActive);
-  const { messages, isRunning } = useMemo(() => toThreadMessages(items, isActive), [items, isActive]);
+  useEffect(() => {
+    const next = controller.current!.update(source).projection;
+    setProjection(next);
+    const ids = disclosureIds(next.rows);
+    setOpen((previous) => {
+      if ([...previous.keys()].every((id) => ids.has(id))) return previous;
+      return new Map([...previous].filter(([id]) => ids.has(id)));
+    });
+  }, [source]);
 
-  return (
-    <div className="h-full flex flex-col min-h-0 overflow-hidden">
-      {/* Destination records carry no model/cwd/thread identity — the header
-          is a liveness strip only. */}
-      <SessionHeader model="" cwd="" status={status} />
-      <div className="font-vscode-editor flex-1 min-h-0">
-        {items.length === 0 ? (
-          <div className="agy-empty">No Antigravity session activity yet.</div>
-        ) : (
-          <StreamThread
-            messages={messages}
-            isRunning={isRunning}
-            dataComponents={ANTIGRAVITY_DATA_COMPONENTS}
-            assistantName="Antigravity"
-            assistantIcon="sparkle"
-          />
-        )}
-      </div>
-    </div>
-  );
+  const disclosures: SessionDisclosureState = {
+    open,
+    onOpenChange: (id, value) => setOpen((previous) => new Map(previous).set(id, value))
+  };
+
+  return <AntigravitySessionView source={source} projection={projection} disclosures={disclosures} />;
+}
+
+/**
+ * Selects the current main stream using the shared native subscription adapter.
+ * @returns Expanded Antigravity session view bound to the existing host/store path.
+ */
+export function AntigravityExpandedView(): ReactElement {
+  const scope = useId();
+  const filename = useStreamStore((state) => state.primary);
+  const source = useTranscriptSource(streamStore, {
+    filename,
+    sourceKey: JSON.stringify(['antigravity-expanded', scope, filename]),
+    generation: 'native-store'
+  });
+  return <AntigravitySourceView key={source.sourceKey} source={source} />;
 }

@@ -2,11 +2,6 @@
 @import '@vscode/codicons/dist/codicon.css';
 @import '../../lib/tokens.css';
 @import '../../lib/compact-card.css';
-@import '../../lib/accordions.css';
-@import '../../lib/json-block.css';
-@import '../../lib/boundary.css';
-@import '../../lib/turns.css';
-@import '../../lib/aui/aui.css';
 
 /* =============================================================================
    ANTIGRAVITY SESSION RENDERER STYLES (`.agy-*` classes)
@@ -16,13 +11,8 @@
    surfaces, text, and accents stay in lockstep with the claude/codex/
    opencode renderers and any future token change updates all at once.
 
-   The expanded transcript renders through the shared `StreamThread`
-   (streams/lib/aui) — turn anatomy, markdown, and the shared `data` parts
-   (boundary/raw/status-line/error-line) all come from aui.css and friends
-   imported above. What remains below is only what the shared foundation has
-   no shape for: the named `agy-anomaly` event block
-   (./components/expanded/AntigravityDataParts.tsx) and the empty-transcript
-   placeholder.
+   Expanded rows use the shared native SessionContent styles; this file only
+   retains the provider-specific named anomaly presentation and compact shell.
    ============================================================================= */
 
 html,
