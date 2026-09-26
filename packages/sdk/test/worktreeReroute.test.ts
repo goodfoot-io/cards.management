@@ -636,6 +636,21 @@ packages/a/node_modules/pkgA/.cache/x.js
     await removeWorktree(first.path);
   });
 
+  it('fails and cleans up when the destination checkout has no mapping for a declared workspace link', async () => {
+    await makeSymlinkedWorkspace();
+    const destinationRef = execFileSync('git', ['rev-parse', 'HEAD~1'], { cwd: repoDir, encoding: 'utf8' }).trim();
+
+    const worktree = await createWorktree(destinationRef, { cwd: repoDir });
+    await expect(worktree.settle).rejects.toThrow('has no destination package');
+    await expect(fs.lstat(worktree.path)).rejects.toMatchObject({ code: 'ENOENT' });
+
+    const registeredWorktrees = execFileSync('git', ['worktree', 'list', '--porcelain'], {
+      cwd: repoDir,
+      encoding: 'utf8'
+    });
+    expect(registeredWorktrees).not.toContain(worktree.path);
+  });
+
   it('keeps a same-directory relative symlink inside a materialized workspace package local to the new checkout', async () => {
     await makeSymlinkedWorkspace();
     await fs.writeFile(path.join(repoDir, 'packages', 'pkgA', 'CLAUDE.md'), 'package instructions\n');

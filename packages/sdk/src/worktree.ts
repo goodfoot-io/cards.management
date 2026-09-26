@@ -24,6 +24,7 @@ import { atomicWriteHookFile, RESOLVE_NODE_BASH } from './git-hooks.js';
 import { applyWorktreeInclude } from './worktreeInclude.js';
 import {
   enumerateOwnedNodeModules,
+  enumerateWorkspacePackageDirs,
   loadWorktreePathPolicy,
   type WorktreePathPolicy,
   type WorktreePathQuery
@@ -1888,6 +1889,21 @@ async function removeOmittedDestination(destPath: string): Promise<void> {
 }
 
 /**
+ * Removes a pre-existing destination symlink before replacing it with a real
+ * materialized directory. Existing real data is left untouched.
+ *
+ * @param destPath - Destination entry that may already be a symlink.
+ */
+async function unlinkDestinationSymlink(destPath: string): Promise<void> {
+  try {
+    const stats = await fs.lstat(destPath);
+    if (stats.isSymbolicLink()) await fs.unlink(destPath);
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+/**
  * State threaded through the node_modules reroute helpers.
  *
  * @property policy - Path policy query driving per-entry classification.
@@ -1895,6 +1911,27 @@ async function removeOmittedDestination(destPath: string): Promise<void> {
  */
 interface RerouteWalkContext {
   policy?: WorktreePathQuery;
+  /** Relative path of the node_modules tree currently being mirrored. */
+  relativePath?: string;
+  /** Source checkout root used to recognize declared workspace link targets. */
+  sourceRoot?: string;
+  /** Destination package directories, indexed by their declared package name. */
+  workspacePackages?: ReadonlyMap<string, string>;
+  /** Source package directories indexed by name for link detection and fail-closed matching. */
+  sourceWorkspacePackages?: ReadonlyMap<string, string>;
+}
+
+/**
+ * Source/destination correspondence while a directory is materialized.
+ *
+ * `sourceRoot` and `destinationRoot` translate symlink targets within the
+ * package tree. `currentDestinationRoot` is the counterpart of the directory
+ * currently being walked and is used for ordinary shared child files.
+ */
+interface MaterializedTreeContext {
+  sourceRoot: string;
+  destinationRoot: string;
+  currentDestinationRoot?: string;
 }
 
 /**
@@ -1910,6 +1947,128 @@ interface RerouteWalkContext {
  */
 function policySkips(policy: WorktreePathQuery | undefined, entryRel: string | undefined): boolean {
   return entryRel !== undefined && policy !== undefined && policy.classify(entryRel) !== 'share';
+}
+
+/**
+ * Looks up a direct workspace package entry relative to the current
+ * node_modules tree.
+ *
+ * @param ctx - Reroute context with the tree root and destination package map.
+ * @param entryRel - Repository-relative path of the entry.
+ * @returns A declared workspace package name, or undefined for another entry.
+ */
+function workspacePackageNameForEntry(ctx: RerouteWalkContext, entryRel: string | undefined): string | undefined {
+  if (
+    entryRel === undefined ||
+    ctx.relativePath === undefined ||
+    (ctx.workspacePackages === undefined && ctx.sourceWorkspacePackages === undefined)
+  ) {
+    return undefined;
+  }
+  const prefix = `${ctx.relativePath}/`;
+  if (!entryRel.startsWith(prefix)) return undefined;
+  const name = entryRel.slice(prefix.length);
+  return ctx.workspacePackages?.has(name) === true || ctx.sourceWorkspacePackages?.has(name) === true
+    ? name
+    : undefined;
+}
+
+/**
+ * Resolves the source-side package directory represented by a workspace entry.
+ *
+ * A matching manifest name identifies the installed workspace link. A
+ * materialized real directory can also be recognized from the source
+ * workspace declaration, even when an earlier path policy removed its
+ * manifest link.
+ *
+ * @param ctx - Reroute context containing the source workspace declarations.
+ * @param entry - Source node_modules entry.
+ * @param sourcePath - Absolute source entry path.
+ * @param packageName - Candidate package name from the node_modules path.
+ * @returns The source package directory when this is a workspace link.
+ */
+async function sourceWorkspacePackagePath(
+  ctx: RerouteWalkContext,
+  entry: Dirent,
+  sourcePath: string,
+  packageName: string
+): Promise<string | undefined> {
+  if (!entry.isDirectory() && !entry.isSymbolicLink()) return undefined;
+  const packagePath = entry.isSymbolicLink()
+    ? path.resolve(path.dirname(sourcePath), await fs.readlink(sourcePath))
+    : sourcePath;
+
+  let manifestName: string | undefined;
+  try {
+    const manifest: unknown = JSON.parse(await fs.readFile(path.join(packagePath, 'package.json'), 'utf-8'));
+    if (typeof manifest === 'object' && manifest !== null && 'name' in manifest) {
+      const value = (manifest as { name?: unknown }).name;
+      if (typeof value === 'string') manifestName = value;
+    }
+  } catch (error: unknown) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw error;
+  }
+
+  if (manifestName === packageName) return packagePath;
+  if (ctx.sourceWorkspacePackages?.has(packageName) && entry.isDirectory()) {
+    if (manifestName !== undefined && manifestName !== packageName) {
+      throw new Error(
+        `Materialized workspace package at ${sourcePath} is named ${manifestName}, expected ${packageName}`
+      );
+    }
+    return packagePath;
+  }
+  if (ctx.sourceRoot !== undefined) {
+    const sourceWorkspacePackage = ctx.sourceWorkspacePackages?.get(packageName);
+    if (sourceWorkspacePackage !== undefined && path.resolve(ctx.sourceRoot, sourceWorkspacePackage) === packagePath) {
+      if (manifestName !== undefined && manifestName !== packageName) {
+        throw new Error(`Workspace package at ${packagePath} is named ${manifestName}, expected ${packageName}`);
+      }
+      return packagePath;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Provisions a declared workspace package link against the destination
+ * checkout's package directory, independent of the source entry's filesystem
+ * shape (symlink, materialized directory, or prior-worktree link).
+ *
+ * @param ctx - Reroute context carrying the path policy.
+ * @param sourcePackagePath - Source package directory being mirrored.
+ * @param destinationPackagePath - Verified destination package directory.
+ * @param destPath - Destination node_modules entry.
+ * @param entryRelPath - Repository-relative path of the package entry.
+ * @returns Count of workspace links recreated for the entry.
+ */
+async function provisionWorkspacePackageEntry(
+  ctx: RerouteWalkContext,
+  sourcePackagePath: string,
+  destinationPackagePath: string,
+  destPath: string,
+  entryRelPath: string
+): Promise<number> {
+  const { policy } = ctx;
+  if (policy !== undefined && policy.classify(entryRelPath) === 'omit') {
+    await removeOmittedDestination(destPath);
+    return 0;
+  }
+
+  const materialize =
+    policy !== undefined && (policy.isOmitAncestor(entryRelPath) || policy.classify(entryRelPath) !== 'share');
+  if (!materialize) {
+    await replaceSymlink(path.relative(path.dirname(destPath), destinationPackagePath), destPath);
+    return 1;
+  }
+
+  await unlinkDestinationSymlink(destPath);
+  return rerouteCopiedDir(ctx, sourcePackagePath, destPath, entryRelPath, {
+    sourceRoot: sourcePackagePath,
+    destinationRoot: destinationPackagePath,
+    currentDestinationRoot: destinationPackagePath
+  });
 }
 
 /**
@@ -1951,16 +2110,39 @@ async function targetIsDirectory(absPath: string): Promise<boolean> {
 }
 
 /**
+ * Returns `candidate` relative to `root` when it stays inside that tree.
+ *
+ * @param root - Canonical or absolute tree root.
+ * @param candidate - Absolute candidate path.
+ * @returns A relative path (empty for the root), or undefined when outside.
+ */
+function relativeWithinRoot(root: string, candidate: string): string | undefined {
+  const relative = path.relative(root, candidate);
+  if (relative === '') return '';
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return undefined;
+  return relative;
+}
+
+/**
+ * Maps a source-side symlink target into the destination counterpart tree.
+ *
+ * @param tree - Materialized source/destination correspondence.
+ * @param sourceTarget - Absolute source-side target path.
+ * @returns Destination-side counterpart when the target is within `sourceRoot`.
+ */
+function materializedTarget(tree: MaterializedTreeContext, sourceTarget: string): string | undefined {
+  const relative = relativeWithinRoot(tree.sourceRoot, sourceTarget);
+  return relative === undefined ? undefined : path.resolve(tree.destinationRoot, relative);
+}
+
+/**
  * Link target for a share-classified child of a materialized directory.
  *
- * Without a worktree-side root (a real-dir source package) the child links
- * absolutely to its source path. Inside a materialized symlink entry with an
- * internal target the child links relatively into the worktree's own
- * counterpart of the target — the isolation the workspace shape provides,
- * kept per-file — so a write through the child lands in the worktree's
- * checkout, never the source.
+ * When the destination counterpart is known, the child links relatively into
+ * it so writes stay in the new checkout. When there is no counterpart, the
+ * child links absolutely to its source path.
  *
- * @param worktreeSideRoot - Absolute worktree-side counterpart of the
+ * @param worktreeSideRoot - Absolute destination counterpart of the
  *   materialized source directory, or undefined when share children link
  *   absolutely to their source paths.
  * @param childSource Source-side path of the share-classified child.
@@ -1997,8 +2179,8 @@ function shareLinkTarget(
  *    siblings keep their symlinks.
  * 2. Symlink entries delegate to {@link rerouteSymlinkEntry}.
  * 3. Files (and any non-directory): skipped when not share-classified,
- *    otherwise linked to their source path — relatively into
- *    `worktreeSideRoot` when set (see {@link shareLinkTarget}).
+ *    otherwise linked to their source path — relatively into the destination
+ *    counterpart when set (see {@link shareLinkTarget}).
  * 4. Directories that are an ancestor of a matcher-matched omitted path or
  *    copy-classified are materialized as real trees ({@link rerouteCopiedDir})
  *    — symlinking either wholesale would expose ruled descendants to
@@ -2012,9 +2194,8 @@ function shareLinkTarget(
  * @param entryRelativePath - Repository-relative POSIX path of the entry, or
  *   undefined when the caller passed no relative path (classification is
  *   skipped and the entry is provisioned as share).
- * @param worktreeSideRoot - Absolute worktree-side counterpart of the entry's
- *   parent (set only inside a materialized internal-target tree); share
- *   children link relatively into it.
+ * @param materializedTree - Source/destination correspondence for children
+ *   when this entry is inside a materialized package tree.
  * @returns Count of internal workspace symlinks recreated for the entry.
  */
 async function provisionRerouteEntry(
@@ -2023,7 +2204,7 @@ async function provisionRerouteEntry(
   sourcePath: string,
   destPath: string,
   entryRelativePath: string | undefined,
-  worktreeSideRoot?: string
+  materializedTree?: MaterializedTreeContext
 ): Promise<number> {
   const { policy } = ctx;
 
@@ -2032,11 +2213,32 @@ async function provisionRerouteEntry(
     return 0;
   }
 
-  if (entry.isSymbolicLink()) {
-    return rerouteSymlinkEntry(ctx, sourcePath, destPath, entryRelativePath);
+  const workspacePackageName = workspacePackageNameForEntry(ctx, entryRelativePath);
+  if (workspacePackageName !== undefined && entryRelativePath !== undefined) {
+    const sourcePackagePath = await sourceWorkspacePackagePath(ctx, entry, sourcePath, workspacePackageName);
+    if (sourcePackagePath !== undefined) {
+      const destinationPackagePath = ctx.workspacePackages?.get(workspacePackageName);
+      if (destinationPackagePath === undefined) {
+        throw new Error(
+          `Workspace package ${workspacePackageName} is declared in the source checkout but has no destination package`
+        );
+      }
+      return provisionWorkspacePackageEntry(
+        ctx,
+        sourcePackagePath,
+        destinationPackagePath,
+        destPath,
+        entryRelativePath
+      );
+    }
   }
 
-  const linkTarget = (): string => shareLinkTarget(worktreeSideRoot, sourcePath, destPath, entry.name);
+  if (entry.isSymbolicLink()) {
+    return rerouteSymlinkEntry(ctx, sourcePath, destPath, entryRelativePath, materializedTree);
+  }
+
+  const linkTarget = (): string =>
+    shareLinkTarget(materializedTree?.currentDestinationRoot, sourcePath, destPath, entry.name);
 
   if (!entry.isDirectory()) {
     if (policySkips(policy, entryRelativePath)) {
@@ -2051,13 +2253,16 @@ async function provisionRerouteEntry(
     policy !== undefined &&
     (policy.isOmitAncestor(entryRelativePath) || policy.classify(entryRelativePath) !== 'share')
   ) {
-    return rerouteCopiedDir(
-      ctx,
-      sourcePath,
-      destPath,
-      entryRelativePath,
-      worktreeSideRoot !== undefined ? path.join(worktreeSideRoot, entry.name) : undefined
-    );
+    const childTree: MaterializedTreeContext = materializedTree
+      ? {
+          ...materializedTree,
+          currentDestinationRoot:
+            materializedTree.currentDestinationRoot !== undefined
+              ? path.join(materializedTree.currentDestinationRoot, entry.name)
+              : undefined
+        }
+      : { sourceRoot: sourcePath, destinationRoot: destPath };
+    return rerouteCopiedDir(ctx, sourcePath, destPath, entryRelativePath, childTree);
   }
   await replaceSymlink(linkTarget(), destPath);
   return 0;
@@ -2122,18 +2327,17 @@ async function rerouteScopeDir(
  * are never provisioned, and symlink children with a ruled interior are
  * materialized the same way at their own path.
  *
- * When `worktreeSideRoot` is set, share children link relatively into it
- * (the worktree's own counterpart of the materialized source subtree) so
- * every write stays inside the worktree; without it they link absolutely to
- * their source paths, the behavior for real-dir source packages.
+ * The materialized tree context maps symlink targets inside the source package
+ * to the destination package counterpart. Share files link into the
+ * destination package when one exists, and otherwise remain linked to their
+ * source paths.
  *
  * @param ctx - Walk state carrying the policy query.
  * @param sourceDir - Absolute source directory whose children are mirrored.
  * @param destDir - Absolute destination directory populated in the worktree.
  * @param dirRelativePath - Repository-relative POSIX path of `sourceDir`.
- * @param worktreeSideRoot - Absolute worktree-side counterpart of `sourceDir`
- *   (set when materializing a symlink entry with an internal target); share
- *   children link relatively into it.
+ * @param materializedTree - Source/destination correspondence used for child
+ *   links and for translating relative targets.
  * @returns Count of internal workspace symlinks recreated below `destDir`.
  */
 async function rerouteCopiedDir(
@@ -2141,22 +2345,21 @@ async function rerouteCopiedDir(
   sourceDir: string,
   destDir: string,
   dirRelativePath: string,
-  worktreeSideRoot?: string
+  materializedTree: MaterializedTreeContext
 ): Promise<number> {
   await fs.mkdir(destDir, { recursive: true });
   const childEntries = await fs.readdir(sourceDir, { withFileTypes: true });
   const childCounts = await Promise.all(
-    childEntries.map(
-      async (child): Promise<number> =>
-        provisionRerouteEntry(
-          ctx,
-          child,
-          path.join(sourceDir, child.name),
-          path.join(destDir, child.name),
-          `${dirRelativePath}/${child.name}`,
-          worktreeSideRoot
-        )
-    )
+    childEntries.map(async (child): Promise<number> => {
+      return provisionRerouteEntry(
+        ctx,
+        child,
+        path.join(sourceDir, child.name),
+        path.join(destDir, child.name),
+        `${dirRelativePath}/${child.name}`,
+        materializedTree
+      );
+    })
   );
   return childCounts.reduce((sum, c) => sum + c, 0);
 }
@@ -2182,6 +2385,8 @@ async function rerouteCopiedDir(
  * @param destPath - Absolute destination path (becomes a real directory).
  * @param entryRelPath - Repository-relative POSIX path of the entry.
  * @param target - Symlink target read from `sourcePath`.
+ * @param targetDestinationRoot - Destination-side counterpart of the target,
+ *   when the parent materialization can identify one.
  * @returns Count of internal workspace symlinks recreated below `destPath`.
  */
 async function materializeSymlinkEntry(
@@ -2189,26 +2394,21 @@ async function materializeSymlinkEntry(
   sourcePath: string,
   destPath: string,
   entryRelPath: string,
-  target: string
+  target: string,
+  targetDestinationRoot?: string
 ): Promise<number> {
-  // A previous run may have recreated the entry as a link; the materialized
-  // tree replaces it (a non-symlink at `destPath` is left untouched).
-  try {
-    const destStats = await fs.lstat(destPath);
-    if (destStats.isSymbolicLink()) {
-      await fs.unlink(destPath);
-    }
-  } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
-    }
-  }
+  await unlinkDestinationSymlink(destPath);
   const resolvedTarget = path.resolve(path.dirname(sourcePath), target);
   // A link's target resolves relative to the link's own directory, so the
-  // destination-side counterpart of the target is resolved from
-  // `path.dirname(destPath)` — the path the recreated link would point at.
-  const worktreeSideRoot = isInternalSymlink(target) ? path.resolve(path.dirname(destPath), target) : undefined;
-  return rerouteCopiedDir(ctx, resolvedTarget, destPath, entryRelPath, worktreeSideRoot);
+  // destination-side counterpart is supplied by the materialized parent or
+  // derived from the same relative link text.
+  const worktreeSideRoot =
+    targetDestinationRoot ?? (isInternalSymlink(target) ? path.resolve(path.dirname(destPath), target) : undefined);
+  return rerouteCopiedDir(ctx, resolvedTarget, destPath, entryRelPath, {
+    sourceRoot: resolvedTarget,
+    destinationRoot: worktreeSideRoot ?? destPath,
+    currentDestinationRoot: worktreeSideRoot
+  });
 }
 
 /**
@@ -2232,29 +2432,38 @@ async function materializeSymlinkEntry(
  * @param destPath - Absolute destination path.
  * @param entryRelPath - Repository-relative POSIX path of the entry, or
  *   undefined when the caller passed no relative path.
+ * @param materializedTree - Source/destination correspondence when this link
+ *   is a child of a materialized package tree.
  * @returns Count of internal workspace symlinks recreated at `destPath`.
  */
 async function rerouteSymlinkEntry(
   ctx: RerouteWalkContext,
   sourcePath: string,
   destPath: string,
-  entryRelPath?: string
+  entryRelPath?: string,
+  materializedTree?: MaterializedTreeContext
 ): Promise<number> {
   const { policy } = ctx;
   const target = await fs.readlink(sourcePath);
+  const resolvedTarget = path.resolve(path.dirname(sourcePath), target);
+  const targetDestinationRoot =
+    materializedTree !== undefined ? materializedTarget(materializedTree, resolvedTarget) : undefined;
   if (
     policy !== undefined &&
     entryRelPath !== undefined &&
     (policy.isOmitAncestor(entryRelPath) ||
       (policySkips(policy, entryRelPath) && !directlyCopiedEntry(policy, entryRelPath)))
   ) {
-    const resolvedTarget = path.resolve(path.dirname(sourcePath), target);
     if (await targetIsDirectory(resolvedTarget)) {
-      return materializeSymlinkEntry(ctx, sourcePath, destPath, entryRelPath, target);
+      return materializeSymlinkEntry(ctx, sourcePath, destPath, entryRelPath, target, targetDestinationRoot);
     }
   }
   if (policySkips(policy, entryRelPath)) {
     return 0;
+  }
+  if (targetDestinationRoot !== undefined && targetDestinationRoot !== destPath) {
+    await replaceSymlink(path.relative(path.dirname(destPath), targetDestinationRoot), destPath);
+    return 1;
   }
   if (isInternalSymlink(target)) {
     await replaceSymlink(target, destPath);
@@ -2273,6 +2482,8 @@ interface RerouteNodeModulesOptions {
    * repository-relative path of each entry for policy classification.
    */
   relativePath?: string;
+  /** Source checkout root used to resolve source workspace declarations. */
+  sourceRoot?: string;
   /**
    * Path policy query. Entries classified omit or copy — e.g. a
    * `.worktreeignore`-matched `node_modules/.vite` cache — are skipped instead
@@ -2284,13 +2495,19 @@ interface RerouteNodeModulesOptions {
    * instead of symlinked wholesale. Requires `relativePath`.
    */
   policy?: WorktreePathQuery;
+  /** Destination workspace package paths keyed by package name. */
+  workspacePackages?: ReadonlyMap<string, string>;
+  /** Source workspace package directories indexed by name for link detection. */
+  sourceWorkspacePackages?: ReadonlyMap<string, string>;
 }
 
 /**
  * Mirrors a node_modules tree into the worktree using symlinks.
  *
- * Internal workspace links keep their original relative targets while external
- * links and non-link entries are represented as symlinks to source paths.
+ * Declared workspace packages link relatively to their matching package
+ * directory in the destination checkout. Ordinary internal links keep their
+ * relative targets, while external links and non-link entries are represented
+ * as symlinks to source paths.
  *
  * When a {@link WorktreePathQuery} policy is supplied (with `relativePath`),
  * the policy decides each entry: omitted entries are never provisioned,
@@ -2304,8 +2521,8 @@ interface RerouteNodeModulesOptions {
  * symlink. Symlink entries — the workspaces shape, where node_modules entries
  * are links into packages/ — get the same treatment: an entry whose interior
  * is ruled is materialized as a real tree at the link path, with its share
- * children linking into the worktree's own counterpart of the target (relative
- * internal targets) or the resolved external target, never a wholesale link.
+ * children linking into a destination counterpart when available or the
+ * resolved source target otherwise, never a wholesale link.
  * `@`-scope directories are always real with per-package classification, so
  * specialized provisioning never bypasses the repository policy.
  *
@@ -2314,7 +2531,15 @@ interface RerouteNodeModulesOptions {
  * @returns Count of internal workspace symlinks recreated by target path.
  */
 export async function rerouteNodeModules(opts: RerouteNodeModulesOptions): Promise<number> {
-  const { sourceNodeModules, destNodeModules, relativePath, policy } = opts;
+  const {
+    sourceNodeModules,
+    destNodeModules,
+    relativePath,
+    sourceRoot,
+    policy,
+    workspacePackages,
+    sourceWorkspacePackages
+  } = opts;
 
   try {
     await fs.lstat(sourceNodeModules);
@@ -2338,7 +2563,7 @@ export async function rerouteNodeModules(opts: RerouteNodeModulesOptions): Promi
 
   await fs.mkdir(destNodeModules, { recursive: true });
 
-  const ctx: RerouteWalkContext = { policy };
+  const ctx: RerouteWalkContext = { policy, relativePath, sourceRoot, workspacePackages, sourceWorkspacePackages };
   const entries = await fs.readdir(sourceNodeModules, { withFileTypes: true });
   const counts = await Promise.all(
     entries.map(async (entry): Promise<number> => {
@@ -2409,6 +2634,56 @@ export async function enumerateReroutedNodeModules(opts: {
   return owned.map((relativePath) => ({ relativePath, sourceNodeModules: path.join(sourceRoot, relativePath) }));
 }
 
+/**
+ * Reads declared workspace package names from a checkout and maps each name
+ * to its package directory.
+ *
+ * Node_modules entries are matched by package name, not by the source entry's
+ * symlink spelling or whether an earlier worktree materialized that entry as
+ * a real directory. A malformed, unnamed, duplicate, or out-of-checkout
+ * package target fails closed before the reroute can link it.
+ *
+ * @param checkoutRoot - Checkout root containing the workspace declarations.
+ * @returns Workspace package names mapped to verified package directories.
+ */
+async function enumerateWorkspacePackageTargets(checkoutRoot: string): Promise<Map<string, string>> {
+  const canonicalRoot = await fs.realpath(checkoutRoot);
+  const packageDirs = await enumerateWorkspacePackageDirs(checkoutRoot);
+  const targets = new Map<string, string>();
+
+  for (const relativePath of packageDirs) {
+    const packagePath = path.resolve(checkoutRoot, relativePath);
+    let manifestContent: string;
+    try {
+      manifestContent = await fs.readFile(path.join(packagePath, 'package.json'), 'utf-8');
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw error;
+    }
+
+    const manifest: unknown = JSON.parse(manifestContent);
+    if (typeof manifest !== 'object' || manifest === null || !('name' in manifest)) {
+      throw new Error(`Workspace package at ${relativePath} has no name; cannot map its node_modules link`);
+    }
+    const name = (manifest as { name?: unknown }).name;
+    if (typeof name !== 'string' || name.length === 0) {
+      throw new Error(`Workspace package at ${relativePath} has an invalid name; cannot map its node_modules link`);
+    }
+
+    const canonicalPackagePath = await fs.realpath(packagePath);
+    if (relativeWithinRoot(canonicalRoot, canonicalPackagePath) === undefined) {
+      throw new Error(`Workspace package ${name} resolves outside its checkout: ${relativePath}`);
+    }
+    const previous = targets.get(name);
+    if (previous !== undefined) {
+      throw new Error(`Workspace package name ${name} is declared more than once: ${previous} and ${relativePath}`);
+    }
+    targets.set(name, packagePath);
+  }
+
+  return targets;
+}
+
 interface RerouteAllNodeModulesOptions {
   sourceRoot: string;
   worktreeDir: string;
@@ -2445,6 +2720,10 @@ export async function rerouteAllNodeModules(opts: RerouteAllNodeModulesOptions):
   if (reroutedEntries.length === 0) {
     return 0;
   }
+  const [workspacePackages, sourceWorkspacePackages] = await Promise.all([
+    enumerateWorkspacePackageTargets(worktreeDir),
+    enumerateWorkspacePackageTargets(sourceRoot)
+  ]);
 
   // Each entry mirrors into a distinct destination node_modules tree (the root
   // and one per workspace package), so they write disjoint paths and run
@@ -2470,7 +2749,10 @@ export async function rerouteAllNodeModules(opts: RerouteAllNodeModulesOptions):
         sourceNodeModules: entry.sourceNodeModules,
         destNodeModules,
         relativePath: entry.relativePath,
-        policy
+        sourceRoot,
+        policy,
+        workspacePackages,
+        sourceWorkspacePackages
       });
     })
   );

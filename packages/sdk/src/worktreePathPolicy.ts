@@ -523,10 +523,10 @@ function isUnderOwnedNodeModules(rel: string, ownedNodeModules: string[]): boole
  * ownership from this same function, so policy coverage and mirror reach agree
  * by construction instead of each maintaining their own idea of a workspace
  * (the historical hardcoded `packages/*` one-level shape silently excluded
- * globs like `apps/*` or `libs/*`). Returns `[]` when `package.json` is
- * absent or has no `workspaces` field, mirroring the rerouter's early-return
- * behavior. A non-array `workspaces` value (an object form never emitted by
- * yarn) contributes no globs, keeping root-only ownership.
+ * globs like `apps/*` or `libs/*`). Supports both array-form declarations and
+ * Yarn's object form with a `packages` array. Returns `[]` when `package.json`
+ * is absent or has no `workspaces` field, mirroring the rerouter's early-return
+ * behavior.
  *
  * The walk is bounded by the shared enumeration deadline when one is supplied
  * (the policy phase), so an out-of-control glob walk fails closed instead of
@@ -551,7 +551,7 @@ export async function enumerateOwnedNodeModules(sourceRoot: string, deadline?: n
 
   const workspaces = packageJson.workspaces;
   if (workspaces === undefined) return [];
-  const globs = Array.isArray(workspaces) ? (workspaces as string[]) : [];
+  const globs = workspaceGlobs(workspaces);
 
   const owned = ['node_modules'];
   for (const packageDir of await expandWorkspacePackageDirs(sourceRoot, globs, deadline)) {
@@ -566,6 +566,50 @@ export async function enumerateOwnedNodeModules(sourceRoot: string, deadline?: n
     }
   }
   return owned;
+}
+
+/**
+ * Expands the workspace package directories declared by a checkout's root
+ * package manifest.
+ *
+ * Both Yarn forms are accepted: `workspaces: ['packages/*']` and
+ * `workspaces: { packages: ['packages/*'] }`. Directories are returned in
+ * repository-relative POSIX form and are resolved against this checkout, so
+ * callers can map package names to the matching destination paths.
+ *
+ * @param sourceRoot - Checkout root holding `package.json`.
+ * @param deadline - Optional shared enumeration deadline (fail-closed).
+ * @returns Existing package directories from the declared workspace globs.
+ * @throws {Error} When `package.json` exists but is unreadable or unparsable.
+ */
+export async function enumerateWorkspacePackageDirs(sourceRoot: string, deadline?: number): Promise<string[]> {
+  let packageJson: { workspaces?: unknown };
+  try {
+    packageJson = JSON.parse(await fs.readFile(path.join(sourceRoot, 'package.json'), 'utf-8'));
+  } catch (error: unknown) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+
+  if (packageJson.workspaces === undefined) return [];
+  return expandWorkspacePackageDirs(sourceRoot, workspaceGlobs(packageJson.workspaces), deadline);
+}
+
+/**
+ * Extracts workspace glob strings from either supported Yarn manifest shape.
+ *
+ * @param workspaces - The root package.json `workspaces` value.
+ * @returns Valid string globs; malformed entries do not become filesystem paths.
+ */
+function workspaceGlobs(workspaces: unknown): string[] {
+  const entries = Array.isArray(workspaces)
+    ? workspaces
+    : typeof workspaces === 'object' &&
+        workspaces !== null &&
+        Array.isArray((workspaces as { packages?: unknown }).packages)
+      ? (workspaces as { packages: unknown[] }).packages
+      : [];
+  return entries.filter((entry): entry is string => typeof entry === 'string');
 }
 
 /**
