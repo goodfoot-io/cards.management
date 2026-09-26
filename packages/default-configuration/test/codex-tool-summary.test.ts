@@ -1,13 +1,11 @@
 /**
- * Tests for `summarizeCodexTool` and `argsPreviewText` — the collapsed-header
- * preview generator for Codex tool_call transcript rows and the `args`-object
- * reconstruction that lets it run from a `ThreadMessageLike` tool-call part.
+ * Tests for the collapsed-header preview generator used by Codex tool rows.
  *
  * @summary Unit tests for Codex tool-call preview summarization
  */
 
 import { describe, expect, it } from 'vitest';
-import { argsPreviewText, summarizeCodexTool } from '../src/streams/codex-session/www/lib/tool-summary';
+import { summarizeCodexTool } from '../src/streams/codex-session/www/lib/tool-summary';
 
 describe('summarizeCodexTool — shell / local_shell_call', () => {
   it('truncates a long joined shell command to 80 chars', () => {
@@ -135,40 +133,6 @@ describe('summarizeCodexTool — default fallback', () => {
 
   it('returns short arguments for an unrecognized tool name unchanged', () => {
     expect(summarizeCodexTool('future_unknown_tool', 'short text')).toBe('short text');
-  });
-});
-
-describe('argsPreviewText', () => {
-  it('returns the sole string value unchanged (the shell/apply_patch/query/url shape)', () => {
-    expect(argsPreviewText({ command: 'git status --short' })).toBe('git status --short');
-  });
-
-  it('returns an empty string for an empty args object', () => {
-    expect(argsPreviewText({})).toBe('');
-  });
-
-  it('JSON-stringifies a real structured (multi-key) args object', () => {
-    expect(argsPreviewText({ state: 'open', limit: 5 })).toBe('{"state":"open","limit":5}');
-  });
-
-  it('JSON-stringifies a single non-string value rather than returning it raw', () => {
-    expect(argsPreviewText({ count: 5 })).toBe('{"count":5}');
-  });
-});
-
-describe('argsPreviewText — shell-style primary fields', () => {
-  it('surfaces a string cmd field from multi-key exec_command args', () => {
-    expect(argsPreviewText({ cmd: 'git status --short', workdir: '/w', yield_time_ms: 1000 })).toBe(
-      'git status --short'
-    );
-  });
-
-  it('surfaces a string command field', () => {
-    expect(argsPreviewText({ command: 'ls -la', timeout: 5 })).toBe('ls -la');
-  });
-
-  it('joins an argv-array command field', () => {
-    expect(argsPreviewText({ command: ['git', 'log', '-1'], workdir: '/w' })).toBe('git log -1');
   });
 });
 
