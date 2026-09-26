@@ -5,7 +5,7 @@
  * @module components/expanded/CodexPresentation
  */
 
-import type { ReactElement } from 'react';
+import { type ReactElement, useMemo } from 'react';
 import { ToolInputTable } from '../../../../lib/accordions';
 import { JsonBlock } from '../../../../lib/JsonBlock';
 import { looksLikeMarkdown, renderMarkdownNodes } from '../../../../lib/markdown';
@@ -16,6 +16,7 @@ import {
   type SessionRenderContext
 } from '../../../../lib/session/SessionContent';
 import type { SessionLeaf } from '../../../../lib/session/types';
+import { parseCodexLine } from '../../lib/parser';
 import type { CodexNativeDetail, CodexPayloads, CodexToolData } from '../../lib/project-session';
 import { summarizeCodexTool } from '../../lib/tool-summary';
 
@@ -50,6 +51,30 @@ function Body({
   }
   return looksLikeMarkdown(text) ? (
     <div className="session-markdown">{renderMarkdownNodes(text, leaf.id)}</div>
+  ) : (
+    <pre className="session-raw">{text}</pre>
+  );
+}
+
+/**
+ * Bounds raw event details while preserving their existing preformatted appearance.
+ * @param root0 - Raw detail presentation inputs.
+ * @param root0.text - Complete native detail text.
+ * @param root0.leaf - Stable leaf identity and provenance.
+ * @param root0.context - Disclosure and layout hooks.
+ * @returns A bounded or preformatted raw detail.
+ */
+function RawBody({
+  text,
+  leaf,
+  context
+}: {
+  text: string;
+  leaf: SessionLeaf;
+  context: SessionRenderContext;
+}): ReactElement {
+  return text.length > 65_536 ? (
+    <BoundedText text={text} id={leaf.id} context={context} slot="event-detail" />
   ) : (
     <pre className="session-raw">{text}</pre>
   );
@@ -111,16 +136,24 @@ function ToolBody({
   leaf: SessionLeaf;
   context: SessionRenderContext;
 }): ReactElement {
-  const input = parsedInput(data);
+  const argumentsText = useMemo(
+    () =>
+      data.deferredArgumentsRecord === undefined
+        ? data.argumentsText
+        : formatDeferredArguments(data.deferredArgumentsRecord),
+    [data.argumentsText, data.deferredArgumentsRecord]
+  );
+  const input = parsedInput(data, argumentsText);
+  const hasArguments = data.argumentsText.length > 0 || data.deferredArgumentsRecord !== undefined;
   return (
     <>
-      {data.argumentsText ? (
+      {hasArguments ? (
         <>
           <div className="session-label">{data.argsLabel}</div>
           {input ? (
             <ToolInputTable input={input} />
           ) : (
-            <Body text={data.argumentsText} leaf={leaf} context={context} slot="input" />
+            <Body text={argumentsText} leaf={leaf} context={context} slot="input" />
           )}
         </>
       ) : null}
@@ -160,10 +193,10 @@ function NativeDetail({
   );
 }
 
-function parsedInput(data: CodexToolData): Record<string, unknown> | undefined {
+function parsedInput(data: CodexToolData, text: string): Record<string, unknown> | undefined {
   if (!data.prettyPrinted) return undefined;
   try {
-    const parsed: unknown = JSON.parse(data.argumentsText);
+    const parsed: unknown = JSON.parse(text);
     return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
       ? (parsed as Record<string, unknown>)
       : undefined;
@@ -172,17 +205,29 @@ function parsedInput(data: CodexToolData): Record<string, unknown> | undefined {
   }
 }
 
+/**
+ * Formats oversized object-shaped tool input only after its disclosure mounts.
+ * @param nativeRecord - Original tool-search JSONL record.
+ * @returns Formatted tool arguments or the retained original record.
+ */
+function formatDeferredArguments(nativeRecord: string): string {
+  const line = parseCodexLine(nativeRecord);
+  if (line.kind !== 'response_item' || line.payload.type !== 'tool_search_call') return nativeRecord;
+  const input = line.payload.arguments;
+  return input === undefined ? '' : (JSON.stringify(input, null, 2) ?? String(input));
+}
+
 /** Every registry key is implemented so a provider row or part remains renderable through either seam. */
 export const CODEX_PRESENTATION: SessionProviderRegistry<CodexPayloads> = {
   imageNote: ({ data }) => <ImageNote data={data} />,
-  eventActivity: ({ data, leaf }) => (
+  eventActivity: ({ data, leaf, ...context }) => (
     <div className="cx-event">
       <div className="cx-event-label">{data.label}</div>
       {data.detailText ? (
         data.label === 'plan_update' && looksLikeMarkdown(data.detailText) ? (
           <div className="session-markdown">{renderMarkdownNodes(data.detailText, leaf.id)}</div>
         ) : (
-          <pre className="session-raw">{data.detailText}</pre>
+          <RawBody text={data.detailText} leaf={leaf} context={context} />
         )
       ) : null}
     </div>

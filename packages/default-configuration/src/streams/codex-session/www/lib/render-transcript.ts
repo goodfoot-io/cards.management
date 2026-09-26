@@ -23,6 +23,9 @@ import { countImageItems, createTurnDedupMatcher, extractMessageText } from './d
 import type { ContentItem, EventMsgPayload, ResponseItemPayload } from './parser.js';
 import { type CodexRolloutLine, parseCodexLine } from './parser.js';
 
+/** Expanded Codex JSON presentation stays raw beyond the shared 65,536-character paging threshold. */
+const MAX_PRETTY_ARGUMENT_CHARS = 65_536;
+
 /**
  * A rendered transcript item produced by {@link renderCodexTranscript}.
  */
@@ -62,6 +65,8 @@ export type TranscriptItem =
       severity?: 'normal' | 'error';
       /** Preview text shown when `severity` is `'error'` (e.g. `'✗ exit 1'`, `'patch failed'`). */
       errorLabel?: string;
+      /** Original native line for oversized object-shaped input, formatted only after opening the disclosure. */
+      deferredArgumentsRecord?: string;
       timestamp?: string;
     }
   | { kind: 'orphan_output'; callId: string; outputText: string; imageCount?: number; timestamp?: string }
@@ -148,7 +153,7 @@ export function renderCodexTranscript(lines: string[]): TranscriptItem[] {
       }
     }
 
-    const produced = lineToItems(line);
+    const produced = lineToItems(line, raw);
 
     for (const item of produced) {
       if (item.kind === 'tool_call') {
@@ -195,13 +200,18 @@ export function renderCodexTranscript(lines: string[]): TranscriptItem[] {
  * outside {@link parseArguments}'s try/catch.
  *
  * @param payload - A tool-call `response_item` payload (`payload.type` selects the variant).
- * @returns The tool name, the label for the surfaced field, the display text, and whether it was pretty-printed.
+ * @param nativeRecord - Original JSONL line used to defer oversized object-shaped input.
+ * @returns The tool name, surfaced field label and text, formatting state, and any deferred native record.
  */
-export function extractToolCall(payload: Record<string, unknown> & { type: string }): {
+export function extractToolCall(
+  payload: Record<string, unknown> & { type: string },
+  nativeRecord?: string
+): {
   name: string;
   argsLabel: string;
   argumentsText: string;
   prettyPrinted: boolean;
+  deferredArgumentsRecord?: string;
 } {
   const nameField = typeof payload['name'] === 'string' ? payload['name'] : payload.type;
 
@@ -245,6 +255,15 @@ export function extractToolCall(payload: Record<string, unknown> & { type: strin
 
     case 'tool_search_call': {
       const argsObj = payload['arguments'];
+      if (argsObj !== undefined && nativeRecord !== undefined && nativeRecord.length > MAX_PRETTY_ARGUMENT_CHARS) {
+        return {
+          name: nameField,
+          argsLabel: 'arguments',
+          argumentsText: '',
+          prettyPrinted: false,
+          deferredArgumentsRecord: nativeRecord
+        };
+      }
       let text = argsObj === undefined ? '' : JSON.stringify(argsObj, null, 2);
       if (typeof payload['execution'] === 'string' && payload['execution'].length > 0) {
         text = text.length > 0 ? `${text}\nexecution: ${payload['execution']}` : `execution: ${payload['execution']}`;
@@ -316,10 +335,12 @@ function extractWebSearch(action: unknown): { text: string; label: string } {
  * The returned item carries no timestamp; the caller stamps it.
  *
  * @param payload - An `event_msg` payload (`payload.type` selects the event).
+ * @param nativeRecord - Original JSONL line used to retain oversized object details.
  * @returns An `event_activity` item (without timestamp), or `undefined` to skip.
  */
 export function eventActivity(
-  payload: Record<string, unknown> & { type: string }
+  payload: Record<string, unknown> & { type: string },
+  nativeRecord?: string
 ): Extract<TranscriptItem, { kind: 'event_activity' }> | undefined {
   switch (payload.type) {
     case 'mcp_tool_call_end': {
@@ -332,6 +353,9 @@ export function eventActivity(
         server = typeof inv.server === 'string' ? inv.server : '';
         tool = typeof inv.tool === 'string' ? inv.tool : '';
         args = inv.arguments;
+      }
+      if (nativeRecord !== undefined && nativeRecord.length > MAX_PRETTY_ARGUMENT_CHARS) {
+        return { kind: 'event_activity', label: `mcp: ${server}.${tool}`, detailText: nativeRecord };
       }
       const detailParts: string[] = [];
       if (args !== undefined) {
@@ -438,15 +462,15 @@ function summarizePlanItem(item: unknown): string | undefined {
 /**
  * Parses a `function_call.arguments` raw string for display.
  *
- * Attempts `JSON.parse` and pretty-prints on success. Falls back to the raw
- * string on failure — no throw, no blank output. This is the only place that
- * wraps `JSON.parse` for arguments; callers never call `JSON.parse` directly
- * on this value.
+ * Attempts `JSON.parse` and pretty-prints values within the session paging
+ * threshold. Larger strings stay unchanged, and invalid JSON falls back to
+ * its raw form without throwing or blanking output.
  *
  * @param raw - The raw arguments string from the `function_call` payload.
  * @returns `{ text, prettyPrinted }` — the display string and whether it was pretty-printed.
  */
 export function parseArguments(raw: string): { text: string; prettyPrinted: boolean } {
+  if (raw.length > MAX_PRETTY_ARGUMENT_CHARS) return { text: raw, prettyPrinted: false };
   try {
     const parsed: unknown = JSON.parse(raw);
     return { text: JSON.stringify(parsed, null, 2), prettyPrinted: true };
@@ -559,9 +583,10 @@ export function shellExitSeverity(outputText: string | undefined): {
  * line here.
  *
  * @param line - A pre-parsed Codex rollout line.
+ * @param nativeRecord - Original JSONL line used to retain or defer oversized content.
  * @returns Zero or more transcript items derived from this line.
  */
-export function lineToItems(line: CodexRolloutLine): TranscriptItem[] {
+export function lineToItems(line: CodexRolloutLine, nativeRecord?: string): TranscriptItem[] {
   switch (line.kind) {
     case 'malformed':
       return [{ kind: 'malformed', rawLine: line.raw }];
@@ -598,10 +623,10 @@ export function lineToItems(line: CodexRolloutLine): TranscriptItem[] {
     }
 
     case 'event_msg':
-      return eventMsgToItems(line.payload, line.timestamp);
+      return eventMsgToItems(line.payload, line.timestamp, nativeRecord);
 
     case 'response_item':
-      return responseItemToItems(line.payload, line.timestamp);
+      return responseItemToItems(line.payload, line.timestamp, nativeRecord);
 
     default:
       return [];
@@ -616,9 +641,10 @@ export function lineToItems(line: CodexRolloutLine): TranscriptItem[] {
  *
  * @param rawPayload - The `event_msg` payload.
  * @param timestamp - The envelope timestamp (empty string when absent).
+ * @param nativeRecord - Original JSONL line used for oversized raw activity details.
  * @returns Zero or one transcript item.
  */
-function eventMsgToItems(rawPayload: EventMsgPayload, timestamp: string): TranscriptItem[] {
+function eventMsgToItems(rawPayload: EventMsgPayload, timestamp: string, nativeRecord?: string): TranscriptItem[] {
   const ts = timestamp === '' ? undefined : timestamp;
   const payload = rawPayload as Record<string, unknown> & { type: string };
   const message = typeof payload['message'] === 'string' ? payload['message'] : '';
@@ -647,7 +673,7 @@ function eventMsgToItems(rawPayload: EventMsgPayload, timestamp: string): Transc
   // Persisted high-level tool-activity events (mcp/web_search/image/patch/plan)
   // render as event_activity; all other event_msg types (e.g. token_count,
   // folded separately into the compact card) produce no item.
-  const activity = eventActivity(payload);
+  const activity = eventActivity(payload, nativeRecord);
   if (activity !== undefined) {
     return [{ ...activity, timestamp: ts }];
   }
@@ -702,9 +728,14 @@ function extractReasoningContent(content: unknown[]): string {
  *
  * @param rawPayload - The `response_item` payload.
  * @param timestamp - The envelope timestamp (empty string when absent).
+ * @param nativeRecord - Original JSONL line used to defer oversized object-shaped input.
  * @returns Zero or more transcript items.
  */
-function responseItemToItems(rawPayload: ResponseItemPayload, timestamp: string): TranscriptItem[] {
+function responseItemToItems(
+  rawPayload: ResponseItemPayload,
+  timestamp: string,
+  nativeRecord?: string
+): TranscriptItem[] {
   const ts = timestamp === '' ? undefined : timestamp;
   const payload = rawPayload as Record<string, unknown> & { type: string };
 
@@ -741,7 +772,10 @@ function responseItemToItems(rawPayload: ResponseItemPayload, timestamp: string)
     case 'web_search_call':
     case 'image_generation_call': {
       const callId = typeof payload['call_id'] === 'string' ? payload['call_id'] : '';
-      const { name, argsLabel, argumentsText, prettyPrinted } = extractToolCall(payload);
+      const { name, argsLabel, argumentsText, prettyPrinted, deferredArgumentsRecord } = extractToolCall(
+        payload,
+        nativeRecord
+      );
       return [
         {
           kind: 'tool_call',
@@ -750,6 +784,7 @@ function responseItemToItems(rawPayload: ResponseItemPayload, timestamp: string)
           argumentsText,
           argsLabel,
           prettyPrinted,
+          ...(deferredArgumentsRecord === undefined ? {} : { deferredArgumentsRecord }),
           hasOutput: false,
           timestamp: ts
         }

@@ -34,6 +34,7 @@ export interface CodexToolData {
   readonly argsLabel: string;
   readonly argumentsText: string;
   readonly prettyPrinted: boolean;
+  readonly deferredArgumentsRecord?: string;
   readonly outputText?: string;
   readonly outputImageCount?: number;
   readonly status: 'pending' | 'complete' | 'error' | 'orphan';
@@ -64,6 +65,7 @@ export type CodexRow = SessionRow<CodexPayloads>;
 
 interface StoredEntry {
   readonly item: TranscriptItem;
+  readonly line: CodexRolloutLine;
   readonly id: string;
   readonly source: Pick<NativeTranscriptSource, 'sourceKey' | 'generation'>;
   readonly provenance: NativeRecordProvenance[];
@@ -146,7 +148,7 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
       }
     }
 
-    const items = lineToItems(line);
+    const items = lineToItems(line, record.text);
     const knownUnsupportedEvent = line.kind === 'event_msg' && isUnsupportedEvent(line.payload);
     const retainLine = (label: string, raw = record.text): void => {
       const item: TranscriptItem = { kind: 'unknown_item', raw: raw, timestamp: lineTimestamp(line) };
@@ -270,7 +272,7 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
 
     const stableRows = rows.map((row) => {
       const previous = state.previousRows.get(row.id);
-      return previous && jsonEqual(previous, row) ? previous : row;
+      return previous && projectionEqual(previous, row) ? previous : row;
     });
     state.previousRows.clear();
     for (const row of stableRows) state.previousRows.set(row.id, row);
@@ -330,7 +332,7 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
           provenance: provenanceFor(entry, 'message/text')
         });
       }
-      const imageCount = messageImageCount(entryLine(entry), item);
+      const imageCount = messageImageCount(entry.line, item);
       if (imageCount > 0) {
         parts.push({
           id: identityAt(entry, 'message/images'),
@@ -340,7 +342,7 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
           provenance: provenanceFor(entry, 'message/images')
         });
       }
-      for (const rawPart of unsupportedMessageParts(entryLine(entry))) {
+      for (const rawPart of unsupportedMessageParts(entry)) {
         parts.push({
           id: identityAt(entry, rawPart.selector),
           kind: 'raw',
@@ -387,7 +389,7 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
                 }
               ]
             : [];
-      for (const rawPart of unsupportedReasoningParts(entryLine(entry))) {
+      for (const rawPart of unsupportedReasoningParts(entry)) {
         parts.push({
           id: identityAt(entry, rawPart.selector),
           kind: 'raw',
@@ -407,6 +409,7 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
         argsLabel: item.argsLabel ?? 'arguments',
         argumentsText: item.argumentsText,
         prettyPrinted: item.prettyPrinted,
+        deferredArgumentsRecord: item.deferredArgumentsRecord,
         outputText: item.outputText,
         outputImageCount: item.outputImageCount,
         status: item.severity === 'error' ? 'error' : item.hasOutput ? 'complete' : 'pending',
@@ -501,7 +504,7 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
             id: identityAt(entry, 'unknown/raw'),
             kind: 'raw',
             label: 'Unrecognized item',
-            text: serialize(item.raw),
+            text: entry.rawLine,
             reason: 'unknown',
             provenance: provenanceFor(entry, 'unknown/raw')
           }
@@ -599,6 +602,7 @@ function addEntry(
   const provenance = withSelector(record.provenance, selector, nativeEventId(line));
   const entry: StoredEntry = {
     item,
+    line,
     id: sessionIdentity(state.source, 'codex-row', `${record.provenance.lineNumber}/${selector}`),
     source: state.source,
     provenance: [provenance],
@@ -651,10 +655,6 @@ function detailForRaw(entry: StoredEntry, label: string): CodexNativeDetail {
     text: entry.rawLine,
     provenance: entry.provenance
   };
-}
-
-function entryLine(entry: StoredEntry): CodexRolloutLine {
-  return parseCodexLine(entry.rawLine);
 }
 
 function lineTimestamp(line: CodexRolloutLine): string | undefined {
@@ -760,7 +760,8 @@ function messageImageCount(line: CodexRolloutLine, item: TranscriptItem): number
   return 0;
 }
 
-function unsupportedMessageParts(line: CodexRolloutLine): { selector: string; label: string; text: string }[] {
+function unsupportedMessageParts(entry: StoredEntry): { selector: string; label: string; text: string }[] {
+  const line = entry.line;
   if (line.kind !== 'response_item' || line.payload.type !== 'message' || !Array.isArray(line.payload.content))
     return [];
   return line.payload.content.flatMap((content, index) => {
@@ -769,13 +770,14 @@ function unsupportedMessageParts(line: CodexRolloutLine): { selector: string; la
       {
         selector: `content/${index}`,
         label: `Unsupported content · ${content.type || 'unknown'}`,
-        text: serialize(content)
+        text: entry.rawLine
       }
     ];
   });
 }
 
-function unsupportedReasoningParts(line: CodexRolloutLine): { selector: string; label: string; text: string }[] {
+function unsupportedReasoningParts(entry: StoredEntry): { selector: string; label: string; text: string }[] {
+  const line = entry.line;
   if (line.kind !== 'response_item' || line.payload.type !== 'reasoning') return [];
   const parts: { selector: string; label: string; text: string }[] = [];
   const summary = Array.isArray(line.payload.summary) ? line.payload.summary : [];
@@ -784,7 +786,7 @@ function unsupportedReasoningParts(line: CodexRolloutLine): { selector: string; 
     parts.push({
       selector: `reasoning/summary/${index}`,
       label: 'Unsupported reasoning summary',
-      text: serialize(item)
+      text: entry.rawLine
     });
   });
   const content = Array.isArray(line.payload.content) ? line.payload.content : [];
@@ -799,7 +801,7 @@ function unsupportedReasoningParts(line: CodexRolloutLine): { selector: string; 
     parts.push({
       selector: `reasoning/content/${index}`,
       label: 'Unsupported reasoning content',
-      text: serialize(item)
+      text: entry.rawLine
     });
   });
   if (typeof line.payload.encrypted_content === 'string') {
@@ -836,15 +838,25 @@ function hasToolError(entries: readonly StoredEntry[]): boolean {
   return entries.some((entry) => entry.item.kind === 'tool_call' && entry.item.severity === 'error');
 }
 
-function serialize(value: unknown): string {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
+function projectionEqual(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+  const leftIsArray = Array.isArray(left);
+  if (leftIsArray !== Array.isArray(right)) return false;
+  if (leftIsArray) {
+    const leftArray = left as unknown[];
+    const rightArray = right as unknown[];
+    return (
+      leftArray.length === rightArray.length &&
+      leftArray.every((value, index) => projectionEqual(value, rightArray[index]))
+    );
   }
-}
-
-function jsonEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+  const leftObject = left as Record<string, unknown>;
+  const rightObject = right as Record<string, unknown>;
+  const leftKeys = Object.keys(leftObject);
+  const rightKeys = Object.keys(rightObject);
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every((key) => Object.hasOwn(rightObject, key) && projectionEqual(leftObject[key], rightObject[key]))
+  );
 }

@@ -4,7 +4,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { createElement } from 'react';
+import { createElement, type ReactElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { CODEX_PARTS, CODEX_ROWS } from '../src/streams/codex-session/www/components/expanded/CodexPresentation';
@@ -13,6 +13,7 @@ import {
   type CodexRow,
   codexSessionProjector
 } from '../src/streams/codex-session/www/lib/project-session';
+import { LeafViewState, useOwnedLeafViewState } from '../src/streams/lib/session/leaf-view-state';
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import { SessionContent } from '../src/streams/lib/session/SessionContent';
 import type { NativeTranscriptSource, SessionRow } from '../src/streams/lib/session/types';
@@ -57,6 +58,50 @@ function provider<T extends keyof CodexPayloads>(
     }
   }
   return matches;
+}
+
+function renderSession(rows: readonly CodexRow[], openIds: readonly string[] = []): string {
+  return renderToStaticMarkup(
+    createElement(SessionContent<CodexPayloads>, {
+      rows,
+      providerParts: CODEX_PARTS,
+      providerRows: CODEX_ROWS,
+      disclosures: { open: new Map(openIds.map((id) => [id, true])), onOpenChange: () => undefined }
+    })
+  );
+}
+
+/**
+ * Seeds a real shared inspection owner at one page to verify retained tail content.
+ * @param rows - Native Codex semantic rows.
+ * @param openIds - Controlled disclosures to open during rendering.
+ * @param detail - Inspection page to seed in the real shared owner.
+ * @param detail.id - Stable leaf or tool row identity.
+ * @param detail.slot - Independent inspection slot within that identity.
+ * @param detail.page - Zero-based page to render.
+ * @returns Static markup from the real shared renderer at the selected page.
+ */
+function renderSessionAtPage(
+  rows: readonly CodexRow[],
+  openIds: readonly string[],
+  detail: { id: string; slot: string; page: number }
+): string {
+  const disclosures = { open: new Map(openIds.map((id) => [id, true])), onOpenChange: () => undefined };
+  function SeededSession(): ReactElement {
+    const state = useOwnedLeafViewState(rows, disclosures);
+    state.pages.set(detail.id, new Map([[detail.slot, detail.page]]));
+    return createElement(
+      LeafViewState.Provider,
+      { value: state },
+      createElement(SessionContent<CodexPayloads>, {
+        rows,
+        providerParts: CODEX_PARTS,
+        providerRows: CODEX_ROWS,
+        disclosures
+      })
+    );
+  }
+  return renderToStaticMarkup(createElement(SeededSession));
 }
 
 describe('Codex native session projection', () => {
@@ -194,5 +239,144 @@ describe('Codex native session projection', () => {
     expect(html).toContain('patch failed');
     expect(html).toContain('future_block');
     expect(html).toContain('future_output');
+  });
+
+  it('keeps five-megabyte tool arguments raw until opened and exposes bounded paging', () => {
+    const tail = 'tail-marker';
+    const endPadding = 'y'.repeat(100);
+    const largeValue = `${'x'.repeat(5 * 1024 * 1024 - tail.length - endPadding.length)}${tail}${endPadding}`;
+    const argumentsText = `{"value":"${largeValue}"}`;
+    const nativeLine = JSON.stringify({
+      timestamp: '2026-09-26T12:00:00Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'large_tool',
+        call_id: 'large-tool-call',
+        arguments: argumentsText
+      }
+    });
+    const rows = projected(replayTranscript(codexSessionProjector, source([nativeLine])).rows);
+    const tool = rows.find((row) => row.kind === 'provider' && row.providerKind === 'tool');
+    expect(tool?.kind).toBe('provider');
+    if (!tool || tool.kind !== 'provider' || tool.providerKind !== 'tool') throw new Error('Expected Codex tool row');
+    expect(tool.data.argumentsText).toBe(argumentsText);
+    expect(tool.data.prettyPrinted).toBe(false);
+    expect(tool.data.details[0]?.text).toBe(nativeLine);
+
+    const closed = renderSession(rows);
+    expect(closed).toContain('aria-expanded="false"');
+    expect(closed.length).toBeLessThan(2_000);
+    const opened = renderSession(rows, [tool.id]);
+    expect(opened).toContain(`of ${argumentsText.length}`);
+    expect(opened).toContain('Next');
+    expect(opened).toContain(largeValue.slice(0, 100));
+    expect(opened.length).toBeLessThan(70_000);
+    expect(tool.data.argumentsText.endsWith(`${tail}${endPadding}"}`)).toBe(true);
+    const lastPageIndex = Math.ceil(argumentsText.length / 16_384) - 1;
+    const tailPage = renderSessionAtPage(rows, [tool.id], {
+      id: tool.id,
+      slot: 'input',
+      page: lastPageIndex - 1
+    });
+    expect(tailPage).toContain('Next');
+    expect(tailPage).toContain(tail);
+    expect(tailPage.length).toBeLessThan(70_000);
+    const lastPage = renderSessionAtPage(rows, [tool.id], { id: tool.id, slot: 'input', page: lastPageIndex });
+    expect(lastPage).toContain('Previous');
+    expect(lastPage).toContain(endPadding.slice(-8));
+    expect(lastPage.length).toBeLessThan(70_000);
+  });
+
+  it('retains a five-megabyte unsupported payload as native JSONL and pages its opened detail', () => {
+    const tail = 'tail-marker';
+    const endPadding = 'y'.repeat(100);
+    const largeValue = `${'u'.repeat(5 * 1024 * 1024 - tail.length - endPadding.length)}${tail}${endPadding}`;
+    const nativeLine = JSON.stringify({
+      timestamp: '2026-09-26T12:00:00Z',
+      type: 'response_item',
+      payload: { type: 'future_large_variant', content: { value: largeValue } }
+    });
+    const rows = projected(replayTranscript(codexSessionProjector, source([nativeLine])).rows);
+    const raw = rows.flatMap((row) => row.parts).find((part) => part.kind === 'raw');
+    expect(raw?.kind).toBe('raw');
+    if (!raw || raw.kind !== 'raw') throw new Error('Expected unsupported raw detail');
+    expect(raw.text).toBe(nativeLine);
+
+    const closed = renderSession(rows);
+    expect(closed.length).toBeLessThan(2_000);
+    const opened = renderSession(rows, [raw.id]);
+    expect(opened).toContain(`of ${nativeLine.length}`);
+    expect(opened).toContain('Next');
+    expect(opened).toContain(largeValue.slice(0, 100));
+    expect(opened.length).toBeLessThan(70_000);
+    expect(raw.text.endsWith(`${tail}${endPadding}"}}}`)).toBe(true);
+    const lastPageIndex = Math.ceil(nativeLine.length / 16_384) - 1;
+    const lastPage = renderSessionAtPage(rows, [raw.id], { id: raw.id, slot: 'content', page: lastPageIndex });
+    expect(lastPage).toContain('Previous');
+    expect(lastPage).toContain(tail);
+    expect(lastPage).toContain(endPadding.slice(-8));
+    expect(lastPage.length).toBeLessThan(70_000);
+  });
+
+  it('defers oversized object-shaped search arguments until the tool disclosure opens', () => {
+    const tail = 'search-tail';
+    const endPadding = 'y'.repeat(100);
+    const largeValue = `${'s'.repeat(5 * 1024 * 1024 - tail.length - endPadding.length)}${tail}${endPadding}`;
+    const nativeLine = JSON.stringify({
+      timestamp: '2026-09-26T12:00:00Z',
+      type: 'response_item',
+      payload: {
+        type: 'tool_search_call',
+        call_id: 'large-search',
+        execution: 'search',
+        arguments: { query: largeValue }
+      }
+    });
+    const formattedInput = JSON.stringify({ query: largeValue }, null, 2) ?? '';
+    const rows = projected(replayTranscript(codexSessionProjector, source([nativeLine])).rows);
+    const tool = rows.find((row) => row.kind === 'provider' && row.providerKind === 'tool');
+    if (!tool || tool.kind !== 'provider' || tool.providerKind !== 'tool') throw new Error('Expected Codex tool row');
+    expect(tool.data.deferredArgumentsRecord).toBe(nativeLine);
+    expect(tool.data.argumentsText).toBe('');
+
+    const closed = renderSession(rows);
+    expect(closed.length).toBeLessThan(2_000);
+    const open = renderSession(rows, [tool.id]);
+    expect(open).toContain(`of ${formattedInput.length}`);
+    expect(open).toContain('Next');
+    expect(open).not.toContain(largeValue);
+    expect(open.length).toBeLessThan(70_000);
+    const lastPage = Math.ceil(formattedInput.length / 16_384) - 1;
+    const tailPage = renderSessionAtPage(rows, [tool.id], {
+      id: tool.id,
+      slot: 'input',
+      page: lastPage - 1
+    });
+    expect(tailPage).toContain('Next');
+    expect(tailPage).toContain(tail);
+    expect(tailPage.length).toBeLessThan(70_000);
+  });
+
+  it('retains oversized MCP event details as native JSONL and bounds their rendered page', () => {
+    const largeValue = 'm'.repeat(5 * 1024 * 1024);
+    const nativeLine = JSON.stringify({
+      timestamp: '2026-09-26T12:00:00Z',
+      type: 'event_msg',
+      payload: {
+        type: 'mcp_tool_call_end',
+        call_id: 'large-mcp-result',
+        invocation: { server: 'large-server', tool: 'large-tool', arguments: { query: largeValue } },
+        result: { content: largeValue }
+      }
+    });
+    const rows = projected(replayTranscript(codexSessionProjector, source([nativeLine])).rows);
+    const activity = provider(rows, 'eventActivity')[0];
+    expect(activity?.data.detailText).toBe(nativeLine);
+    const html = renderSession(rows);
+    expect(html).toContain(`of ${nativeLine.length}`);
+    expect(html).toContain('Next');
+    expect(html).toContain(largeValue.slice(0, 100));
+    expect(html.length).toBeLessThan(70_000);
   });
 });
