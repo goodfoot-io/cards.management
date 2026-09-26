@@ -16,7 +16,11 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { discoverIgnoredPaths } from '../src/worktree.js';
 import { WorktreeIncludeError } from '../src/worktreeInclude.js';
-import { loadWorktreePathPolicy, type WorktreePathPolicy } from '../src/worktreePathPolicy.js';
+import {
+  enumerateOwnedNodeModules,
+  loadWorktreePathPolicy,
+  type WorktreePathPolicy
+} from '../src/worktreePathPolicy.js';
 
 // Some specs depend on POSIX permission enforcement (chmod 0o000 must actually
 // deny access). Two environments cannot provide that: Windows does not
@@ -115,6 +119,20 @@ describe('loadWorktreePathPolicy', () => {
     }
     const base = path.dirname(sourceRoot);
     await fs.rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+
+  it('enumerates package-level node_modules from Yarn workspaces object declarations', async () => {
+    sourceRoot = await makeSourceRoot('workspaces-object');
+    await fs.writeFile(
+      path.join(sourceRoot, 'package.json'),
+      JSON.stringify({ workspaces: { packages: ['packages/*'] } })
+    );
+    await fs.mkdir(path.join(sourceRoot, 'packages', 'pkgA', 'node_modules'), { recursive: true });
+
+    await expect(enumerateOwnedNodeModules(sourceRoot)).resolves.toEqual([
+      'node_modules',
+      'packages/pkgA/node_modules'
+    ]);
   });
 
   it('shares every ignored path when neither config file exists', async () => {
