@@ -548,6 +548,21 @@ describe('policy-aware rerouting of symlinked workspace packages', () => {
     await fs.symlink('../../packages/b', path.join(repoDir, 'node_modules', '@scope', 'b'));
   }
 
+  async function addNamedWorkspacePackagesWithNestedLinks(): Promise<void> {
+    await fs.writeFile(path.join(repoDir, 'packages', 'a', 'package.json'), JSON.stringify({ name: '@scope/a' }));
+    await fs.writeFile(path.join(repoDir, 'packages', 'b', 'package.json'), JSON.stringify({ name: '@scope/b' }));
+    execFileSync('git', ['add', 'packages/a/package.json', 'packages/b/package.json'], { cwd: repoDir });
+    execFileSync('git', ['commit', '-q', '-m', 'name scoped workspace packages'], { cwd: repoDir });
+
+    const scopedLink = path.join(repoDir, 'packages', 'pkgA', 'node_modules', '@scope', 'a');
+    await fs.mkdir(path.dirname(scopedLink), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(scopedLink), path.join(repoDir, 'packages', 'a')), scopedLink);
+
+    const unscopedLink = path.join(repoDir, 'packages', 'a', 'node_modules', 'pkgA');
+    await fs.mkdir(path.dirname(unscopedLink), { recursive: true });
+    await fs.symlink(path.relative(path.dirname(unscopedLink), path.join(repoDir, 'packages', 'pkgA')), unscopedLink);
+  }
+
   it('keeps a workspace package bound to the new checkout when its source link was materialized in a prior worktree', async () => {
     await makeSymlinkedWorkspace();
     await fs.writeFile(path.join(repoDir, '.worktreeignore'), 'node_modules/pkgA/.cache/x.js\n');
@@ -570,6 +585,53 @@ describe('policy-aware rerouting of symlinked workspace packages', () => {
     await expect(fs.realpath(path.join(second.path, 'node_modules', 'pkgA', 'index.js'))).resolves.toBe(
       path.join(second.path, 'packages', 'pkgA', 'index.js')
     );
+
+    await removeWorktree(second.path);
+    await removeWorktree(first.path);
+  });
+
+  it('routes scoped and unscoped workspace links from root and package-level node_modules into the destination checkout', async () => {
+    await makeSymlinkedWorkspace();
+    await addNamedWorkspacePackagesWithNestedLinks();
+    await fs.writeFile(
+      path.join(repoDir, '.worktreeignore'),
+      [
+        'node_modules/pkgA/.cache/x.js',
+        'node_modules/@scope/a/.cache/tmp',
+        'packages/pkgA/node_modules/@scope/a/.cache/tmp',
+        'packages/a/node_modules/pkgA/.cache/x.js'
+      ].join('\n') + '\n'
+    );
+
+    const first = await createWorktree('feature/workspace-links-source', { cwd: repoDir });
+    await expect(first.settle).resolves.toBeDefined();
+    const firstLinks = [
+      path.join(first.path, 'node_modules', 'pkgA'),
+      path.join(first.path, 'node_modules', '@scope', 'a'),
+      path.join(first.path, 'packages', 'pkgA', 'node_modules', '@scope', 'a'),
+      path.join(first.path, 'packages', 'a', 'node_modules', 'pkgA')
+    ];
+    for (const link of firstLinks) {
+      const stats = await fs.lstat(link);
+      expect(stats.isDirectory()).toBe(true);
+      expect(stats.isSymbolicLink()).toBe(false);
+    }
+
+    const second = await createWorktree('feature/workspace-links-destination', { cwd: first.path });
+    await expect(second.settle).resolves.toBeDefined();
+    const packageFilePaths = [
+      path.join(second.path, 'node_modules', 'pkgA', 'index.js'),
+      path.join(second.path, 'node_modules', '@scope', 'a', 'index.js'),
+      path.join(second.path, 'packages', 'pkgA', 'node_modules', '@scope', 'a', 'index.js'),
+      path.join(second.path, 'packages', 'a', 'node_modules', 'pkgA', 'index.js')
+    ];
+    const actualTargets = await Promise.all(packageFilePaths.map((packageFile) => fs.realpath(packageFile)));
+    expect(actualTargets).toEqual([
+      path.join(second.path, 'packages', 'pkgA', 'index.js'),
+      path.join(second.path, 'packages', 'a', 'index.js'),
+      path.join(second.path, 'packages', 'a', 'index.js'),
+      path.join(second.path, 'packages', 'pkgA', 'index.js')
+    ]);
 
     await removeWorktree(second.path);
     await removeWorktree(first.path);
