@@ -25,6 +25,11 @@ vi.mock('../../src/bin/detached-node.js', () => ({
   resolveDetachedNodeInterpreter: vi.fn()
 }));
 
+vi.mock('../../src/transcript-sync/engine/execution-finalization.js', () => ({
+  registerExecutionFinalization: vi.fn(() => undefined),
+  SESSION_FINALIZATION_FILE_ENV: 'CARDS_SESSION_FINALIZATION_FILE'
+}));
+
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolveDetachedNodeInterpreter } from '../../src/bin/detached-node.js';
