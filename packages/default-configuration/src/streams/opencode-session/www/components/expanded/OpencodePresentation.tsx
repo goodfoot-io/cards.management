@@ -4,7 +4,7 @@
  * @module streams/opencode-session/www/components/expanded/OpencodePresentation
  */
 
-import type { ReactElement } from 'react';
+import { Fragment, type ReactElement } from 'react';
 import {
   BoundedText,
   type ProviderPresentationProps,
@@ -13,11 +13,13 @@ import {
   type SessionRenderContext
 } from '../../../../lib/session/SessionContent';
 import type { SessionLeaf, SessionToolPart } from '../../../../lib/session/types';
+import { type OpencodeNativeUpdates, opencodeNativeUpdateEntries } from '../../lib/native-updates';
 import type {
   OpencodeAttachmentData,
   OpencodeEditedFilesData,
   OpencodeEventData,
   OpencodeMessageDetailsData,
+  OpencodeNativeDetailsData,
   OpencodePayloads,
   OpencodeRow,
   OpencodeSessionData,
@@ -41,6 +43,39 @@ function timestamp(value: number | undefined): string | undefined {
   if (value === undefined || !Number.isFinite(value)) return undefined;
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
+}
+
+/** Expands original JSONL strings only inside an opened native-details disclosure.
+ * @param root0 - Source-backed native line chain and bounded page context.
+ * @param root0.nativeUpdates - Immutable chain retaining original source lines.
+ * @param root0.id - Semantic leaf owning independent inspection page slots.
+ * @param root0.context - Shared Cards layout notifications.
+ * @returns One pageable Cards text inspector per original source update.
+ */
+function NativeUpdatesContent({
+  nativeUpdates,
+  id,
+  context
+}: {
+  nativeUpdates: OpencodeNativeUpdates;
+  id: string;
+  context: SessionRenderContext;
+}): ReactElement {
+  const updates = opencodeNativeUpdateEntries(nativeUpdates);
+  return (
+    <>
+      {updates.map((update, index) => (
+        <Fragment key={`${id}-line-${update.lineNumber}`}>
+          {updates.length > 1 ? (
+            <div className="session-label">
+              Update {index + 1} of {updates.length}
+            </div>
+          ) : null}
+          <BoundedText text={update.line} id={id} context={context} slot={`native-${update.lineNumber}`} />
+        </Fragment>
+      ))}
+    </>
+  );
 }
 
 /** Controlled tool body keeps status, input, result, errors, and provider-native details visible.
@@ -121,7 +156,7 @@ function MessageDetails({
           Tokens: {data.tokens.input ?? 0} input · {data.tokens.output ?? 0} output
         </div>
       ) : null}
-      <BoundedText text={data.raw} id={leaf.id} context={context} slot="native" />
+      <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
     </SessionDisclosure>
   );
 }
@@ -141,7 +176,7 @@ function SessionDetails({ data, leaf, ...context }: ProviderPresentationProps<Op
         {data.sessionId ? <div>Session ID: {data.sessionId}</div> : null}
         {data.runtime ? <div>Runtime: {data.runtime}</div> : null}
         {data.version ? <div>Version: {data.version}</div> : null}
-        <BoundedText text={data.raw} id={leaf.id} context={context} slot="native" />
+        <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
       </SessionDisclosure>
     </div>
   );
@@ -159,7 +194,7 @@ function Attachment({ data, leaf, ...context }: ProviderPresentationProps<Openco
       <span className="session-label">{data.filename}</span>
       {data.mime ? <span className="session-muted">{data.mime}</span> : null}
       <SessionDisclosure id={leaf.id} label="Attachment details" context={context}>
-        <BoundedText text={data.raw} id={leaf.id} context={context} slot="native" />
+        <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
       </SessionDisclosure>
     </div>
   );
@@ -183,7 +218,7 @@ function EditedFiles({ data, leaf, ...context }: ProviderPresentationProps<Openc
       ))}
       <SessionDisclosure id={leaf.id} label="Patch details" context={context}>
         {data.hash ? <div className="session-muted">Change set {data.hash}</div> : null}
-        <BoundedText text={data.raw} id={leaf.id} context={context} slot="native" />
+        <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
       </SessionDisclosure>
     </div>
   );
@@ -198,7 +233,7 @@ function EditedFiles({ data, leaf, ...context }: ProviderPresentationProps<Openc
 function Step({ data, leaf, ...context }: ProviderPresentationProps<OpencodeStepData>): ReactElement {
   return (
     <SessionDisclosure id={leaf.id} label={data.label} context={context}>
-      <BoundedText text={data.raw} id={leaf.id} context={context} slot="native" />
+      <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
     </SessionDisclosure>
   );
 }
@@ -213,9 +248,23 @@ function Event({ data, leaf, ...context }: ProviderPresentationProps<OpencodeEve
   return (
     <div className={data.tone === 'error' ? 'session-tone--error' : undefined}>
       <SessionDisclosure id={leaf.id} label={data.label} context={context}>
-        <BoundedText text={data.raw} id={leaf.id} context={context} slot="native" />
+        <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
       </SessionDisclosure>
     </div>
+  );
+}
+
+/** Presents part updates as independent bounded raw inspectors.
+ * @param root0 - Typed native-details payload and its controlled disclosure context.
+ * @param root0.data - Human label and immutable native update chain.
+ * @param root0.leaf - Stable provider identity and provenance.
+ * @returns Lazy native update disclosure.
+ */
+function NativeDetails({ data, leaf, ...context }: ProviderPresentationProps<OpencodeNativeDetailsData>): ReactElement {
+  return (
+    <SessionDisclosure id={leaf.id} label={data.label} context={context}>
+      <NativeUpdatesContent nativeUpdates={data.nativeUpdates} id={leaf.id} context={context} />
+    </SessionDisclosure>
   );
 }
 
@@ -226,7 +275,8 @@ export const OPENCODE_PRESENTATION: SessionProviderRegistry<OpencodePayloads> = 
   attachment: (props) => <Attachment {...props} />,
   editedFiles: (props) => <EditedFiles {...props} />,
   step: (props) => <Step {...props} />,
-  event: (props) => <Event {...props} />
+  event: (props) => <Event {...props} />,
+  nativeDetails: (props) => <NativeDetails {...props} />
 };
 
 /** Collects row and part ids so controlled disclosures survive source appends.

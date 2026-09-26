@@ -139,7 +139,7 @@ describe('OpenCode native projection and Cards rendering integration', () => {
       projection.rows.filter((row) => row.kind === 'message').map((row) => row.kind === 'message' && row.role)
     ).toEqual(['user', 'assistant']);
     expect(new Set(allParts.filter((part) => part.kind === 'provider').map((part) => part.providerKind))).toEqual(
-      new Set(['messageDetails', 'attachment', 'step', 'editedFiles', 'event'])
+      new Set(['messageDetails', 'attachment', 'step', 'editedFiles', 'event', 'nativeDetails'])
     );
     expect(allParts.filter((part) => part.kind === 'text').map((part) => part.text)).toEqual([
       'Please inspect this project.',

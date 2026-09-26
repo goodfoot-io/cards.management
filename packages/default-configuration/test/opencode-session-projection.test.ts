@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import type { NativeTranscriptSource, SessionPart, SessionToolPart } from '../src/streams/lib/session/types';
+import { opencodeNativeUpdateLines } from '../src/streams/opencode-session/www/lib/native-updates';
 import { parseOpencodeLine } from '../src/streams/opencode-session/www/lib/parser';
 import type { OpencodePayloads } from '../src/streams/opencode-session/www/lib/project-session';
 import { opencodeSessionProjector } from '../src/streams/opencode-session/www/lib/project-session';
@@ -98,9 +99,13 @@ describe('OpenCode native projection contract', () => {
     expect(
       parts(projection.rows).filter((part) => part.kind === 'provider' && part.providerKind === 'step')
     ).toHaveLength(2);
-    expect(
-      parts(projection.rows).some((part) => part.kind === 'raw' && part.text.includes('opaque-native-stack'))
-    ).toBe(true);
+    const nativeToolDetails = parts(projection.rows).find(
+      (part) =>
+        part.kind === 'provider' &&
+        part.providerKind === 'nativeDetails' &&
+        opencodeNativeUpdateLines(part.data.nativeUpdates).some((line) => line.includes('opaque-native-stack'))
+    );
+    expect(nativeToolDetails?.kind).toBe('provider');
     expect(parts(projection.rows).some((part) => part.kind === 'provider' && part.providerKind === 'event')).toBe(true);
   });
 

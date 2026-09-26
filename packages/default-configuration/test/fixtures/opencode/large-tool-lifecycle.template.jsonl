@@ -1,0 +1,4 @@
+{"v":1,"ts":"2026-09-01T10:01:01.000Z","seq":1,"sessionId":"ses-large-tool","type":"message","data":{"id":"large-message","role":"assistant"}}
+{"v":1,"ts":"2026-09-01T10:01:02.000Z","seq":2,"sessionId":"ses-large-tool","type":"part","data":{"id":"large-part","messageID":"large-message","type":"tool","callID":"large-call","tool":"write","state":{"status":"pending","input":__LARGE_INPUT__}}}
+{"v":1,"ts":"2026-09-01T10:01:03.000Z","seq":3,"sessionId":"ses-large-tool","type":"part","data":{"id":"large-part","messageID":"large-message","type":"tool","callID":"large-call","tool":"write","state":{"status":"running","input":__LARGE_INPUT__}}}
+{"v":1,"ts":"2026-09-01T10:01:04.000Z","seq":4,"sessionId":"ses-large-tool","type":"part","data":{"id":"large-part","messageID":"large-message","type":"tool","callID":"large-call","tool":"write","state":{"status":"completed","input":__LARGE_INPUT__,"result":__LARGE_RESULT__}}}

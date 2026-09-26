@@ -22,16 +22,17 @@ import type {
   SessionTextPart,
   SessionToolPart
 } from '../../../lib/session/types';
+import { appendOpencodeNativeUpdate, type OpencodeNativeUpdates } from './native-updates';
 import type { OpencodePart as NativeOpencodePart, OpencodeLine, OpencodeMessageInfo } from './parser';
 import { parseOpencodeLine } from './parser';
-import { extractToolPart } from './tool-part';
+import { toolPartIdentity } from './tool-part';
 
 /** Native session identity and exporter facts kept outside conversation prose. */
 export interface OpencodeSessionData {
   readonly sessionId?: string;
   readonly runtime?: string;
   readonly version?: string;
-  readonly raw: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
 /** Message info retained for model, path, timing, token, agent, and mode details. */
@@ -46,7 +47,7 @@ export interface OpencodeMessageDetailsData {
   readonly created?: number;
   readonly completed?: number;
   readonly tokens?: { readonly input?: number; readonly output?: number };
-  readonly raw: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
 /** OpenCode `file` part summary; its native URL is retained but never activated. */
@@ -54,21 +55,21 @@ export interface OpencodeAttachmentData {
   readonly filename: string;
   readonly mime?: string;
   readonly url?: string;
-  readonly raw: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
 /** OpenCode `patch` part summary; full native details remain inspectable separately. */
 export interface OpencodeEditedFilesData {
   readonly files: readonly string[];
   readonly hash?: string;
-  readonly raw: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
 /** Visible boundary marker for OpenCode model steps. */
 export interface OpencodeStepData {
   readonly type: 'step-start' | 'step-finish';
   readonly label: string;
-  readonly raw: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
 /** Inspectable native event or part that this renderer does not yet interpret. */
@@ -76,7 +77,13 @@ export interface OpencodeEventData {
   readonly label: string;
   readonly tone: 'info' | 'error';
   readonly nativeType?: string;
-  readonly raw: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
+}
+
+/** Raw details for one semantic part, retained as immutable source-line references. */
+export interface OpencodeNativeDetailsData {
+  readonly label: string;
+  readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
 /** Typed OpenCode presentation payloads; no assistant-ui or vendor message types. */
@@ -87,6 +94,7 @@ export interface OpencodePayloads {
   readonly editedFiles: OpencodeEditedFilesData;
   readonly step: OpencodeStepData;
   readonly event: OpencodeEventData;
+  readonly nativeDetails: OpencodeNativeDetailsData;
 }
 
 /** Cards-owned OpenCode rows and shared/provider parts. */
@@ -100,7 +108,7 @@ type OpencodeSourceIdentity = Pick<NativeTranscriptSource, 'sourceKey' | 'genera
 
 interface MessageInfoState {
   value: OpencodeMessageInfo;
-  rawLines: string[];
+  nativeUpdates: OpencodeNativeUpdates;
   provenance: NativeRecordProvenance[];
   revision: number;
   projectedRevision: number;
@@ -112,7 +120,7 @@ interface PartState {
   readonly selector: string;
   readonly firstLine: number;
   value: NativeOpencodePart;
-  rawLines: string[];
+  nativeUpdates: OpencodeNativeUpdates;
   provenance: NativeRecordProvenance[];
   revision: number;
   projectedRevision: number;
@@ -229,18 +237,15 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Keeps arbitrary JSON tool input/result readable without truncating native details.
+/** Keeps primitive tool values visible and directs structured values to native disclosures.
  * @param value - Native value to display.
- * @returns Full readable value text, or an empty string for absent values.
+ * @returns Small direct summary or an empty string for absent values.
  */
-function nativeValueText(value: unknown): string {
+function toolValueSummary(value: unknown): string {
   if (typeof value === 'string') return value;
   if (value === undefined || value === null) return '';
-  try {
-    return JSON.stringify(value, null, 2) ?? String(value);
-  } catch {
-    return String(value);
-  }
+  if (typeof value === 'object') return 'Structured value available in native details';
+  return String(value);
 }
 
 /** Reads a model/provider identity from either OpenCode's flat or nested user-message shape.
@@ -339,7 +344,7 @@ function ensureMessage(state: OpencodeState, nativeId: string, partSelector: str
  * @param source - Caller-qualified source identity.
  * @param selector - Stable native or physical part selector.
  * @param label - Visible event label.
- * @param raw - All native updates contributing to the semantic event.
+ * @param nativeUpdates - Source-backed native updates contributing to the semantic event.
  * @param provenance - Physical occurrences contributing to the event.
  * @param tone - Event presentation severity.
  * @param nativeType - Native event discriminator when available.
@@ -349,7 +354,7 @@ function providerEventPart(
   source: OpencodeSourceIdentity,
   selector: string,
   label: string,
-  raw: string,
+  nativeUpdates: OpencodeNativeUpdates,
   provenance: NativeRecordProvenance[],
   tone: 'info' | 'error' = 'info',
   nativeType?: string
@@ -360,33 +365,30 @@ function providerEventPart(
     provenance,
     kind: 'provider',
     providerKind: 'event',
-    data: { label, tone, nativeType, raw }
+    data: { label, tone, nativeType, nativeUpdates }
   };
 }
 
-/** Retains full per-part native updates behind the shared bounded raw inspector.
+/** Projects source-backed native updates into a typed OpenCode details disclosure.
  * @param source - Caller-qualified source identity.
  * @param entry - Reduced native part and all its source occurrences.
  * @param label - Visible disclosure label.
- * @param text - Raw native text, defaulting to all physical updates.
  * @param suffix - Distinguishes additional raw detail views under one semantic part.
- * @returns Cards-owned raw detail leaf.
+ * @returns Typed OpenCode raw-details leaf.
  */
-function detailPart(
+function nativeDetailsPart(
   source: OpencodeSourceIdentity,
   entry: PartState,
   label: string,
-  text = entry.rawLines.join('\n'),
   suffix = 'native-details'
-): SessionRawPart {
+): SessionProviderPart<OpencodePayloads> {
   return {
-    id: sessionIdentity(source, 'opencode-raw-part', `${entry.selector}/${suffix}`),
-    semanticKey: `opencode/raw/${entry.selector}/${suffix}`,
+    id: sessionIdentity(source, 'opencode-native-details', `${entry.selector}/${suffix}`),
+    semanticKey: `opencode/native-details/${entry.selector}/${suffix}`,
     provenance: entry.provenance,
-    kind: 'raw',
-    label,
-    text,
-    reason: 'detail'
+    kind: 'provider',
+    providerKind: 'nativeDetails',
+    data: { label, nativeUpdates: entry.nativeUpdates }
   };
 }
 
@@ -399,7 +401,6 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
   if (entry.projectedRevision === entry.revision && entry.projectedParts) return entry.projectedParts;
   const native = entry.value;
   const provenance = entry.provenance;
-  const raw = entry.rawLines.join('\n');
   const base = {
     id: sessionIdentity(source, 'opencode-part', entry.selector),
     semanticKey: `opencode/${entry.selector}`,
@@ -416,7 +417,7 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
             source,
             entry.selector,
             `Malformed OpenCode ${native.type} part`,
-            raw,
+            entry.nativeUpdates,
             provenance,
             'error',
             native.type
@@ -429,12 +430,12 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
         kind: native.type,
         text: native.text
       };
-      result = [textPart, detailPart(source, entry, `OpenCode ${native.type} part details`)];
+      result = [textPart, nativeDetailsPart(source, entry, `OpenCode ${native.type} part details`)];
       break;
     }
 
     case 'tool': {
-      const extracted = extractToolPart(native);
+      const identity = toolPartIdentity(native);
       const state = isRecord(native.state) ? native.state : {};
       const nativeStatus = state['status'];
       const status: SessionToolPart['status'] =
@@ -455,18 +456,18 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
             ? error['message']
             : '';
       const resultValue = state['result'] !== undefined ? state['result'] : state['output'];
-      const outputParts = [errorText, nativeValueText(resultValue)].filter((value) => value.length > 0);
+      const outputParts = [errorText, toolValueSummary(resultValue)].filter((value) => value.length > 0);
       const tool: SessionToolPart = {
         ...base,
         semanticKey: `opencode/tool/${entry.selector}`,
         kind: 'tool',
-        callId: extracted.callId || entry.selector,
-        name: extracted.name,
-        input: nativeValueText(state['input']),
+        callId: identity.callId || entry.selector,
+        name: identity.name,
+        input: toolValueSummary(state['input']),
         output: outputParts.length > 0 ? outputParts.join('\n') : undefined,
         status
       };
-      result = [tool, detailPart(source, entry, 'OpenCode tool event details')];
+      result = [tool, nativeDetailsPart(source, entry, 'OpenCode tool event details')];
       break;
     }
 
@@ -477,7 +478,15 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
         !native.files.every((file): file is string => typeof file === 'string')
       ) {
         result = [
-          providerEventPart(source, entry.selector, 'Malformed OpenCode patch part', raw, provenance, 'error', 'patch')
+          providerEventPart(
+            source,
+            entry.selector,
+            'Malformed OpenCode patch part',
+            entry.nativeUpdates,
+            provenance,
+            'error',
+            'patch'
+          )
         ];
         break;
       }
@@ -489,7 +498,7 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
           data: {
             files: native.files,
             hash: typeof native.hash === 'string' ? native.hash : undefined,
-            raw: entry.rawLines.join('\n')
+            nativeUpdates: entry.nativeUpdates
           }
         }
       ];
@@ -499,7 +508,15 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
     case 'file': {
       if (typeof native.filename !== 'string' || native.filename.length === 0) {
         result = [
-          providerEventPart(source, entry.selector, 'Malformed OpenCode file part', raw, provenance, 'error', 'file')
+          providerEventPart(
+            source,
+            entry.selector,
+            'Malformed OpenCode file part',
+            entry.nativeUpdates,
+            provenance,
+            'error',
+            'file'
+          )
         ];
         break;
       }
@@ -512,7 +529,7 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
             filename: native.filename,
             mime: typeof native.mime === 'string' ? native.mime : undefined,
             url: typeof native.url === 'string' ? native.url : undefined,
-            raw: entry.rawLines.join('\n')
+            nativeUpdates: entry.nativeUpdates
           }
         }
       ];
@@ -527,7 +544,7 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
           ...base,
           kind: 'provider',
           providerKind: 'step',
-          data: { type: native.type, label, raw: entry.rawLines.join('\n') }
+          data: { type: native.type, label, nativeUpdates: entry.nativeUpdates }
         }
       ];
       break;
@@ -539,7 +556,7 @@ function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly
           source,
           entry.selector,
           `Unsupported OpenCode part (${typeof native.type === 'string' ? native.type : 'unknown'})`,
-          raw,
+          entry.nativeUpdates,
           provenance,
           'info',
           typeof native.type === 'string' ? native.type : undefined
@@ -584,7 +601,7 @@ function projectMessageInfo(
       created: typeof nativeTime?.created === 'number' ? nativeTime.created : undefined,
       completed: typeof nativeTime?.completed === 'number' ? nativeTime.completed : undefined,
       tokens: info.value.tokens,
-      raw: info.rawLines.join('\n')
+      nativeUpdates: info.nativeUpdates
     }
   };
   info.projectedRevision = info.revision;
@@ -724,16 +741,17 @@ function appendMalformedPart(
   }
   const message = ensureMessage(state, rawMessageId, provenance.selector, provenance.lineNumber);
   const key = `invalid/${provenance.selector}/${provenance.lineNumber}`;
+  const nativeUpdates = appendOpencodeNativeUpdate(undefined, record.text, provenance.lineNumber);
   const invalid: PartState = {
     key,
     selector: key,
     firstLine: provenance.lineNumber,
     value: { type: nativeType ?? 'malformed' },
-    rawLines: [record.text],
+    nativeUpdates,
     provenance: [provenance],
     revision: 1,
     projectedRevision: -1,
-    projectedParts: [providerEventPart(source, key, label, record.text, [provenance], 'error', nativeType)]
+    projectedParts: [providerEventPart(source, key, label, nativeUpdates, [provenance], 'error', nativeType)]
   };
   message.parts.set(key, invalid);
   message.partOrder.push(key);
@@ -767,12 +785,13 @@ function reducePart(
   const previous = message.parts.get(partKey);
   if (previous && previous.value.type !== native.type) {
     const conflictKey = `conflict/${partKey}/${provenance.lineNumber}`;
+    const nativeUpdates = appendOpencodeNativeUpdate(undefined, record.text, provenance.lineNumber);
     const conflict: PartState = {
       key: conflictKey,
       selector: conflictKey,
       firstLine: provenance.lineNumber,
       value: { type: 'conflicting-id' },
-      rawLines: [record.text],
+      nativeUpdates,
       provenance: [provenance],
       revision: 1,
       projectedRevision: 1,
@@ -781,7 +800,7 @@ function reducePart(
           source,
           conflictKey,
           `Conflicting OpenCode part identity (${native.type})`,
-          record.text,
+          nativeUpdates,
           [provenance],
           'error',
           native.type
@@ -795,7 +814,7 @@ function reducePart(
   }
   if (previous) {
     previous.value = native;
-    previous.rawLines.push(record.text);
+    previous.nativeUpdates = appendOpencodeNativeUpdate(previous.nativeUpdates, record.text, provenance.lineNumber);
     appendOccurrence(previous.provenance, provenance);
     previous.revision++;
   } else {
@@ -804,7 +823,7 @@ function reducePart(
       selector,
       firstLine: provenance.lineNumber,
       value: native,
-      rawLines: [record.text],
+      nativeUpdates: appendOpencodeNativeUpdate(undefined, record.text, provenance.lineNumber),
       provenance: [provenance],
       revision: 1,
       projectedRevision: -1
@@ -876,13 +895,17 @@ function reduceMessage(
   message.firstLine = Math.min(message.firstLine, provenance.lineNumber);
   if (message.info) {
     message.info.value = data as OpencodeMessageInfo;
-    message.info.rawLines.push(record.text);
+    message.info.nativeUpdates = appendOpencodeNativeUpdate(
+      message.info.nativeUpdates,
+      record.text,
+      provenance.lineNumber
+    );
     appendOccurrence(message.info.provenance, provenance);
     message.info.revision++;
   } else {
     message.info = {
       value: data as OpencodeMessageInfo,
-      rawLines: [record.text],
+      nativeUpdates: appendOpencodeNativeUpdate(undefined, record.text, provenance.lineNumber),
       provenance: [provenance],
       revision: 1,
       projectedRevision: -1
@@ -926,7 +949,7 @@ function reduceMeta(
     sessionId: sessionId ?? previous?.value.sessionId,
     runtime: typeof data['runtime'] === 'string' ? data['runtime'] : previous?.value.runtime,
     version: typeof data['opencodeVersion'] === 'string' ? data['opencodeVersion'] : previous?.value.version,
-    raw: previous ? `${previous.value.raw}\n${record.text}` : record.text
+    nativeUpdates: appendOpencodeNativeUpdate(previous?.value.nativeUpdates, record.text, provenance.lineNumber)
   };
   if (previous) {
     previous.value = sessionData;
