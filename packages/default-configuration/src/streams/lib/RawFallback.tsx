@@ -3,10 +3,8 @@
  *
  * Collapsed-by-default disclosure row for unrecognized/unparseable content:
  * one line (severity codicon + label + chevron) that expands in place to the
- * raw JSON via the shared `JsonBlock`. Matches the `ToolAccordion`/
- * `ReasoningPart` chevron mechanics (../accordions/ToolAccordion.tsx,
- * ./aui/ReasoningPart.tsx) so a transcript full of unrecognized rows (e.g. a
- * newer message type from a provider) stays scannable instead of dominating
+ * raw JSON via the shared `JsonBlock`. Its chevron row keeps unrecognized
+ * content (e.g. a newer message type from a provider) scannable instead of dominating
  * the viewport with expanded JSON. Content is never dropped — only its
  * default visibility changes. Severity conveys honestly: most unrecognized
  * content is merely unclassified, not an error, so `info` is the default —
@@ -74,24 +72,24 @@ export function RawFallback({ data, label, severity = 'info' }: RawFallbackProps
   }, []);
 
   return (
-    <div className="aui-raw-fallback">
+    <div className="session-raw-fallback">
       <button
         type="button"
         aria-expanded={open}
         onClick={handleToggle}
-        className="aui-raw-fallback__toggle"
+        className="session-raw-fallback__toggle"
         style={{ color }}
       >
         <span
-          className="codicon codicon-chevron-right cc-chevron aui-raw-fallback__chevron"
+          className="codicon codicon-chevron-right cc-chevron session-raw-fallback__chevron"
           style={{ transform: open ? 'rotate(90deg)' : undefined }}
         />
-        <span className={`codicon ${SEVERITY_ICON[severity]} aui-raw-fallback__icon`} />
-        <span className="aui-raw-fallback__label">{displayLabel}</span>
+        <span className={`codicon ${SEVERITY_ICON[severity]} session-raw-fallback__icon`} />
+        <span className="session-raw-fallback__label">{displayLabel}</span>
       </button>
       <div
         ref={bodyRef}
-        className="cc-accordion-body aui-raw-fallback__body"
+        className="cc-accordion-body session-raw-fallback__body"
         style={{ display: open ? 'block' : 'none', opacity: open ? 1 : 0, borderLeft: `2px solid ${color}` }}
       >
         <JsonBlock value={data} />

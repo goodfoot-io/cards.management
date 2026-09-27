@@ -6,10 +6,9 @@
  * them to short display strings instead of dropping them — `idle_notification`
  * payloads are the one sanctioned suppression.
  *
- * Extracted from the former `CoordinationLine.tsx` (which rendered these as
- * JSX) when the expanded transcript moved to assistant-ui: the converter
- * (./project-session.ts) needs plain text for `status-line` data parts,
- * not React elements, so this module carries no React dependency.
+ * The native projector (./project-session.ts) needs plain text for semantic
+ * status rows rather than React elements, so this module carries no React
+ * dependency.
  *
  * @summary Pure JSON/XML coordination-content detection and text summarization
  * @module lib/classify-coordination

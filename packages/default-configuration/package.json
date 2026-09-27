@@ -22,8 +22,6 @@
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -c --disable-cache && jsdoczoom -l"
   },
   "dependencies": {
-    "@assistant-ui/react": "0.14.26",
-    "@assistant-ui/react-markdown": "0.14.5",
     "@cards.management/sdk": "workspace:*",
     "@cards.management/sessions": "workspace:*",
     "@cards.management/web": "workspace:*",

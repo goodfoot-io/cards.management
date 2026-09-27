@@ -1,6 +1,6 @@
 /**
  * Native Codex-to-Cards semantic behavior and visible expanded output.
- * These tests replace assistant-ui message-shape checks with the actual Codex projector and Cards renderer.
+ * These tests exercise the actual Codex projector and Cards renderer together.
  * @summary Codex semantic rows and rendered transcript behavior
  */
 

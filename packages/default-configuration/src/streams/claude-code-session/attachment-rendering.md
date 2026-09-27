@@ -1,96 +1,60 @@
 ---
 title: Attachment Rendering
-summary: How the expanded subagent-transcript webview renders or hides each Claude Code attachment type, from the pure classifier through the per-type presenters.
+summary: How the expanded Claude session keeps native attachment identity, classifies payloads, and renders them through the Cards-owned session view.
 aliases: [Attachment Types, Transcript Attachments, Render or Hide]
 tags: [transcript, webview, streams]
-keywords: [attachment, hook, classifier, to-thread-messages, CcDataParts, AttachmentRouter, RawFallback, ambient, presenter]
+keywords: [attachment, hook, classifier, Claude projector, SessionContent, SessionViewport, ambient]
 links-reviewed: 1
 ---
 
 # Attachment Rendering
 
-The Claude Code CLI writes a large family of JSONL lines with `type: "attachment"`, each carrying its own `attachment.type` discriminator (23 known kinds). In the **expanded** transcript view these were once dumped verbatim through the raw-JSON fallback; this subsystem gives every known kind a deliberate outcome — a purpose-built row, or nothing at all — while keeping the fallback for genuinely unknown future kinds.
+Claude Code writes JSONL records whose `type` is `attachment`; each payload has its own `attachment.type` discriminator. The expanded transcript keeps the original attachment payload and its classifier result together, then presents them as typed native content. The [classifier](/public/packages/default-configuration/src/streams/claude-code-session/www/lib/classify-attachment.ts#L168) determines visibility, scope, tier, summary, severity, and link metadata; the [Claude projector](/public/packages/default-configuration/src/streams/claude-code-session/www/lib/project-session.ts#L449) assigns stable row and part identities while retaining source provenance.
 
-## The pipeline
-
-Rendering is a three-stage, data-driven flow. The decision lives entirely in one pure function so it can be fixture-tested without a DOM; the React components are thin presenters that *style* the decision, they do not re-make it.
+## Rendering flow
 
 ```mermaid
 flowchart TD
-  L["JSONL line · type: attachment"] --> P["parseLine → AttachmentMsg"]
-  P --> CV["to-thread-messages.ts · attachment case"]
-  CV --> C["classifyAttachment(attachment) → AttachmentDescriptor"]
-  C -->|hidden| X["(render nothing)"]
-  C -->|scope: tool, will nest| TA["tool-call part → ToolAccordion → HookSection → HookRow"]
-  C -->|scope: tool, orphan| CH["cc-hook data part → HookRow"]
-  C -->|scope: turn, ambient| AG["cc-ambient-group data part → AmbientGroup"]
-  C -->|scope: turn, content| AR2["cc-attachment data part → AttachmentRouter → ContextStateRow / DisclosureRow / FileRow"]
-  C -->|scope: session| DM["cc-attachment data part → DateMarker"]
-  C -->|kind __unknown__| RF["RawFallback (collapsed disclosure, shared)"]
+  L["JSONL attachment record"] --> P["claudeSessionProjector"]
+  P --> C["classifyAttachment"]
+  C -->|hidden| X["Omit proven-empty payload"]
+  C -->|visible| N["Typed provider leaf + full native payload"]
+  N --> V["SessionViewport / SessionContent"]
+  V --> R["CLAUDE_PARTS attachment presenter"]
+  R --> D["Controlled disclosure"]
+  D --> B["Known body + raw attachment details"]
 ```
 
-1. **Classify.** [classify-attachment.ts](./www/lib/classify-attachment.ts#L167-L520)`#classifyAttachment` maps each payload to an `AttachmentDescriptor` carrying `scope` (`tool` / `turn` / `session`), `tier` (`content` / `ambient`), a `summary` one-liner, an optional severity `glyph`, the fail-closed `hidden` flag, an optional `linkPath`, and `expandable`. An unrecognized `attachment.type` returns the `__unknown__` sentinel.
-2. **Route.** The converter, [to-thread-messages.ts](./www/lib/to-thread-messages.ts) (attachment case), nests hooks whose owning tool will resolve into that tool-call part's result, drops `hidden` rows, buffers consecutive turn-scoped ambient rows into a `cc-ambient-group` data part, and otherwise emits a `cc-hook` or `cc-attachment` data part into the enclosing assistant message. The parts render inside the shared assistant-ui `StreamThread` via the renderer-local registry in [CcDataParts.tsx](./www/components/aui/CcDataParts.tsx).
-3. **Present.** The per-type presenters render the descriptor; the [AttachmentRouter](./www/components/expanded/messages/attachment/AttachmentRouter.tsx) dispatches to one of them or, for `__unknown__`, to the shared [RawFallback](../lib/RawFallback.tsx) — the same collapsed-by-default disclosure the converter uses for unrecognized `system` subtypes and message types (labeled `Unrecognized … · {type}`).
+The expanded owner passes a coherent native snapshot to [`ClaudeSourceView()`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/ExpandedView.tsx#L42-L99). Its projector emits semantic rows; [`SessionViewport`](/public/packages/default-configuration/src/streams/lib/session/SessionViewport.tsx#L57-L72) owns scrolling and anchor behavior, and [`SessionContent()`](/public/packages/default-configuration/src/streams/lib/session/SessionContent.tsx#L78-L81) renders stable rows with controlled disclosure and bounded inspection state. The typed [`CLAUDE_PARTS`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/ClaudePresentation.tsx#L255-L270) registry selects provider presentation without converting records into vendor conversation messages.
 
-## Tool-scoped — hooks nest in their tool
+The projector validates attachment collection shapes before calling [`classifyAttachment()`](/public/packages/default-configuration/src/streams/claude-code-session/www/lib/classify-attachment.ts#L168). It omits a row only when the descriptor marks a proven-empty payload hidden; otherwise it stores both the native attachment and descriptor in the provider leaf. Hook records carrying a `toolUseID` join the source-local tool association. Until a result completes the nested presentation, the source hook row remains visible; once paired, the hook details appear with the tool ([projector attachment path](/public/packages/default-configuration/src/streams/claude-code-session/www/lib/project-session.ts#L449-L472)).
 
-The six `hook_*` types are events *about* a specific tool call. A pre-pass, [computeWillNestToolUseIds](./www/lib/to-thread-messages.ts#L356-L383), determines up front which tool ids will render an accordion; a hook whose `toolUseID` is in that set is nested (never duplicated), and a hook with no owning tool renders as a standalone orphan. Both paths share one row component, [HookRow](./www/components/accordions/HookRow.tsx#L190-L283), so nested and orphan hooks look and expand identically. Inside a tool they are grouped by `hookEvent` in the [HookSection](./www/components/accordions/HookSection.tsx#L48-L80); the expandable body text is assembled by [hookBodyText](./www/components/accordions/HookRow.tsx#L77-L108).
+The provider [`Attachment()` presenter](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/ClaudePresentation.tsx#L101-L119) uses the descriptor's summary and severity for its [`SessionDisclosure`](/public/packages/default-configuration/src/streams/lib/session/SessionContent.tsx#L316-L350). Its [`AttachmentBody()`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/ClaudePresentation.tsx#L124-L165) assembles known bodies only after the disclosure opens and always includes a separate raw-details leaf for the complete native payload. The shared [`Body()` presenter](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/ClaudePresentation.tsx#L49-L77) bounds large text before formatting, displays structured JSON as JSON, renders Markdown through the safe shared renderer, and keeps other text pre-wrapped.
 
-A hook's free-text body is never dumped as an opaque string: [renderHookBody](./www/components/accordions/HookRow.tsx#L149-L173) auto-detects its shape — a JSON-looking payload renders through the shared `JsonBlock`, a markdown-shaped one through `renderMarkdownNodes`, otherwise plain pre-wrapped text. `hook_system_message` and `hook_additional_context` are prose meant to be read, so they always render as markdown regardless of shape. Separately, a hook's structured `hookSpecificOutput` object — when present and non-empty — always renders as its own "Hook-specific output" key/value table via the shared `ToolInputTable` ([HookRow](./www/components/accordions/HookRow.tsx#L193-L279)), alongside (not instead of) the free-text body.
+## Tool-scoped hooks
 
-| Type | Glyph / treatment | Body | Classifier |
-|---|---|---|---|
-| `hook_success` | `✓` neutral | stdout / content | [case](./www/lib/classify-attachment.ts#L173-L187) |
-| `hook_additional_context` | `context` tag | joined `content[]` | [case](./www/lib/classify-attachment.ts#L188-L202) |
-| `hook_system_message` | `message` tag | `content` | [case](./www/lib/classify-attachment.ts#L203-L217) |
-| `hook_non_blocking_error` | `!` warning glyph | stderr (+ run fields) | [case](./www/lib/classify-attachment.ts#L218-L232) |
-| `hook_blocking_error` | `✗` error glyph + left border; escalates the collapsed tool header | `blockingError.blockingError` + `command` | [case](./www/lib/classify-attachment.ts#L233-L247) |
-| `hook_cancelled` | `○` neutral leaf | — | [case](./www/lib/classify-attachment.ts#L248-L266) |
+The projector attaches hook records with a matching tool id to that tool's retained `hooks` list. The tool presenter then renders the call, result, supplemental content, hook bodies, and raw details under controlled disclosures. A hook with no rendered owner stays as a visible provider row. Hook text is assembled by [`hookBodyText()`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/accordions/HookRow.tsx#L77-L108); JSON-shaped bodies use the shared JSON view, Markdown-shaped bodies use the shared Markdown renderer, and ordinary text remains pre-wrapped.
 
-A `hook_blocking_error` is the one signal the design draws the eye to: it tints the owning tool's collapsed header (`✗ blocked by {hookName}`), and as an orphan — which is the real-world norm for `Stop`-hook refusals — it stays standalone, colored, and expands to reveal *why* the run was blocked.
+## Turn-scoped context and content
 
-## Turn-scoped — ambient state and content disclosures
+The descriptor's `tier` keeps ambient context distinct from content disclosures. Consecutive ambient entries are grouped by the native projector as a `Context · N updates` row. Known bodies reuse the same parsing helpers as the attachment summaries while retaining the original payload for inspection.
 
-Turn-scoped attachments are environment/context events with no owning tool. The **ambient tier** reads quieter than a tool row and consecutive ambient rows fold into one bordered zone (or a `context updated · N changes` summary for long runs) via [AmbientGroup](./www/components/expanded/messages/AmbientGroup.tsx#L57-L76). The **content tier** carries openable payloads at tool-row weight.
+| Attachment types | Summary or visible body | Hidden only when |
+|---|---|---|
+| `team_context` | Team and agent identity | Never |
+| `command_permissions` | Count of allowed tools | The allowed collection is empty |
+| `deferred_tools_delta` | Added and removed tool names | Both deltas are empty |
+| `mcp_instructions_delta` | Added MCP instruction names | Never |
+| `agent_listing_delta` | Added and removed agent names | Both deltas are empty |
+| `task_reminder` | Pending task count and content | The item count is zero |
+| `nested_memory`, `skill_listing`, `invoked_skills`, `dynamic_skill` | Memory or skill content | Never |
+| `file`, `edited_text_file`, `queued_command` | File text, edit context, or queued prompt | Never |
+| `compact_file_reference`, `opened_file_in_ide`, `selected_lines_in_ide` | Referenced path or selected lines | Never |
 
-Ambient rows — [ContextStateRow](./www/components/expanded/messages/attachment/ContextStateRow.tsx#L94-L116):
+The content helpers are [`contextBodyText()`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/messages/attachment/ContextStateRow.tsx#L100-L116), [`disclosureBodyText()`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/messages/attachment/DisclosureRow.tsx#L46-L62), and [`fileBodyText()`](/public/packages/default-configuration/src/streams/claude-code-session/www/components/expanded/messages/attachment/FileRow.tsx#L104-L131). Their output is formatted by the provider presenter while the complete payload remains available for inspection.
 
-| Type | Summary | Note | Classifier |
-|---|---|---|---|
-| `team_context` | `Team {teamName} · {agentName}` | multi-agent identity | [case](./www/lib/classify-attachment.ts#L267-L281) |
-| `command_permissions` | `Permissions: {n} tools allowed` | **hidden when empty** | [case](./www/lib/classify-attachment.ts#L282-L296) |
-| `deferred_tools_delta` | `Tools available +{a} −{r}` | **hidden when every delta empty** | [case](./www/lib/classify-attachment.ts#L297-L315) |
-| `mcp_instructions_delta` | `MCP instructions +{addedNames}` | | [case](./www/lib/classify-attachment.ts#L316-L329) |
-| `agent_listing_delta` | `Agents available +{a} −{r}` | **hidden when added/removed both empty** | [case](./www/lib/classify-attachment.ts#L331-L345) |
-| `task_reminder` | `Tasks pending · {itemCount}` | **hidden when `itemCount === 0`** | [case](./www/lib/classify-attachment.ts#L347-L361) |
+## Session markers and unknown types
 
-Content-tier disclosures — [DisclosureRow](./www/components/expanded/messages/attachment/DisclosureRow.tsx#L92-L117) (memory / skills) and [FileRow](./www/components/expanded/messages/attachment/FileRow.tsx#L158-L207) (files / edits / queued commands / IDE leaves):
+`date_change` remains a session-scoped attachment. `away_summary` is a system subtype, not an attachment; the native projector represents it as provider prose in a boundary row ([system-event handling](/public/packages/default-configuration/src/streams/claude-code-session/www/lib/project-session.ts#L567-L618)).
 
-| Type | Summary | Body | Classifier |
-|---|---|---|---|
-| `nested_memory` | `Memory · {basename}` | nested memory content (markdown) | [case](./www/lib/classify-attachment.ts#L401-L416) |
-| `skill_listing` | `Skills available · {skillCount}` | skill catalog | [case](./www/lib/classify-attachment.ts#L417-L430) |
-| `invoked_skills` | `Skills loaded · {n}` | one section per skill → its content | [case](./www/lib/classify-attachment.ts#L431-L444) |
-| `dynamic_skill` | `Dynamic skills · {displayPath}` | skill names | [case](./www/lib/classify-attachment.ts#L445-L457) |
-| `file` | `{basename}` (linkified) | file content (markdown) | [case](./www/lib/classify-attachment.ts#L458-L473) |
-| `edited_text_file` | `{basename} edited` (modified hue) | line-numbered snippet | [case](./www/lib/classify-attachment.ts#L474-L487) |
-| `queued_command` | `⏎ queued: "{prompt}"` | full prompt + commandMode | [case](./www/lib/classify-attachment.ts#L488-L506) |
-| `compact_file_reference` | `{displayPath}` (linkified leaf) | — | [case](./www/lib/classify-attachment.ts#L345-L361) |
-| `opened_file_in_ide` | `opened {basename}` (linkified leaf) | — | [case](./www/lib/classify-attachment.ts#L362-L375) |
-| `selected_lines_in_ide` | `{basename} :{start}–{end}` (leaf) | selected `content`, expands on click | [case](./www/lib/classify-attachment.ts#L376-L400) |
-
-File-reference **leaves** (`compact_file_reference`, `opened_file_in_ide`, `selected_lines_in_ide`) carry a static `·` bullet rather than a chevron, so they don't read as a tool row whose chevron failed to render.
-
-## Session-scoped — timeline markers
-
-- `date_change` → [DateMarker](./www/components/expanded/messages/attachment/DateMarker.tsx#L28-L34): a thin, right-aligned `{newDate}`, demoted below the compaction/session boundaries so the markers don't read as equal-weight noise. Because it is session-scoped it is **not** wrapped in `AmbientRow`, so it never folds into (or is collapsed away by) an `AmbientGroup`. [case](./www/lib/classify-attachment.ts#L524-L537)
-- `away_summary` is a `system` subtype (not an attachment): the converter emits a `cc-away-summary` data part that [CcDataParts.tsx](./www/components/aui/CcDataParts.tsx) renders through [AwaySummaryBoundary](./www/components/expanded/messages/system/AwaySummaryBoundary.tsx#L30-L48), a session-boundary separator that expands to the full content.
-
-## What is actually hidden
-
-Three types carry a fail-closed hide predicate — a populated payload always renders; only a provably-empty one disappears: the empty `task_reminder` "no pending tasks" nudge, empty `command_permissions` grants, and no-op `deferred_tools_delta` lines. `opened_file_in_ide` is **not** in this list — it used to be an unconditional hide, but now renders as an ordinary linkified leaf row alongside `compact_file_reference` and `selected_lines_in_ide`, so IDE-open events stay visible instead of vanishing.
-
-## The preserved fallback
-
-Genuinely unknown / future `attachment.type` values classify as `__unknown__` and still render through the shared [RawFallback](../lib/RawFallback.tsx#L56-L56) component — the safety net stays, so a new producer type is visible (as a labeled, dimmed JSON block) rather than silently dropped. `SystemRouter` falls back to the same shared component for unknown `system` subtypes.
+An unknown or future `attachment.type` remains visible. Its classifier summary labels the controlled attachment disclosure, and the raw-details leaf preserves the original payload for bounded inspection. The same rule applies to unknown message records: native projection retains them as raw content, and [`SessionContent()`](/public/packages/default-configuration/src/streams/lib/session/SessionContent.tsx#L507-L519) renders raw content as an explicit disclosure instead of silently dropping it.

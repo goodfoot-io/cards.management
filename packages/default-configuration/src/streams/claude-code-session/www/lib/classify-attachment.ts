@@ -44,17 +44,17 @@ import type {
 /**
  * Placement scope for an attachment row.
  *
- * - `'tool'`    — rendered inside the ToolAccordion that owns the toolUseID.
- * - `'turn'`    — rendered as a standalone row in the turn timeline.
- * - `'session'` — rendered as a session-level boundary marker.
+ * - `'tool'`    — associated with the native tool call identified by toolUseID.
+ * - `'turn'`    — belongs to the active turn; ambient entries may be grouped.
+ * - `'session'` — belongs to the session-level timeline.
  */
 export type AttachmentScope = 'tool' | 'turn' | 'session';
 
 /**
  * Visual weight tier within the expanded transcript.
  *
- * - `'content'`  — full-weight row; shown by default alongside tool rows.
- * - `'ambient'`  — muted row; grouped into an AmbientGroup when consecutive.
+ * - `'content'`  — full-content presentation weight.
+ * - `'ambient'`  — quieter context weight; consecutive entries can be grouped.
  */
 export type AttachmentTier = 'content' | 'ambient';
 
@@ -68,16 +68,16 @@ export type AttachmentTier = 'content' | 'ambient';
 export type AttachmentGlyphSeverity = 'neutral' | 'warning' | 'error';
 
 /**
- * The output of `classifyAttachment` — everything the presenter needs to
- * render or hide a single attachment row without re-deriving meaning.
+ * The output of `classifyAttachment` — everything the native projector and
+ * presenter need to retain attachment meaning without re-deriving it.
  *
- * @summary Classifier output consumed by AttachmentRouter and its presenters
+ * @summary Classifier output consumed by the native projector and presenter
  */
 export interface AttachmentDescriptor {
   /**
-   * Discriminator copied from `attachment.type`; used by `AttachmentRouter`
-   * to pick a presenter.  Unknown types produce `'__unknown__'` so the router
-   * maps them to `RawFallback`.
+   * Discriminator copied from `attachment.type`; used by the native presenter.
+   * Unknown types produce `'__unknown__'` and keep their original payload for
+   * the raw-details disclosure.
    */
   kind: string;
   /** Placement scope for this row. */
@@ -156,9 +156,9 @@ function truncate(s: string, maxLen: number): string {
  * Classifies a parsed attachment payload into an `AttachmentDescriptor`.
  *
  * Decides: scope, tier, glyph/severity, one-line summary, hide predicate,
- * toolUseID, linkPath, and expandability.  Unknown `attachment.type` values
- * return a descriptor with `kind: '__unknown__'` so `AttachmentRouter` maps
- * them to `RawFallback`.
+ * toolUseID, linkPath, and expandability. Unknown `attachment.type` values
+ * return a descriptor with `kind: '__unknown__'`; the native projection keeps
+ * the source payload inspectable.
  *
  * @param attachment - Parsed attachment payload from a JSONL line.
  * @returns Descriptor encoding the render-or-hide decision and all metadata.

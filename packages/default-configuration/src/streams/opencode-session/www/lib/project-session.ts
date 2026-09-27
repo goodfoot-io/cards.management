@@ -90,7 +90,7 @@ export interface OpencodeNativeDetailsData {
   readonly nativeUpdates: OpencodeNativeUpdates;
 }
 
-/** Typed OpenCode presentation payloads; no assistant-ui or vendor message types. */
+/** Typed OpenCode presentation payloads without vendor message types. */
 export interface OpencodePayloads {
   readonly session: OpencodeSessionData;
   readonly messageDetails: OpencodeMessageDetailsData;

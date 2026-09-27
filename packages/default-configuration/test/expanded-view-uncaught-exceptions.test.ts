@@ -4,9 +4,9 @@
  * Reproduction for the uncaught exceptions that expanded-view-bootstrap-race.test.ts
  * intermittently leaks.
  *
- * Mounting ExpandedView starts assistant-ui's useThreadViewportAutoScroll, which
- * schedules a requestAnimationFrame callback that calls `div.scrollTo(...)` on the
- * thread viewport element. jsdom does not implement Element#scrollTo, so when the
+ * Mounting ExpandedView starts viewport auto-follow, which schedules a
+ * requestAnimationFrame callback that calls `div.scrollTo(...)` on the viewport
+ * element. jsdom does not implement Element#scrollTo, so when the
  * frame fires the callback throws `TypeError: div.scrollTo is not a function` —
  * outside any test assertion, surfacing only as a vitest "Unhandled Error" while
  * the test itself still passes. Whether the frame fires before the worker tears
@@ -30,9 +30,8 @@ import { describe, expect, it, vi } from 'vitest';
 // browser test runner (jsdom).
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// jsdom has no ResizeObserver; assistant-ui's ThreadPrimitive.Viewport observes
-// its own size via one (useOnResizeContent), so a real DOM mount needs a stub
-// or the mount throws before any assertion runs.
+// jsdom has no ResizeObserver; MessageScroller observes viewport content size,
+// so a real DOM mount needs a stub or the mount throws before any assertion runs.
 class ResizeObserverStub {
   observe(): void {}
   unobserve(): void {}
@@ -40,9 +39,8 @@ class ResizeObserverStub {
 }
 vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 
-// jsdom's Element does not implement scrollTo; assistant-ui's
-// useThreadViewportAutoScroll calls viewport.scrollTo(...) from a
-// requestAnimationFrame callback, which is exactly the uncaught TypeError this
+// jsdom's Element does not implement scrollTo; viewport auto-follow calls
+// viewport.scrollTo(...) from a requestAnimationFrame callback, which is exactly the uncaught TypeError this
 // test guards against. jsdom performs no layout, so a no-op matches the
 // environment's semantics.
 Element.prototype.scrollTo = (() => {}) as typeof Element.prototype.scrollTo;

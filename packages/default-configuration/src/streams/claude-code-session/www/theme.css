@@ -6,7 +6,6 @@
 @import '../../lib/json-block.css';
 @import '../../lib/boundary.css';
 @import '../../lib/turns.css';
-@import '../../lib/aui/aui.css';
 
 /* =============================================================================
    TRANSCRIPT RENDERER STYLES (`.cc-*` classes)
@@ -17,11 +16,9 @@
    (link color, code font family) fall back to the underlying `--vscode-*`
    variable directly.
 
-   The full markdown ladder (headings, tables, blockquotes, lists, fenced
-   code) now lives once, shared with codex-session, as `.aui-markdown` in
-   ../../lib/aui/aui.css — this renderer carries zero `.cc-transcript` rules
-   of its own; every element that renders `marked`/`renderMarkdownNodes`
-   output pairs `.cc-text` (sizing/color) with `.aui-markdown` (the ladder).
+   Cards-owned markdown presentation lives with SessionContent in the shared
+   session.css. Claude-specific bodies pair `.cc-text` (sizing/color) with
+   `.session-markdown` (the shared markdown element styles).
 
    Two-tier typographic hierarchy:
      Tier 1 (content):  .cc-text — 13px, editor font, primary reading

@@ -37,7 +37,7 @@ export function ToolResult({ result }: ToolResultProps): React.ReactElement {
       <div className="stream-block-label font-vscode-editor">Result</div>
       {isMarkdown ? (
         <div
-          className="cc-text aui-markdown pb-2 break-words overflow-wrap-anywhere min-w-0 max-w-full"
+          className="cc-text session-markdown pb-2 break-words overflow-wrap-anywhere min-w-0 max-w-full"
           style={{ fontSize: 'var(--stream-text-code)' }}
         >
           {renderMarkdownNodes(result, 'tool-result')}

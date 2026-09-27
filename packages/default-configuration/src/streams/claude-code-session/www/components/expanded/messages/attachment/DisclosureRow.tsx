@@ -1,17 +1,13 @@
 /**
  * Content-tier openable attachment row.
  *
- * Renders the content-tier disclosure attachments — `nested_memory`,
+ * Extracts body text for the content-tier attachments — `nested_memory`,
  * `skill_listing`, `invoked_skills`, `dynamic_skill`, and a long
- * `mcp_instructions_delta` — as a content-weight summary that expands to the
- * payload's text via the shared {@link ExpandableRow} primitive. Markdown-shaped
- * bodies render through {@link renderMarkdownNodes}, mirroring how
- * {@link ToolResult} displays skill instructions; plain bodies render
- * pre-wrapped.
+ * `mcp_instructions_delta`. The Cards-owned provider presenter decides when
+ * to mount that body and renders it as safe Markdown, JSON, or pre-wrapped text.
  *
- * Styling follows the content tier from the plan: `disabledForeground` text at
- * 11px. The presenter reads the descriptor for its summary and assembles the
- * body text from the raw payload; it does not re-derive meaning.
+ * The descriptor supplies the summary and visibility decision; body extraction
+ * reads only the raw fields needed for display and does not re-derive meaning.
  *
  * @summary Content-tier disclosure row (memory / skills / mcp instructions)
  * @module components/expanded/messages/attachment/DisclosureRow
@@ -104,7 +100,7 @@ export function DisclosureRow({ descriptor, attachment }: DisclosureRowProps): R
   return (
     <ExpandableRow header={header}>
       {looksLikeMarkdown(body) ? (
-        <div className="cc-text aui-markdown text-[11px] pb-2 break-words overflow-wrap-anywhere min-w-0 max-w-full">
+        <div className="cc-text session-markdown text-[11px] pb-2 break-words overflow-wrap-anywhere min-w-0 max-w-full">
           {renderMarkdownNodes(body, 'disclosure')}
         </div>
       ) : (

@@ -85,7 +85,7 @@
   --stream-content-max-width: 760px;
 
   /* Vertical rhythm — 4px-grid scale replacing the ad-hoc px literals
-     previously scattered across turns.css/boundary.css/aui.css. */
+     previously scattered across the shared transcript stylesheets. */
   --stream-gap-section: 16px;
   --stream-gap-turn: 12px;
   --stream-gap-row: 4px;

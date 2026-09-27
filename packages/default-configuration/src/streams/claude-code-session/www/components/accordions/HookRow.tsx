@@ -155,7 +155,7 @@ function renderHookBody(kind: string, body: string): React.ReactElement {
   if (ALWAYS_MARKDOWN_KINDS.has(kind) || looksLikeMarkdown(body)) {
     return (
       <div
-        className="cc-text aui-markdown pb-1.5 break-words overflow-wrap-anywhere min-w-0 max-w-full"
+        className="cc-text session-markdown pb-1.5 break-words overflow-wrap-anywhere min-w-0 max-w-full"
         style={{ fontSize: 'var(--stream-text-code)' }}
       >
         {renderMarkdownNodes(body, 'hook-body')}

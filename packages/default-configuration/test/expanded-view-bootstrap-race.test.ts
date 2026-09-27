@@ -31,10 +31,8 @@ import { describe, expect, it, vi } from 'vitest';
 // browser test runner (jsdom).
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
-// jsdom has no ResizeObserver; assistant-ui's ThreadPrimitive.Viewport observes
-// its own size via one (useOnResizeContent), so a real DOM mount (as this test
-// performs, unlike the renderToStaticMarkup-based aui-foundation tests) needs a
-// stub or the mount throws before any assertion runs.
+// jsdom has no ResizeObserver; MessageScroller observes viewport content size,
+// so a real DOM mount needs a stub or it throws before any assertion runs.
 class ResizeObserverStub {
   observe(): void {}
   unobserve(): void {}
@@ -42,15 +40,13 @@ class ResizeObserverStub {
 }
 vi.stubGlobal('ResizeObserver', ResizeObserverStub);
 
-// jsdom's Element does not implement scrollTo; assistant-ui's
-// useThreadViewportAutoScroll calls viewport.scrollTo(...) from a
-// requestAnimationFrame callback, which would otherwise throw an uncaught
-// TypeError after this test's assertions have already passed. jsdom performs
-// no layout, so a no-op matches the environment's semantics.
+// jsdom's Element does not implement scrollTo; viewport auto-follow schedules
+// it from a requestAnimationFrame callback. jsdom performs no layout, so a
+// no-op matches the environment's semantics.
 Element.prototype.scrollTo = (() => {}) as typeof Element.prototype.scrollTo;
 
-// Own the animation-frame queue so assistant-ui's auto-scroll work is driven
-// explicitly by the test instead of racing jsdom's timer-backed rAF shim.
+// Own the animation-frame queue so viewport auto-follow is driven explicitly
+// instead of racing jsdom's timer-backed rAF shim.
 let nextAnimationFrameId = 1;
 const animationFrames = new Map<number, FrameRequestCallback>();
 vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback): number => {
