@@ -180,9 +180,9 @@ export interface WorktreePathPolicy extends WorktreePathQuery {
  * than hang worktree settle forever, matching the 30s timeout
  * `discoverIgnoredPaths` uses for the same full-tree scan). The same window,
  * measured from the start of the enumeration phase, is the single deadline
- * that bounds every phase of that phase — the per-directory scans, the
- * tracked-symlink scan, the owned-workspace walk, and the see-through
- * synthesis walks all share it, so "30s bounds the overall enumeration" is
+ * that bounds every phase of that phase — candidate discovery, Git eligibility
+ * checking, the tracked-symlink scan, the owned-workspace walk, and the
+ * see-through synthesis walks all share it, so "30s bounds the overall enumeration" is
  * actually true. Expiry throws {@link WorktreeIncludeError}; the policy fails
  * closed and never truncates, which would silently drop omit entries.
  */
@@ -281,20 +281,26 @@ function gitLsFiles(cwd: string, args: string[], deadline: number, timeoutMs: nu
     child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
     child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
 
+    const remainingMs = Math.max(1, Math.min(timeoutMs, deadline - Date.now()));
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
       reject(
         new WorktreeIncludeError(
-          `git ls-files timed out after ${timeoutMs}ms; raise the ${ENUMERATION_TIMEOUT_ENV} environment variable (default ${DEFAULT_ENUMERATION_TIMEOUT_MS} ms) to allow a larger budget`
+          `git ls-files timed out during worktree policy enumeration; raise the ${ENUMERATION_TIMEOUT_ENV} environment variable (default ${DEFAULT_ENUMERATION_TIMEOUT_MS} ms) to allow a larger budget`
         )
       );
-    }, timeoutMs);
+    }, remainingMs);
 
     child.on('close', (code) => {
       clearTimeout(timer);
       const stdout = Buffer.concat(stdoutChunks).toString('utf8');
       if (code === 0) {
-        resolve(stdout ? stdout.split('\0').filter(Boolean) : []);
+        try {
+          assertBeforeDeadline(deadline);
+          resolve(stdout ? stdout.split('\0').filter(Boolean) : []);
+        } catch (error) {
+          reject(error);
+        }
       } else {
         const stderr = Buffer.concat(stderrChunks).toString('utf8');
         reject(new WorktreeIncludeError(`git ls-files failed (exit ${String(code)}): ${stderr}`));
@@ -308,45 +314,165 @@ function gitLsFiles(cwd: string, args: string[], deadline: number, timeoutMs: nu
   });
 }
 
-/**
- * Enumerates gitignored files within a directory, seeing through symlinked
- * directories.
- *
- * Runs `git ls-files --ignored --exclude-standard --others` scoped to `dir`,
- * then synthesizes the descendants of any symlink entry whose target resolves
- * to a directory — git reports a symlink entry itself but never descends
- * through it. All reported and synthesized entries are returned unfiltered;
- * the omit and include matchers are applied by the caller so one enumeration
- * feeds both the copy selection and the omit descendant matching.
- *
- * @param sourceRoot - Source checkout root.
- * @param dir - Relative directory path to enumerate within.
- * @param deadline - Shared enumeration deadline (fail-closed).
- * @param timeoutMs - Per-call `git ls-files` kill budget in milliseconds.
- * @returns Array of repository-relative paths to git-ignored files under `dir`,
- *   including the synthesized descendants of symlinked directories.
- */
-async function enumerateIgnoredFiles(
-  sourceRoot: string,
-  dir: string,
-  deadline: number,
-  timeoutMs: number
-): Promise<string[]> {
-  const entries = await gitLsFiles(
-    sourceRoot,
-    ['--ignored', '--exclude-standard', '--others', '-z', '--', dir],
-    deadline,
-    timeoutMs
-  );
-  const synthesized = await synthesizeSymlinkedDescendants(sourceRoot, entries, deadline);
-  return [...entries, ...synthesized];
+/** A policy candidate found beneath one collapsed ignored directory. */
+interface PolicyCandidate {
+  readonly path: string;
+  readonly directoryIndex: number;
 }
 
 /**
- * Recursively appends the repo-relative descendants of a directory to `out`,
- * seeing through symlinked children whose target resolves to a directory.
+ * Walks collapsed ignored directories once, retaining only paths that the
+ * policy could select and symlinks whose interiors may contain selected paths.
+ * `Dirent` supplies the file type without an `lstat` for every installed file.
+ * Git eligibility is checked in one batch after the walk, so untracked files
+ * re-included by a nested `.gitignore` cannot enter the copy or omit sets.
  *
- * Every child path is appended in checkout form (`<prefix>/<name>`), whether
+ * The bounded breadth-first walk avoids one Git process per ignored directory
+ * and avoids an unbounded wave of filesystem calls in a large node_modules.
+ *
+ * @param sourceRoot - Source checkout root.
+ * @param directories - Collapsed ignored directories from the initial scan.
+ * @param omitMatcher - Selects paths whose presence would expose source writes.
+ * @param includeMatcher - Selects paths that need worktree-local copies.
+ * @param deadline - Shared policy enumeration deadline.
+ * @returns Matching path candidates and symlink entries, with owning directory indexes.
+ */
+async function collectPolicyCandidates(
+  sourceRoot: string,
+  directories: readonly string[],
+  omitMatcher: ReturnType<typeof ignore>,
+  includeMatcher: ReturnType<typeof ignore>,
+  deadline: number
+): Promise<{ matches: PolicyCandidate[]; symlinks: PolicyCandidate[] }> {
+  const matches: PolicyCandidate[] = [];
+  const symlinks: PolicyCandidate[] = [];
+  let frontier = directories.map((dir, directoryIndex) => ({ path: dir, directoryIndex }));
+
+  while (frontier.length > 0) {
+    const next: PolicyCandidate[] = [];
+    let cursor = 0;
+    const worker = async (): Promise<void> => {
+      while (cursor < frontier.length) {
+        const parent = frontier[cursor++];
+        if (parent === undefined) break;
+        assertBeforeDeadline(deadline);
+        let children: Dirent[];
+        try {
+          children = await fs.readdir(path.join(sourceRoot, parent.path), { withFileTypes: true });
+        } catch (error: unknown) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code === 'ENOENT' || code === 'ENOTDIR') continue;
+          throw error;
+        }
+        // Git reports a nested repository as one directory entry, even when
+        // its containing directory is ignored. Entering it would select files
+        // that `git ls-files --ignored --others` never reports.
+        if (children.some((child) => child.name === '.git')) {
+          const boundary = { path: `${parent.path}/`, directoryIndex: parent.directoryIndex };
+          if (omitMatcher.ignores(boundary.path) || includeMatcher.ignores(boundary.path)) {
+            matches.push(boundary);
+          }
+          continue;
+        }
+        for (const child of children) {
+          assertBeforeDeadline(deadline);
+          const candidate = { path: `${parent.path}/${child.name}`, directoryIndex: parent.directoryIndex };
+          if (child.isDirectory()) {
+            next.push(candidate);
+          } else {
+            if (child.isSymbolicLink()) symlinks.push(candidate);
+            if (omitMatcher.ignores(candidate.path) || includeMatcher.ignores(candidate.path)) {
+              matches.push(candidate);
+            }
+          }
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(32, frontier.length) }, () => worker()));
+    frontier = next;
+  }
+  return { matches, symlinks };
+}
+
+/**
+ * Confirms candidate paths against Git's standard ignore rules and index in
+ * one process. `git check-ignore` excludes tracked paths by default and
+ * understands nested .gitignore, info/exclude, and global excludes. Exit 1
+ * means none of the candidates is ignored; other failures fail closed.
+ *
+ * @param sourceRoot - Source checkout root.
+ * @param candidates - Repository-relative paths to query.
+ * @param deadline - Shared policy enumeration deadline.
+ * @returns Candidate paths Git confirms are ignored and untracked.
+ */
+async function checkIgnoredCandidates(
+  sourceRoot: string,
+  candidates: readonly string[],
+  deadline: number
+): Promise<Set<string>> {
+  if (candidates.length === 0) return new Set();
+  assertBeforeDeadline(deadline);
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', ['check-ignore', '--stdin', '-z'], {
+      cwd: sourceRoot,
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    const stdoutChunks: Buffer[] = [];
+    const stderrChunks: Buffer[] = [];
+    child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk));
+    child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk));
+    child.stdin.on('error', (error) =>
+      reject(new WorktreeIncludeError(`git check-ignore input failed: ${error.message}`, { cause: error }))
+    );
+    const remainingMs = Math.max(1, deadline - Date.now());
+    const timer = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(
+        new WorktreeIncludeError(
+          `git check-ignore timed out; raise ${ENUMERATION_TIMEOUT_ENV} to allow a larger budget`
+        )
+      );
+    }, remainingMs);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0 || code === 1) {
+        try {
+          assertBeforeDeadline(deadline);
+          resolve(
+            new Set(
+              Buffer.concat(stdoutChunks)
+                .toString('utf8')
+                .split('\0')
+                .filter(Boolean)
+                .map((entry) => entry.slice(2))
+            )
+          );
+        } catch (error) {
+          reject(error);
+        }
+      } else {
+        reject(
+          new WorktreeIncludeError(
+            `git check-ignore failed (exit ${String(code)}): ${Buffer.concat(stderrChunks).toString('utf8')}`
+          )
+        );
+      }
+    });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      reject(new WorktreeIncludeError(`git check-ignore spawn failed: ${error.message}`, { cause: error }));
+    });
+    // A leading "./" keeps a filename such as ":foo" out of Git's pathspec
+    // magic parser. check-ignore does not support --literal-pathspecs.
+    child.stdin.end(Buffer.from(`${candidates.map((candidate) => `./${candidate}`).join('\0')}\0`));
+  });
+}
+
+/**
+ * Visits the repo-relative descendants of a directory, seeing through
+ * symlinked children whose target resolves to a directory.
+ *
+ * Every child path is reported in checkout form (`<prefix>/<name>`), whether
  * or not it is descended into, because the path exists in the checkout either
  * way. Directories are never revisited: each entered directory's realpath is
  * recorded before its children are walked, so a symlink cycle (a link that
@@ -360,17 +486,17 @@ async function enumerateIgnoredFiles(
  * recursion — it already resolved before the walk starts — so the deadline
  * is the walk's only bound.
  *
- * @param absDir - Absolute directory whose children are appended.
+ * @param absDir - Absolute directory whose children are visited.
  * @param prefix - Repo-relative POSIX path of `absDir` in the checkout.
  * @param visited - Realpaths of directories already entered on this walk.
- * @param out - Accumulated repo-relative descendant paths.
+ * @param onEntry - Receives each discovered descendant path.
  * @param deadline - Shared enumeration deadline (fail-closed).
  */
 async function walkSymlinkedDirectory(
   absDir: string,
   prefix: string,
   visited: Set<string>,
-  out: string[],
+  onEntry: (relativePath: string) => void,
   deadline: number
 ): Promise<void> {
   assertBeforeDeadline(deadline);
@@ -400,7 +526,7 @@ async function walkSymlinkedDirectory(
     children.map(async (child): Promise<void> => {
       assertBeforeDeadline(deadline);
       const childRel = `${prefix}/${child.name}`;
-      out.push(childRel);
+      onEntry(childRel);
       if (child.isSymbolicLink()) {
         const childAbs = path.join(absDir, child.name);
         let childTarget: string;
@@ -410,31 +536,31 @@ async function walkSymlinkedDirectory(
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
           throw error;
         }
-        await walkSymlinkedDirectory(path.resolve(absDir, childTarget), childRel, visited, out, deadline);
+        await walkSymlinkedDirectory(path.resolve(absDir, childTarget), childRel, visited, onEntry, deadline);
       } else if (child.isDirectory()) {
-        await walkSymlinkedDirectory(path.join(absDir, child.name), childRel, visited, out, deadline);
+        await walkSymlinkedDirectory(path.join(absDir, child.name), childRel, visited, onEntry, deadline);
       }
     })
   );
 }
 
 /**
- * Synthesizes the repo-relative descendants of symlinked directories among an
- * enumerated entry list.
+ * Finds policy matches inside symlinked directories without retaining their
+ * unmatched descendants.
  *
- * `git ls-files` never descends through a symlinked directory: for the
- * workspaces shape — node_modules entries are links into packages/ — it
- * reports `node_modules/pkgA` but nothing under it, so a policy rule
+ * Git cannot report paths inside a symlinked directory: for the workspaces
+ * shape — node_modules entries are links into packages/ — it reports
+ * `node_modules/pkgA` but nothing under it, so a policy rule
  * addressing `node_modules/pkgA/.cache/x.js` would otherwise match nothing and
  * the omit/copy decisions for the package's interior would silently no-op. For
  * each entry that is a symlink (decided by lstat, which does not follow links)
  * whose resolved target is a directory, the target is walked recursively with
- * `walkSymlinkedDirectory`, appending the descendants as `<entry>/<child>`
- * paths — exactly the paths as seen in the checkout. The cycle guard bounds
+ * `walkSymlinkedDirectory`, matching descendants as `<entry>/<child>` paths —
+ * exactly the paths as seen in the checkout. The cycle guard bounds
  * the walk on pathological link topologies, and the shared enumeration
  * deadline — one fail-closed budget of `CARDS_WORKTREE_POLICY_TIMEOUT_MS`
  * (default 30000) measured from the start of the enumeration phase, covering
- * every `git ls-files` scan and every synthesis walk — bounds the overall
+ * candidate discovery, Git checks, and synthesis walks — bounds the overall
  * enumeration.
  * The `git ls-files` timeout itself cannot bound this walk: it only guards
  * the git subprocess, which resolves before the walk begins. Expiry throws
@@ -442,16 +568,21 @@ async function walkSymlinkedDirectory(
  * would silently drop omit entries for large trees).
  *
  * @param sourceRoot - Source checkout root.
- * @param entries - Repo-relative paths reported by `git ls-files`.
+ * @param entries - Eligible ignored or tracked symlink paths.
+ * @param omitMatcher - Selects descendants that must remain absent.
+ * @param includeMatcher - Selects descendants that must be copied.
  * @param deadline - Shared enumeration deadline (fail-closed).
- * @returns The synthesized repo-relative descendant paths.
+ * @returns Matched descendants only.
  */
-async function synthesizeSymlinkedDescendants(
+async function matchSymlinkedDescendants(
   sourceRoot: string,
   entries: string[],
+  omitMatcher: ReturnType<typeof ignore>,
+  includeMatcher: ReturnType<typeof ignore>,
   deadline: number
-): Promise<string[]> {
-  const synthesized: string[] = [];
+): Promise<{ omitMatches: string[]; copyMatches: string[] }> {
+  const omitMatches: string[] = [];
+  const copyMatches: string[] = [];
   await Promise.all(
     entries.map(async (entry): Promise<void> => {
       assertBeforeDeadline(deadline);
@@ -490,10 +621,79 @@ async function synthesizeSymlinkedDescendants(
       // One walk per entry: two links to the same realpath are two distinct
       // checkout paths, each of which the user's patterns may address.
       const visited = new Set<string>();
-      await walkSymlinkedDirectory(resolvedTarget, entry, visited, synthesized, deadline);
+      await walkSymlinkedDirectory(
+        resolvedTarget,
+        entry,
+        visited,
+        (candidate) => {
+          if (omitMatcher.ignores(candidate)) {
+            omitMatches.push(candidate);
+          } else if (includeMatcher.ignores(candidate)) {
+            copyMatches.push(candidate);
+          }
+        },
+        deadline
+      );
     })
   );
-  return synthesized;
+  assertBeforeDeadline(deadline);
+  return { omitMatches, copyMatches };
+}
+
+/**
+ * Builds only the matches needed by the policy's consumers beneath collapsed
+ * ignored directories. Git validates real-file and symlink candidates before
+ * any symlink interior is synthesized; interiors inherit the eligibility of
+ * their ignored symlink, as in the original Git enumeration.
+ *
+ * @param sourceRoot - Source checkout root.
+ * @param directories - Collapsed ignored directories.
+ * @param omitMatcher - Selects descendants that prevent sharing their ancestor.
+ * @param includeMatcher - Selects descendants for the copy executor.
+ * @param deadline - Shared enumeration deadline.
+ * @returns Match lists aligned with the collapsed directory input.
+ */
+async function enumerateIgnoredPolicyMatches(
+  sourceRoot: string,
+  directories: readonly string[],
+  omitMatcher: ReturnType<typeof ignore>,
+  includeMatcher: ReturnType<typeof ignore>,
+  deadline: number
+): Promise<Array<{ dir: string; omitMatches: string[]; copyMatches: string[] }>> {
+  const matchesByDir = directories.map((dir) => ({ dir, omitMatches: [] as string[], copyMatches: [] as string[] }));
+  const candidates = await collectPolicyCandidates(sourceRoot, directories, omitMatcher, includeMatcher, deadline);
+  const eligibility = await checkIgnoredCandidates(
+    sourceRoot,
+    [...new Set([...candidates.matches, ...candidates.symlinks].map((entry) => entry.path))],
+    deadline
+  );
+
+  for (const candidate of candidates.matches) {
+    if (!eligibility.has(candidate.path)) continue;
+    const owner = matchesByDir[candidate.directoryIndex];
+    if (owner === undefined) continue;
+    if (omitMatcher.ignores(candidate.path)) {
+      owner.omitMatches.push(candidate.path);
+    } else if (includeMatcher.ignores(candidate.path)) {
+      owner.copyMatches.push(candidate.path);
+    }
+  }
+
+  for (const symlink of candidates.symlinks) {
+    if (!eligibility.has(symlink.path)) continue;
+    const owner = matchesByDir[symlink.directoryIndex];
+    if (owner === undefined) continue;
+    const interior = await matchSymlinkedDescendants(sourceRoot, [symlink.path], omitMatcher, includeMatcher, deadline);
+    owner.omitMatches.push(...interior.omitMatches);
+    owner.copyMatches.push(...interior.copyMatches);
+  }
+
+  for (const owner of matchesByDir) {
+    owner.omitMatches.sort();
+    owner.copyMatches.sort();
+  }
+  assertBeforeDeadline(deadline);
+  return matchesByDir;
 }
 
 /**
@@ -814,10 +1014,13 @@ async function enumerateTrackedSymlinkInteriors(
     );
   }
 
-  const matched = [...inReach, ...(await synthesizeSymlinkedDescendants(sourceRoot, inReach, deadline))];
+  const interiors = await matchSymlinkedDescendants(sourceRoot, inReach, omitMatcher, includeMatcher, deadline);
   return {
-    omitMatches: matched.filter((p) => omitMatcher.ignores(p)),
-    copyMatches: matched.filter((p) => !omitMatcher.ignores(p) && includeMatcher.ignores(p))
+    omitMatches: [...inReach.filter((p) => omitMatcher.ignores(p)), ...interiors.omitMatches],
+    copyMatches: [
+      ...inReach.filter((p) => !omitMatcher.ignores(p) && includeMatcher.ignores(p)),
+      ...interiors.copyMatches
+    ]
   };
 }
 
@@ -882,9 +1085,9 @@ function posixNormalize(relativePath: string): string {
  * Reads `.worktreeignore` and `.worktreeinclude` from `sourceRoot` (absent
  * files contribute no patterns), intersects `.worktreeignore` matches and
  * `.worktreeinclude` copy selections with the authoritative collapsed
- * ignored-path input, enumerates the ignored descendants of collapsed ignored
- * directories — once, feeding both copy selection and omit descendant
- * matching — plus the synthesized interiors of TRACKED symlink entries under
+ * ignored-path input, walks collapsed directories for policy candidates and
+ * confirms their Git eligibility in one batch. It also examines the
+ * synthesized interiors of TRACKED symlink entries under
  * the node_modules trees the rerouter owns, derived from the `workspaces`
  * globs (see {@link enumerateTrackedSymlinkInteriors}) — and computes the
  * final omit/copy/share classification. A collapsed ignored directory is
@@ -895,9 +1098,10 @@ function posixNormalize(relativePath: string): string {
  * uses to materialize a matcher-matched omitted path's ancestor directories
  * as real trees instead of symlinking them wholesale.
  *
- * When either config file has patterns, the whole enumeration phase — every
- * per-directory `git ls-files` scan, the tracked-symlink scan, the owned-
- * workspace walk, and every see-through synthesis walk — shares one
+ * When either config file has patterns, the whole enumeration phase —
+ * filesystem candidate discovery, the batched Git eligibility check, the
+ * tracked-symlink scan, the owned-workspace walk, and every see-through
+ * synthesis walk — shares one
  * fail-closed deadline of `CARDS_WORKTREE_POLICY_TIMEOUT_MS` (default
  * 30000); expiry rejects with {@link WorktreeIncludeError} naming the
  * variable, never truncating.
@@ -935,16 +1139,14 @@ export async function loadWorktreePathPolicy(opts: {
   // (omit wins over copy).
   const matchedFiles = ignored.files.filter((f) => includeMatcher.ignores(f) && !omitMatcher.ignores(f));
 
-  // Enumerate each collapsed ignored directory's descendants once. The single
-  // enumeration feeds both sides: include patterns select descendants for
-  // copy, and omit patterns can only be tested against descendants here — a
-  // collapsed `dist` entry never matches `dist/**` or `dist/bundle.js`.
-  // Skipped entirely when neither config file has patterns, so the common
-  // no-config path pays no per-directory `git ls-files` scan.
+  // Walk collapsed ignored directories for policy candidates. Include rules
+  // need exact copy paths; omit rules need matching descendants to prevent an
+  // ancestor directory from being shared. Git checks only those candidates
+  // for ignored/untracked eligibility. The no-config path skips this work.
   const needsEnumeration = ignorePatterns.length > 0 || includePatterns.length > 0;
-  // One shared fail-closed budget for the whole enumeration phase: every
-  // per-directory `git ls-files` scan, the tracked-symlink scan, the owned-
-  // workspace walk, and every see-through synthesis walk must finish within
+  // One shared fail-closed budget for the whole enumeration phase: candidate
+  // discovery, Git eligibility and tracked-symlink checks, workspace discovery,
+  // and every see-through synthesis walk must finish within
   // the budget of enumeration start (the configured
   // CARDS_WORKTREE_POLICY_TIMEOUT_MS, default 30000). Expiry throws — the
   // policy fails closed (never truncates, which would silently drop omit
@@ -974,13 +1176,12 @@ export async function loadWorktreePathPolicy(opts: {
   }
   const [nestedByDir, trackedSymlinkMatches] = needsEnumeration
     ? await Promise.all([
-        Promise.all(
-          ignored.directories.map(async (dir) => {
-            const entries = await enumerateIgnoredFiles(sourceRoot, dir, enumerationDeadline, enumerationTimeoutMs);
-            const omitMatches = entries.filter((p) => omitMatcher.ignores(p));
-            const copyMatches = entries.filter((p) => !omitMatcher.ignores(p) && includeMatcher.ignores(p));
-            return { dir, omitMatches, copyMatches };
-          })
+        enumerateIgnoredPolicyMatches(
+          sourceRoot,
+          ignored.directories,
+          omitMatcher,
+          includeMatcher,
+          enumerationDeadline
         ),
         enumerateTrackedSymlinkInteriors(
           sourceRoot,

@@ -515,8 +515,8 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
 
     // Build the authoritative omit/copy/share policy once, as soon as
     // ignored-path discovery resolves. Discovery started before `git worktree
-    // add`, so the policy load — config reads plus the git ls-files enumeration
-    // of ignored directories — typically completes during the checkout and
+    // add`, so the policy load — config reads, candidate discovery, and a
+    // batched Git eligibility check — typically completes during the checkout and
     // overlaps the settle waves below. Every downstream step awaits this same
     // promise so all of them make one path decision: the rerouter skips
     // non-shareable node_modules descendants, the share-candidate join excludes

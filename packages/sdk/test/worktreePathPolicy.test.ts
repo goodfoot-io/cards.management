@@ -361,6 +361,22 @@ describe('loadWorktreePathPolicy', () => {
     expect(policy.classify('dist/other.js')).toBe('share');
   });
 
+  it('does not select files inside an ignored nested Git repository', async () => {
+    sourceRoot = await makeSourceRoot('nested-repository');
+    await initGitRepo(sourceRoot, ['vendor/'], [{ rel: 'README.md', content: 'hi' }]);
+    const nestedRoot = path.join(sourceRoot, 'vendor', 'external');
+    await fs.mkdir(nestedRoot, { recursive: true });
+    const { execFileSync } = await import('node:child_process');
+    execFileSync('git', ['init', '-q'], { cwd: nestedRoot });
+    await fs.writeFile(path.join(nestedRoot, 'data.txt'), 'nested');
+    await fs.writeFile(path.join(sourceRoot, '.worktreeinclude'), 'vendor/external/data.txt\n');
+
+    const policy = await loadPolicy(sourceRoot);
+
+    expect(policy.copy).toEqual([]);
+    expect(policy.share.directories).toEqual(['vendor']);
+  });
+
   it('copies ignored files from a colon-prefixed ignored directory (literal pathspec)', async () => {
     sourceRoot = await makeSourceRoot('colon-prefixed');
     await initGitRepo(sourceRoot, [':foo/'], [{ rel: 'README.md', content: 'hi' }]);
