@@ -388,7 +388,7 @@ async function collectPolicyCandidates(
         }
       }
     };
-    await Promise.all(Array.from({ length: Math.min(32, frontier.length) }, () => worker()));
+    await Promise.all(Array.from({ length: Math.min(64, frontier.length) }, () => worker()));
     frontier = next;
   }
   return { matches, symlinks };
@@ -679,14 +679,31 @@ async function enumerateIgnoredPolicyMatches(
     }
   }
 
-  for (const symlink of candidates.symlinks) {
-    if (!eligibility.has(symlink.path)) continue;
-    const owner = matchesByDir[symlink.directoryIndex];
-    if (owner === undefined) continue;
-    const interior = await matchSymlinkedDescendants(sourceRoot, [symlink.path], omitMatcher, includeMatcher, deadline);
-    owner.omitMatches.push(...interior.omitMatches);
-    owner.copyMatches.push(...interior.copyMatches);
-  }
+  // Workspace links are common under node_modules. Their interiors are
+  // independent checkout paths, so walk several at once instead of paying the
+  // filesystem latency of each link in series. Bound the pool: each interior
+  // walk also reads child directories concurrently.
+  const eligibleSymlinks = candidates.symlinks.filter((symlink) => eligibility.has(symlink.path));
+  let symlinkCursor = 0;
+  await Promise.all(
+    Array.from({ length: Math.min(8, eligibleSymlinks.length) }, async () => {
+      while (symlinkCursor < eligibleSymlinks.length) {
+        const symlink = eligibleSymlinks[symlinkCursor++];
+        if (symlink === undefined) break;
+        const owner = matchesByDir[symlink.directoryIndex];
+        if (owner === undefined) continue;
+        const interior = await matchSymlinkedDescendants(
+          sourceRoot,
+          [symlink.path],
+          omitMatcher,
+          includeMatcher,
+          deadline
+        );
+        owner.omitMatches.push(...interior.omitMatches);
+        owner.copyMatches.push(...interior.copyMatches);
+      }
+    })
+  );
 
   for (const owner of matchesByDir) {
     owner.omitMatches.sort();
