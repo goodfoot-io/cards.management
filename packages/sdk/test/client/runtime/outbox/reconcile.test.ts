@@ -15,7 +15,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFileResultCustodian, readResultCustody } from '../../../../src/client/runtime/durable-results/index.js';
 import {
   type ClientOutbox,
@@ -303,6 +303,26 @@ describe('startup reconciliation', () => {
     expect(report.unowned.map((f) => f.ref.messageId)).toEqual(['msg-cancel']);
     expect(report.retired).toEqual([]);
     expect(countRecordFiles(root)).toBe(1);
+  });
+
+  it('retires an additional intent only through its explicitly named receipt validator', async () => {
+    await outbox.enqueue(makeUnownedIntentInput({ messageId: 'msg-cancel' }));
+    const { authorities } = scriptedAuthorities(() => ({ kind: 'authority-unavailable', detail: 'wrong authority' }));
+    const validateRecoveredObligation = vi.fn(async (record: { messageId: string }) => ({
+      kind: 'accepted' as const,
+      acknowledgment: ackFor(record.messageId)
+    }));
+
+    const report = await reconcileOutboxOnStartup(outbox, {
+      ...authorities,
+      recoveredIntentValidators: {
+        'execution.cancelRequest': { validateRecoveredObligation }
+      }
+    });
+
+    expect(validateRecoveredObligation).toHaveBeenCalledOnce();
+    expect(report.retired.map((ref) => ref.messageId)).toEqual(['msg-cancel']);
+    expect(countRecordFiles(root)).toBe(0);
   });
 
   it('reports an unowned record apart from a blocked one, since retrying cannot help it', async () => {

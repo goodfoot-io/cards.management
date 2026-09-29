@@ -235,10 +235,9 @@ export interface ClientOutbox {
  * on a validator's say-so, because it is confirming legitimacy rather than taking
  * custody — the copy it is vouching for already exists.
  *
- * Every other durable intent — cancels, shutdown requests, watcher stops — has no
- * durable owner yet. Routing keys on this list rather than on `deliveryClass`
- * alone precisely so that a type nobody holds a copy of cannot be retired by
- * accident when a new intent is added to the protocol.
+ * Other intent types require a separately configured validator for a durable
+ * receipt. Routing keys on this list rather than on `deliveryClass` alone so a
+ * newly added intent cannot be retired by accident.
  */
 export const LAUNCH_INTENT_MESSAGE_TYPES = ['execution.launchRequest'] as const;
 
@@ -320,6 +319,8 @@ export interface ReconciliationAuthorities {
   readonly resultCustodian: RecoveredResultCustodian;
   /** Validates recovered launch intents, whose copy admission already holds. */
   readonly launchIntentValidator: RecoveredIntentValidator;
+  /** Explicit additional intent types with their own durable receipt stores. */
+  readonly recoveredIntentValidators?: Readonly<Record<string, RecoveredIntentValidator>>;
 }
 
 /** One record reconciliation could not complete, and why. */

@@ -19,12 +19,9 @@
  * a durable copy, so the question is legitimacy, not custody, and
  * {@link ReconciliationAuthorities.launchIntentValidator} answers it.
  *
- * Every other durable intent — cancels, shutdown requests, watcher stops — has no
- * durable owner in this build. Those are never routed anywhere: the router
- * recognises that nothing can answer for them and reports them `unowned` without
- * asking. Offering one to either port would be inviting a component to vouch for
- * a copy it does not have, which is precisely how the only copy of an obligation
- * gets deleted.
+ * Other durable intents are routed only when the composition names an explicit
+ * validator for their type. A validator must prove that another durable store
+ * already holds the exact obligation. Unknown types remain `unowned`.
  *
  * Three refusals here are the substance of the module.
  *
@@ -89,7 +86,8 @@ async function routeToAuthority(
   if (LAUNCH_INTENT_TYPES.has(record.envelope.type)) {
     return authorities.launchIntentValidator.validateRecoveredObligation(record);
   }
-  return null;
+  const validator = authorities.recoveredIntentValidators?.[record.envelope.type];
+  return validator === undefined ? null : validator.validateRecoveredObligation(record);
 }
 
 /**
