@@ -101,7 +101,8 @@ Reproduce the failing command against the baseline instead of guessing. If the r
 
 Follow `./worktrees.md` to create a disposable detached worktree at `implement/$TASK_KEY/baseline`, provision its dependencies, and run the failing command. Preserve the output, then remove that verified temporary worktree.
 
-- **Reproduces on baseline** — the failure predates this task's changes. Try cheap remedies first (sync with the local base branch, reinstall dependencies, rebuild derived artifacts); if that doesn't clear it, repair the root cause in the active workspace, then re-run the failing command.
+- **Baseline setup fails** — ownership is inconclusive. Diagnose and repair provisioning, tools, dependencies, or services; retry with new evidence.
+- **Reproduces on baseline** — repair local drift (base-branch sync, dependencies, artifacts), then the root cause; re-run the failing command.
 - **Does not reproduce on baseline** — the failure is in scope of this task's work; fix it and re-run.
 - **Independent progress is impossible** — save the evidence, load `blocker-contract`, and block only if every criterion holds. Otherwise repair, isolate, delegate, or re-plan.
 

@@ -129,7 +129,8 @@ create-worktree "implement/$CARD_ID/baseline"
 
 Run the failing command in that worktree, then delete the worktree and branch.
 
-- **Reproduces on baseline** — the failure predates this card's changes. Try cheap remedies first (sync with the local base branch, reinstall dependencies, rebuild derived artifacts); if that doesn't clear it, repair the root cause in the active workspace, then re-run the failing command.
+- **Baseline setup fails** — ownership is inconclusive. Diagnose and repair provisioning, tools, dependencies, or services; retry with new evidence.
+- **Reproduces on baseline** — repair local drift (base-branch sync, dependencies, artifacts), then the root cause; re-run the failing command.
 - **Does not reproduce on baseline** — the failure is in scope of this card's work; fix it and re-run.
 - **Independent progress is impossible** — load `$runtime:blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
 
@@ -145,7 +146,7 @@ At any point during implementation, stop and return to planning if any of the fo
 4. **Scope exceeded the card's implied boundary** — the in-scope work must touch significantly more files or systems than the card (or plan) described. Discovering issues in code the change does not interact with is *not* this condition — create a new card for those and continue. Scope too large for one worker is also not this condition — split into another package per `./developer-wave.md`.
 5. **A plan assumption proved false, or the plan missed scope that changes the approach, or a completed planned step invalidates a later one** — when following a plan, any of these means the plan needs revision, not a workaround.
 
-If a false assumption exposes a missing capability, plan and build it when it fits the card outcome. Only a distinct independently deliverable enhancement becomes a prerequisite: create or reuse its card, name the consumed deliverable, then apply `<blocker-contract>`.
+Build missing capabilities within the card outcome. Before deferring work to a separate prerequisite, prove `<blocker-contract>`, name the consumed deliverable, then search for or create its card.
 
 When any condition holds, drain a live developer team. Preserve the off-card snapshot; restore card-owned tracked paths from the baseline and remove only session-created owned paths. A whole-tree reset or clean is allowed only when no off-card state exists. Then discard step tags:
 

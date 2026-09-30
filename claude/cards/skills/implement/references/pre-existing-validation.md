@@ -19,6 +19,6 @@ git worktree remove --force "$CHECK_DIR"
 
 ## Decide and repair
 
-The same failure on baseline establishes pre-existence, not permission to ignore it. Repair its root cause or route it to its code owner. A passing baseline or different failure does not prove pre-existence; investigate the current diff. Repeat intermittent checks under equivalent conditions. If the baseline cannot run faithfully, the result is inconclusive: preserve the evidence and repair the environment or reconsider the approach; apply `cards:blocker-contract` only when independent progress is impossible.
+The same failure on baseline establishes pre-existence, not permission to ignore it. Repair its root cause or route it to its code owner. A passing baseline or different failure does not prove pre-existence; investigate the current diff. Repeat intermittent checks under equivalent conditions. If baseline setup fails or remains pending, ownership is inconclusive: preserve output, inspect provisioning and tool/service health, attempt supported recovery, or reconsider the approach; apply `cards:blocker-contract` only when independent progress is impossible.
 
 Never skip or weaken tests, suppress required checks, or bypass hooks. After any repair, rerun the original full command; focused passes alone do not close the gate. Return to [implementation](./implementation.md) only when required checks pass.

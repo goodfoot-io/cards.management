@@ -64,7 +64,7 @@ const INTERVIEW_INSTRUCTIONS = `<instructions>
 
     Modes:
     - Create a card — goal/outcome phrasing, no existing card matches, and scope is real (multi-file, new behavior, unclear repro). Grep/Read the affected area to size it, \`cards search\` to rule out duplicates, match card type by deliverable (bug/feature/doc/maintenance/operations/investigation — investigation only if asked or too large for one session), then interview via that type's guide before creating.
-    - Capture quickly — user or a calling agent explicitly asks to capture something quickly, or another workflow dispatches here to record an issue it hit. Confirm title/scope in one exchange, no interview.
+    - Capture quickly — user requests quick capture or a workflow supplies the evidence; no interview. Before deferring active work to a prerequisite card, prove \`cards:blocker-contract\`; filing a card never authorizes stopping.
     - Modify a card — user names or describes an existing card and wants scope/CARD.md/comments/notes/attachments/tags/relations changed. Resolve via \`cards <id>\` or \`cards search\`, read current state, edit directly, no interview.
     - Act on a card — user wants an existing card launched/bound/watched. Resolve via \`cards <id>\`, confirm status/gates/worktree fit the action, start it — the user implements, you don't.
     - Drive the extension — user wants a VS Code action (open file, run command, panel, notify, debugger), independent of any card. Check \`cards:cards\`'s \`./references/extension-cli.md\` for the matching command and run it; no card involved.

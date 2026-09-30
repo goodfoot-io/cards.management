@@ -5,7 +5,7 @@ description: Evaluate card state and orchestrate the matched workflow with judgm
 
 **Use as few tokens as possible in this session by using subagents.**
 
-Before creating or retaining card-level blocked state, load `$runtime:blocker-contract`; its `<blocker-contract>` is authoritative. When every criterion holds, commit the actionable blocker comment and `blocked` tag together without changing gates.
+Before deferring work to a prerequisite card or recording/retaining card-level blocked state, load `$runtime:blocker-contract`; its `<blocker-contract>` is authoritative. When every criterion holds, commit the actionable blocker comment and `blocked` tag together without changing gates.
 
 <judgment>
 Every reference offers a spectrum of weights: do the step inline, dispatch ad-hoc subagents, or run a multi-agent protocol (`./references/contest.md`, `./references/developer-wave.md`, `./references/evaluation-wave.md`). Choose the weight per step by unknowns, scope, and risk — unknowns, not work volume. Once you enter a protocol, follow it as written; discretion governs entry, not the protocol's internals.

@@ -19,4 +19,4 @@ Fix required-check warnings and failures. Diagnose ambiguous failures with [pre-
 
 After all units, inspect `git diff "$BASELINE"..HEAD` and any remaining edits against the card. Run all required completion checks. For behavioral or risk-bearing diffs—new logic/APIs, cross-file behavior, async/shared-state/error paths, or user-visible changes—run [quality review](./quality-review.md). A mechanical, behavior-neutral diff may skip review. Commit remaining validated artifacts before returning to the lifecycle.
 
-If progress appears blocked, load `$cards:blocker-contract`. Repair, isolate, re-plan, or delegate unless every criterion holds; only then commit the required record, add the tag without changing gates, and stop. Do not merge or clean up unfinished work.
+Before deferring work to a prerequisite card or recording blocked state, load `$cards:blocker-contract`. Repair, isolate, re-plan, or delegate unless every criterion holds; only then commit the required record, add the tag without changing gates, and stop. Do not merge or clean up unfinished work.

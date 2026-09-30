@@ -41,7 +41,7 @@ Match the first applicable row:
 
 **Deep cards.** When the source material is a document set — three or more documents, or one document the card cannot cover without omission — or the user says "deep card", additionally load `./references/deep-card.md`. It layers a multi-file documentation corpus (routing-hub CARD.md, `explanation/`/`how-to/`/`reference/`/`notes/` tiers) over the matched type's interview and intent guidance, replacing the writing guide's CARD.md body structure. A deep card is ~20 files and 6+ commits: do not load it for a single-topic request, however detailed — "comprehensive" alone is not the trigger.
 
-Run the interview when creating a card interactively with a user: gather enough signal, then invoke the `cards create` flow below and compose CARD.md against the writing guide in the same initial commit. Skip the interview when the user asks to capture something quickly, or when another workflow dispatches here to record an issue it hit — create the card directly from what you already know, still composing CARD.md against the matching writing guide.
+Interview unless the user requests quick capture or a workflow supplies the evidence. Compose CARD.md against the writing guide in the initial commit. Before creating a prerequisite card to defer active work, load `$blocker-contract` and prove every criterion; filing a card never authorizes stopping.
 
 ### FMEA review
 
@@ -147,7 +147,7 @@ Actions run interactively by default. `--background` is rejected with a 400 erro
 
 `--variable-group` is ordered and repeatable. When supplied, the action receives exactly those group IDs for that dispatch only; it does not change the variable-group toggles persisted in the webview. When the flag is omitted, dispatch retains the normal persisted variable-group selection.
 
-**Signal shutdown** — From inside a running action, tell Cards the agent reached a terminal state (after a merge, after recording a blocker, after all tasks complete). Check `EXIT_WHEN_DONE` first; if true, finish or roll back in-progress commits, then:
+**Signal shutdown** — Inside a running action, when `EXIT_WHEN_DONE` is true and work reaches a terminal state, finish or roll back in-progress commits. Use `blocked` only after proving `$blocker-contract` and committing its record:
 ```
 cards "$CARD_ID" shutdown --outcome success|blocked|error [--message "..."]
 ```
