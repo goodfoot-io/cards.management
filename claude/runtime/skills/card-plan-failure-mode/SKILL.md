@@ -102,7 +102,7 @@ Your scope is all code the plan interacts with, not just what it modifies. Pre-e
 
 A consumer the plan does not account for is a failure mode the planner doesn't know about. Apply the rule symmetrically: every finding asserting what the workspace does or does not contain ("the plan is missing X," "feature Y is not shipped," "no caller handles Z") must be verified by reading or grepping, not inferred from the plan's silence. The bar is symmetric for clearing: a load-bearing claim clears only on workspace evidence or execution — a claim you cleared by argument alone stays an open question.
 
-**Out-of-scope issues**: For an issue in code the plan does not interact with, do not file a finding. Load the `cards:cards` skill, create a new card with a `related` relation to the current card, add the reciprocal relation to `CARD.meta.json`, then continue.
+**Out-of-scope issues**: List an issue in code the plan does not interact with under `Out of scope:` in your verdict, never as a finding; it never gates approval. Then continue your analysis.
 
 ### 2.1. Answer the Failure-Mode Questions Against the Plan
 

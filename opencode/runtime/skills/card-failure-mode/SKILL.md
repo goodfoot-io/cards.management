@@ -62,7 +62,7 @@ Your scope is all code the change interacts with, not just code it introduced. P
 
 A load-bearing claim clears only on execution or workspace evidence.
 
-**Out-of-scope issues**: If you discover an issue in code the change does not interact with, do not include it in your findings. Instead, load the `$cards` skill and create a new card about the issue with a `related` relation to the current card. Add the reciprocal relation to the current card's `CARD.meta.json`. Then continue your analysis.
+**Out-of-scope issues**: List an issue in code the change does not interact with under `Out of scope:` in your verdict, never as a finding; it never gates approval. Then continue your analysis.
 
 Run the code where possible. On Deep, your peer exercises the same worktree concurrently: before filing a nondeterminism, flake, or "the gate disagrees with itself" finding, rule out a peer's transient edit or run (mtimes, `git status`, the orchestrator's relay of its last finding). A witness that holds a shared resource for long (lock, port, service, load run) blocks your peer and the orchestrator's gate — run it last or tell the orchestrator first.
 

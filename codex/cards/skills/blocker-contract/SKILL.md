@@ -16,7 +16,7 @@ Before creating or reusing a prerequisite card to defer current work, recording 
 
 Otherwise preserve unrelated state and continue recovery. Repair tools, dependencies, artifacts, services, conflicts, and baseline failures; never weaken required checks. Retry only with a new hypothesis. An error label, pending infrastructure state, or failed first strategy proves no blocker.
 
-For card-based prerequisites, only after proof search for an existing card before creating one. User-requested cards and unrelated discoveries do not require blocker proof; filing them does not authorize stopping.
+Reuse an existing prerequisite card after proof. Never create a card for an issue this work fixes; record the fix in the current card or task state. Other cards need no blocker proof; filing never authorizes stopping.
 
 Relations require a named unfinished deliverable to constitute dependencies. Worker-local `BLOCKED` is scheduling evidence; reconcile it at the orchestrator. `STOP`, `needs_review`, questions, and approval waits are not blockers.
 

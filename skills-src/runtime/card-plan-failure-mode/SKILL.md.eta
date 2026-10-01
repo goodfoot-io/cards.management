@@ -172,12 +172,8 @@ The published set is a floor, never a ceiling — every §2 sweep goes beyond th
   opencode: "A consumer the plan does not account for is a failure mode the planner doesn't know about. Apply this rule symmetrically: every finding that asserts what the workspace does or does not contain (\"the plan is missing X,\" \"feature Y is not shipped,\" \"no caller handles Z\") must be verified by reading or grepping the workspace, not inferred from the plan's silence about the topic. The bar is symmetric for clearing: a load-bearing claim clears only on workspace evidence or execution — a claim you cleared by argument alone stays an open question.\n",
   antigravity: "A consumer the plan does not account for is a failure mode the planner doesn't know about. Apply the rule symmetrically: every finding asserting what the workspace does or does not contain (\"the plan is missing X,\" \"feature Y is not shipped,\" \"no caller handles Z\") must be verified by reading or grepping, not inferred from the plan's silence. The bar is symmetric for clearing: a load-bearing claim clears only on workspace evidence or execution — a claim you cleared by argument alone stays an open question.\n"
 }) %>
-<%= it.variant({
-  "claude-code": "**Out-of-scope issues**: For an issue in code the plan does not interact with, do not file a finding. Load the `cards:cards` skill, create a new card with a `related` relation to the current card, add the reciprocal relation to `CARD.meta.json`, then continue.\n",
-  codex: "**Out-of-scope issues**: If you discover an issue in code the plan does not interact with, do not include it in your findings. Instead, load the `$cards:cards` skill and create a new card about the issue with a `related` relation to the current card. Add the reciprocal relation to the current card's `CARD.meta.json`. Then continue your analysis.\n",
-  opencode: "**Out-of-scope issues**: If you discover an issue in code the plan does not interact with, do not include it in your findings. Instead, load the `$cards` skill and create a new card about the issue with a `related` relation to the current card. Add the reciprocal relation to the current card's `CARD.meta.json`. Then continue your analysis.\n",
-  antigravity: "**Out-of-scope issues**: For an issue in code the plan does not interact with, do not file a finding. Load the `cards` skill, create a new card with a `related` relation to the current card, add the reciprocal relation to `CARD.meta.json`, then continue.\n"
-}) %>
+**Out-of-scope issues**: List an issue in code the plan does not interact with under `Out of scope:` in your verdict, never as a finding; it never gates approval. Then continue your analysis.
+
 ### 2.1. Answer the Failure-Mode Questions Against the Plan
 
 <%= it.variant({

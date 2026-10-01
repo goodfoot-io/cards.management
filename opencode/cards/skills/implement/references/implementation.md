@@ -1,6 +1,6 @@
 # Implementation
 
-Read the repository's AGENTS.md and the card's `CARD.md`, `CARD.meta.json`, and plans. Honor plan gates before editing and merge gates before merging; never change gates. Follow the card's goals, constraints, and approved plan. Keep changes within scope; record unrelated discoveries separately.
+Read the repository's AGENTS.md and the card's `CARD.md`, `CARD.meta.json`, and plans. Honor plan gates before editing and merge gates before merging; never change gates. Follow the card's goals, constraints, and approved plan. Keep changes within scope; card only unfixed discoveries.
 
 For each logical unit, select the first matching primary route:
 
