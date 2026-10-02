@@ -4,7 +4,8 @@
  * @module streams/opencode-session/www/components/expanded/OpencodePresentation
  */
 
-import { Fragment, type ReactElement } from 'react';
+import { type ReactElement, useContext, useLayoutEffect, useMemo, useState } from 'react';
+import { InspectionPages } from '../../../../lib/session/leaf-view-state';
 import {
   BoundedText,
   type ProviderPresentationProps,
@@ -13,7 +14,7 @@ import {
   type SessionRenderContext
 } from '../../../../lib/session/SessionContent';
 import type { SessionLeaf, SessionToolPart } from '../../../../lib/session/types';
-import { type OpencodeNativeUpdates, opencodeNativeUpdateEntries } from '../../lib/native-updates';
+import type { OpencodeNativeUpdates } from '../../lib/native-updates';
 import type {
   OpencodeAttachmentData,
   OpencodeEditedFilesData,
@@ -45,12 +46,12 @@ function timestamp(value: number | undefined): string | undefined {
   return Number.isNaN(date.getTime()) ? String(value) : date.toISOString();
 }
 
-/** Expands original JSONL strings only inside an opened native-details disclosure.
+/** Inspects one retained JSONL revision at a time without materializing the complete history.
  * @param root0 - Source-backed native line chain and bounded page context.
  * @param root0.nativeUpdates - Immutable chain retaining original source lines.
  * @param root0.id - Semantic leaf owning independent inspection page slots.
  * @param root0.context - Shared Cards layout notifications.
- * @returns One pageable Cards text inspector per original source update.
+ * @returns One selected native revision with an independently pageable character window.
  */
 function NativeUpdatesContent({
   nativeUpdates,
@@ -61,20 +62,61 @@ function NativeUpdatesContent({
   id: string;
   context: SessionRenderContext;
 }): ReactElement {
-  const updates = opencodeNativeUpdateEntries(nativeUpdates);
+  const pages = useContext(InspectionPages);
+  const [selectedLine, setSelectedLine] = useState(() => {
+    const saved = pages?.get(id)?.get('native-revision');
+    if (saved !== undefined) return saved;
+    let first = nativeUpdates;
+    while (first.previous) first = first.previous;
+    return first.lineNumber;
+  });
+  useLayoutEffect(() => {
+    if (!pages) return;
+    let slots = pages.get(id);
+    if (!slots) {
+      slots = new Map();
+      pages.set(id, slots);
+    }
+    slots.set('native-revision', selectedLine);
+  }, [pages, id, selectedLine]);
+  const update = useMemo(() => {
+    let node = nativeUpdates;
+    while (node.lineNumber !== selectedLine && node.previous) node = node.previous;
+    return node;
+  }, [nativeUpdates, selectedLine]);
+  const current = update.count - 1;
+  const change = (next: number): void => {
+    let node = nativeUpdates;
+    while (node.count > next + 1) {
+      if (!node.previous) throw new Error('OpenCode native update chain is incomplete');
+      node = node.previous;
+    }
+    context.layout.onBeforeLayoutChange?.(id);
+    setSelectedLine(node.lineNumber);
+  };
   return (
-    <>
-      {updates.map((update, index) => (
-        <Fragment key={`${id}-line-${update.lineNumber}`}>
-          {updates.length > 1 ? (
-            <div className="session-label">
-              Update {index + 1} of {updates.length}
-            </div>
-          ) : null}
-          <BoundedText text={update.line} id={id} context={context} slot={`native-${update.lineNumber}`} />
-        </Fragment>
-      ))}
-    </>
+    <div>
+      {nativeUpdates.count > 1 ? (
+        <div className="session-inspection-controls">
+          <span>
+            Update {current + 1} of {nativeUpdates.count} · Native line {update.lineNumber}
+          </span>
+          <button type="button" disabled={current === 0} onClick={() => change(current - 1)}>
+            Previous update
+          </button>
+          <button type="button" disabled={current === nativeUpdates.count - 1} onClick={() => change(current + 1)}>
+            Next update
+          </button>
+        </div>
+      ) : null}
+      <BoundedText
+        key={update.lineNumber}
+        text={update.line}
+        id={id}
+        context={context}
+        slot={`native-${update.lineNumber}`}
+      />
+    </div>
   );
 }
 

@@ -192,6 +192,14 @@ function nativeEventId(line: OpencodeLine): string | undefined {
   }
 }
 
+/** Encodes native identity components without reserving characters in provider IDs.
+ * @param components - Qualified native or derived identity tuple.
+ * @returns Collision-free selector preserving component boundaries.
+ */
+function identitySelector(...components: readonly (string | number)[]): string {
+  return JSON.stringify(components);
+}
+
 /** Selects a native message/part identity before any display filtering or grouping.
  * @param line - Parsed native line.
  * @param lineNumber - Absolute source coordinate for line-scoped fallbacks.
@@ -200,22 +208,26 @@ function nativeEventId(line: OpencodeLine): string | undefined {
 function nativeSelector(line: OpencodeLine, lineNumber: number): string {
   switch (line.kind) {
     case 'meta':
-      return 'session/meta';
+      return identitySelector('session', 'meta');
     case 'message':
-      return typeof line.data.id === 'string' ? `message/${line.data.id}` : `message-line/${lineNumber}`;
+      return typeof line.data.id === 'string'
+        ? identitySelector('message', line.data.id)
+        : identitySelector('message-line', lineNumber);
     case 'part': {
       const messageId = typeof line.data['messageID'] === 'string' ? line.data['messageID'] : '';
       const callId = line.data.type === 'tool' && typeof line.data.callID === 'string' ? line.data.callID : '';
       const partId = typeof line.data.id === 'string' ? line.data.id : '';
-      if (callId.length > 0) return `tool/${messageId}/${callId}`;
-      return partId.length > 0 ? `part/${messageId}/${partId}` : `part-line/${lineNumber}`;
+      if (callId.length > 0) return identitySelector('tool', messageId, callId);
+      return partId.length > 0
+        ? identitySelector('part', messageId, partId)
+        : identitySelector('part-line', lineNumber);
     }
     case 'idle':
-      return `idle/${line.seq > 0 ? line.seq : lineNumber}`;
+      return identitySelector('idle', line.seq > 0 ? line.seq : lineNumber);
     case 'unknown':
-      return `event/${lineNumber}`;
+      return identitySelector('event', lineNumber);
     case 'malformed':
-      return `malformed/${lineNumber}`;
+      return identitySelector('malformed', lineNumber);
   }
 }
 
@@ -477,7 +489,8 @@ function ensureMessage(state: OpencodeState, nativeId: string, partSelector: str
     previous.firstLine = Math.min(previous.firstLine, lineNumber);
     return previous;
   }
-  const selector = nativeId.length > 0 ? `message/${nativeId}` : `orphan/${partSelector}`;
+  const selector =
+    nativeId.length > 0 ? identitySelector('message', nativeId) : identitySelector('orphan', partSelector);
   const message: MessageState = {
     key,
     selector,
@@ -536,9 +549,9 @@ function nativeDetailsPart(
   suffix = 'native-details'
 ): SessionProviderPart<OpencodePayloads> {
   return {
-    id: sessionIdentity(source, 'opencode-native-details', `${entry.selector}/${suffix}`),
-    semanticKey: `opencode/native-details/${entry.selector}/${suffix}`,
-    provenance: entry.provenance,
+    id: sessionIdentity(source, 'opencode-native-details', identitySelector(entry.selector, suffix)),
+    semanticKey: `opencode/native-details/${identitySelector(entry.selector, suffix)}`,
+    provenance: entry.provenance.slice(),
     kind: 'provider',
     providerKind: 'nativeDetails',
     data: { label, nativeUpdates: entry.nativeUpdates }
@@ -553,7 +566,7 @@ function nativeDetailsPart(
 function projectPart(source: OpencodeSourceIdentity, entry: PartState): readonly OpencodeSessionPart[] {
   if (entry.projectedRevision === entry.revision && entry.projectedParts) return entry.projectedParts;
   const native = entry.value;
-  const provenance = entry.provenance;
+  const provenance = entry.provenance.slice();
   const base = {
     id: sessionIdentity(source, 'opencode-part', entry.selector),
     semanticKey: `opencode/${entry.selector}`,
@@ -742,7 +755,7 @@ function projectMessageInfo(
   const part: SessionProviderPart<OpencodePayloads> = {
     id: sessionIdentity(source, 'opencode-message-details', message.selector),
     semanticKey: `opencode/message/${message.selector}`,
-    provenance: info.provenance,
+    provenance: info.provenance.slice(),
     kind: 'provider',
     providerKind: 'messageDetails',
     data: {
@@ -804,7 +817,7 @@ function projectSession(source: OpencodeSourceIdentity, session: SessionState): 
   const row: SessionProviderRow<OpencodePayloads> = {
     id: sessionIdentity(source, 'opencode-session', 'meta'),
     semanticKey: 'opencode/session/meta',
-    provenance: session.provenance,
+    provenance: session.provenance.slice(),
     kind: 'provider',
     providerKind: 'session',
     data: session.value,
@@ -895,7 +908,7 @@ function appendMalformedPart(
     return;
   }
   const message = ensureMessage(state, rawMessageId, provenance.selector, provenance.lineNumber);
-  const key = `invalid/${provenance.selector}/${provenance.lineNumber}`;
+  const key = identitySelector('invalid', provenance.selector, provenance.lineNumber);
   const nativeUpdates = appendOpencodeNativeUpdate(undefined, record.text, provenance.lineNumber);
   const invalid: PartState = {
     key,
@@ -939,7 +952,7 @@ function reducePart(
   const message = ensureMessage(state, messageId, partKey, provenance.lineNumber);
   const previous = message.parts.get(partKey);
   if (previous && previous.value.type !== native.type) {
-    const conflictKey = `conflict/${partKey}/${provenance.lineNumber}`;
+    const conflictKey = identitySelector('conflict', partKey, provenance.lineNumber);
     const nativeUpdates = appendOpencodeNativeUpdate(undefined, record.text, provenance.lineNumber);
     const conflict: PartState = {
       key: conflictKey,

@@ -129,7 +129,7 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
   const batches = useMemo(() => presentationBatches(rows), [rows]);
   const frames = useContext(SessionFrames);
   const Root = frames?.Root ?? 'div';
-  const Row = frames?.Row ?? 'div';
+  const Row: ComponentType<ComponentProps<'div'>> | 'div' = frames?.Row ?? 'div';
   // The full immutable map remains available to nested content. Declarations govern memoization,
   // including event-only reads; each mounted row retains one coherent render/event snapshot.
   const context = useMemo<SessionRenderContext>(() => ({ disclosures, layout }), [disclosures, layout]);
@@ -201,20 +201,26 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
                       renderInsertion={renderInsertion}
                     >
                       {() => (
-                        <Row
-                          data-session-id={row.id}
-                          data-session-turn={row.anchor === 'turn' ? 'true' : undefined}
-                          className={`session-row session-row--${row.kind}`}
+                        <SessionRowFrame
+                          row={row}
+                          context={context}
+                          frame={Row}
+                          onElement={(element) => {
+                            if (element) elements.set(row.id, element);
+                            else elements.delete(row.id);
+                          }}
                         >
                           {witnessed(row, 'before')}
-                          {row.kind === 'provider' && providerRows?.[row.providerKind] ? (
-                            providerRows[row.providerKind].render({ leaf: row, data: row.data, ...context })
+                          {row.kind === 'provider' ? (
+                            providerRows?.[row.providerKind] ? (
+                              providerRows[row.providerKind].render({ leaf: row, data: row.data, ...context })
+                            ) : (
+                              <ProviderFallback leaf={row} data={row.data} context={context} />
+                            )
                           ) : row.kind === 'message' ? (
                             <div className="session-label">{row.label ?? row.role}</div>
-                          ) : row.kind === 'structural' ? (
-                            <div className={`session-label session-tone--${row.tone}`}>{row.label}</div>
                           ) : (
-                            <ProviderFallback leaf={row} data={row.data} context={context} />
+                            <div className={`session-label session-tone--${row.tone}`}>{row.label}</div>
                           )}
                           {row.parts.map((part) => (
                             <SessionLeafFrame
@@ -237,7 +243,7 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
                             </SessionLeafFrame>
                           ))}
                           {witnessed(row, 'after')}
-                        </Row>
+                        </SessionRowFrame>
                       )}
                     </MemoSessionRow>
                   ))}
@@ -258,25 +264,83 @@ export const SessionFrames = createContext<{
   Row: ComponentType<ComponentProps<'div'>>;
 } | null>(null);
 
+/** Registers provider-row controls on their existing outer frame without duplicate anchor IDs.
+ * @param root0 - Semantic row frame props.
+ * @param root0.row - Row owning provider presentation or shared structural labels.
+ * @param root0.context - Controlled disclosure and layout hooks.
+ * @param root0.frame - Caller-owned row or scroller wrapper.
+ * @param root0.onElement - Receives the unique provider-row leaf element.
+ * @param root0.children - Existing row content and semantic parts.
+ * @returns The original row frame, registered when it owns provider controls.
+ */
+function SessionRowFrame({
+  row,
+  context,
+  frame: Frame,
+  onElement,
+  children
+}: {
+  row: SessionRow;
+  context: SessionRenderContext;
+  frame: ComponentType<ComponentProps<'div'>> | 'div';
+  onElement: (element: HTMLElement | null) => void;
+  children: ReactNode;
+}): ReactElement {
+  const className = `session-row session-row--${row.kind}`;
+  if (row.kind === 'provider') {
+    return (
+      <SessionLeafFrame
+        leaf={row}
+        context={context}
+        frame={Frame}
+        className={className}
+        turn={row.anchor === 'turn'}
+        onElement={onElement}
+      >
+        {children}
+      </SessionLeafFrame>
+    );
+  }
+  return (
+    <Frame
+      data-session-id={row.id}
+      data-session-turn={row.anchor === 'turn' ? 'true' : undefined}
+      className={className}
+    >
+      {children}
+    </Frame>
+  );
+}
+
 /** Registers stable leaf geometry independently of group container identity.
  * @param root0 - Stable leaf registration props.
  * @param root0.leaf - Identity and provenance of this leaf.
  * @param root0.context - Controlled disclosure and layout hooks.
  * @param root0.children - Already projected leaf presentation.
  * @param root0.onElement - Receives the current leaf element or its removal.
+ * @param root0.frame - Optional caller-owned row wrapper.
+ * @param root0.className - Existing row classes or the shared part class.
+ * @param root0.turn - Whether this registered row is a meaningful navigation turn.
  * @returns Rendered session presentation.
  */
 function SessionLeafFrame({
   leaf,
   context,
   children,
-  onElement
+  onElement,
+  frame,
+  className = 'session-part',
+  turn
 }: {
   leaf: SessionLeaf;
   context: SessionRenderContext;
   children: ReactNode;
   onElement: (element: HTMLElement | null) => void;
+  frame?: ComponentType<ComponentProps<'div'>> | 'div';
+  className?: string;
+  turn?: boolean;
 }): ReactElement {
+  const Frame = frame ?? 'div';
   const element = useRef<HTMLDivElement>(null);
   const latest = useRef({ onElement, context });
   latest.current = { onElement, context };
@@ -290,19 +354,23 @@ function SessionLeafFrame({
     };
   }, [leaf.id]);
   return (
-    <div
+    <Frame
       ref={element}
       data-session-id={leaf.id}
-      className="session-part"
-      onFocus={() => {
-        context.layout.onFocusChange?.(leaf.id);
+      data-session-turn={turn ? 'true' : undefined}
+      className={className}
+      onFocus={(event) => {
+        const owner = (event.target as Element).closest(
+          '.session-part[data-session-id], .session-row--provider[data-session-id]'
+        );
+        if (owner === event.currentTarget) context.layout.onFocusChange?.(leaf.id);
       }}
       onBlur={(event) => {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) context.layout.onFocusChange?.(null);
       }}
     >
       {children}
-    </div>
+    </Frame>
   );
 }
 

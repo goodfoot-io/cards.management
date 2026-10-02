@@ -24,7 +24,7 @@ interface Bookmark {
  */
 function bookmark(elements: Map<string, HTMLElement>, node: Node | null): Bookmark | null {
   const element = node instanceof Element ? node : node?.parentElement;
-  const leaf = element?.closest<HTMLElement>('.session-part[data-session-id]');
+  const leaf = element?.closest<HTMLElement>('.session-part[data-session-id], .session-row--provider[data-session-id]');
   if (!node || !leaf || elements.get(leaf.dataset['sessionId']!) !== leaf) return null;
   const path: number[] = [];
   let child = node;

@@ -139,6 +139,8 @@ function ViewportBody<Payloads extends object>({
   const scroller = useMessageScroller();
   const viewport = useRef<HTMLDivElement>(null);
   const anchor = useRef<SessionStableAnchor | null>(null);
+  const settlingLayout = useRef(false);
+  const settlementFrame = useRef<number | null>(null);
   const opened = useRef(false);
   const latest = useRef({ intent, layout });
   latest.current = { intent, layout };
@@ -185,26 +187,54 @@ function ViewportBody<Payloads extends object>({
     },
     [find]
   );
+  const cancelSettlement = useCallback((): void => {
+    if (settlementFrame.current !== null) cancelAnimationFrame(settlementFrame.current);
+    settlementFrame.current = null;
+    settlingLayout.current = false;
+  }, []);
+  useEffect(() => cancelSettlement, [cancelSettlement]);
+  const restoreThroughLayout = useCallback(
+    (saved: SessionStableAnchor): void => {
+      restoreAnchor(saved);
+      settlingLayout.current = true;
+      if (settlementFrame.current !== null) cancelAnimationFrame(settlementFrame.current);
+      // Deferred row sizing and scroller effects must settle before scroll events can replace this anchor.
+      settlementFrame.current = requestAnimationFrame(() => {
+        restoreAnchor(saved);
+        settlementFrame.current = requestAnimationFrame(() => {
+          restoreAnchor(saved);
+          settlementFrame.current = null;
+          settlingLayout.current = false;
+          anchor.current = captureAnchor();
+        });
+      });
+    },
+    [captureAnchor, restoreAnchor]
+  );
   const hold = useCallback((): void => {
+    cancelSettlement();
     setIntent('hold');
     anchor.current = captureAnchor();
-  }, [captureAnchor, setIntent]);
+  }, [captureAnchor, setIntent, cancelSettlement]);
   const followLatest = useCallback((): void => {
+    cancelSettlement();
     setIntent('follow');
     scroller.scrollToEnd({ behavior: 'instant' });
     anchor.current = captureAnchor();
-  }, [captureAnchor, scroller, setIntent]);
+  }, [captureAnchor, scroller, setIntent, cancelSettlement]);
   const navigateTo = useCallback(
     (id: SessionIdentity): void => {
       const root = viewport.current;
       const target = find(id);
       if (!root || !target) return;
+      cancelSettlement();
       setIntent('hold');
       if (!scroller.scrollToMessage(id, { align: 'start', behavior: 'instant' }))
         root.scrollTop += target.getBoundingClientRect().top - root.getBoundingClientRect().top;
-      anchor.current = captureAnchor();
+      anchor.current = { id, offset: target.getBoundingClientRect().top - root.getBoundingClientRect().top };
+      restoreThroughLayout(anchor.current);
     },
-    [captureAnchor, find, scroller, setIntent]
+    [find, scroller, setIntent, cancelSettlement, restoreThroughLayout]
   );
   useImperativeHandle(viewportRef, () => ({ followLatest, hold, navigateTo, captureAnchor, restoreAnchor }), [
     followLatest,
@@ -214,17 +244,22 @@ function ViewportBody<Payloads extends object>({
     restoreAnchor
   ]);
   const settle = useCallback((): void => {
-    if (latest.current.intent === 'hold' && anchor.current) restoreAnchor(anchor.current);
+    const saved = anchor.current;
+    if (latest.current.intent === 'hold' && saved && find(saved.id)) {
+      restoreThroughLayout(saved);
+      return;
+    }
     anchor.current = captureAnchor();
-  }, [captureAnchor, restoreAnchor]);
+  }, [captureAnchor, find, restoreThroughLayout]);
   useLayoutEffect(() => {
     if (!opened.current && content.rows.length > 0) {
       opened.current = true;
+      cancelSettlement();
       const turn = [...content.rows].reverse().find((row) => row.anchor === 'turn') ?? content.rows.at(-1);
       if (turn) scroller.scrollToMessage(turn.id, { align: 'start', behavior: 'instant' });
       anchor.current = captureAnchor();
     } else settle();
-  }, [content.rows, scroller, captureAnchor, settle]);
+  }, [content.rows, scroller, captureAnchor, settle, cancelSettlement]);
   useEffect(() => {
     const root = viewport.current;
     const child = root?.querySelector('.session-content');
@@ -236,6 +271,7 @@ function ViewportBody<Payloads extends object>({
   }, [settle]);
   useEffect(() => {
     const selectionChanged = (): void => {
+      if (settlingLayout.current) return;
       const selection = document.getSelection();
       if (selection && !selection.isCollapsed && viewport.current?.contains(selection.anchorNode)) hold();
     };
@@ -246,7 +282,7 @@ function ViewportBody<Payloads extends object>({
     () => ({
       ...layout,
       onBeforeLayoutChange: (id: SessionIdentity): void => {
-        anchor.current = captureAnchor();
+        if (!settlingLayout.current) anchor.current = captureAnchor();
         layout?.onBeforeLayoutChange?.(id);
       },
       onAfterLayoutChange: (id: SessionIdentity): void => {
@@ -275,7 +311,7 @@ function ViewportBody<Payloads extends object>({
           if (!(event.target as HTMLElement).closest('[data-session-disclosure]')) hold();
         }}
         onScroll={() => {
-          anchor.current = captureAnchor();
+          if (!settlingLayout.current) anchor.current = captureAnchor();
         }}
       >
         <SessionFrames.Provider value={FRAMES}>
