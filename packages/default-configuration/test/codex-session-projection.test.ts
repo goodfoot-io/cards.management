@@ -216,6 +216,50 @@ describe('Codex native session projection', () => {
     controller.dispose();
   });
 
+  it('keeps every appended prefix equivalent to replay without mutating earlier snapshots', () => {
+    const taskUpdates = [
+      JSON.stringify({ type: 'event_msg', payload: { type: 'task_complete', last_agent_message: 'Late answer' } }),
+      JSON.stringify({ type: 'event_msg', payload: { type: 'agent_message', message: 'Late answer' } })
+    ];
+    const associationUpdates = [
+      JSON.stringify({
+        type: 'response_item',
+        payload: { type: 'function_call_output', call_id: 'late-call', output: 'Orphan' }
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: {
+          type: 'local_shell_call',
+          call_id: 'late-call',
+          status: 'completed',
+          action: { type: 'exec', command: ['echo', 'late'] }
+        }
+      }),
+      JSON.stringify({
+        type: 'response_item',
+        payload: { type: 'function_call_output', call_id: 'late-call', output: 'Associated' }
+      })
+    ];
+    for (const lines of [fixture, duplicateToolFixture, taskUpdates, associationUpdates]) {
+      const controller = createTranscriptProjection(codexSessionProjector, 'cards/codex/session');
+      let previous = controller.update(source([])).projection;
+      for (let length = 1; length <= lines.length; length++) {
+        const frozen = JSON.stringify(previous);
+        const nextSource = source(lines.slice(0, length));
+        const next = controller.update(nextSource).projection;
+        expect(next).toEqual(replayTranscript(codexSessionProjector, nextSource));
+        expect(JSON.stringify(previous)).toBe(frozen);
+        previous = next;
+      }
+      const metadata = controller.update(source(lines, { meta: { lineCount: lines.length, isActive: true } }));
+      expect(metadata.projection.rows).toEqual(previous.rows);
+      for (let index = 0; index < previous.rows.length; index++) {
+        expect(metadata.projection.rows[index]).toBe(previous.rows[index]);
+      }
+      controller.dispose();
+    }
+  });
+
   it('renders native semantics and inspectable details through real Cards SessionContent', () => {
     const rows = projected(replayTranscript(codexSessionProjector, source(fixture)).rows);
     const open = new Map<string, boolean>();

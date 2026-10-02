@@ -50,6 +50,40 @@ describe('session content', () => {
     expect(html).toContain('data-session-id="text"');
   });
 
+  it('keeps source and generation boundaries distinct when native coordinates return to an earlier bucket', () => {
+    const positions = [
+      ['first', 'one', 1],
+      ['first', 'one', 2],
+      ['first', 'one', 129],
+      ['first', 'one', 3],
+      ['second', 'one', 3],
+      ['second', 'two', 3]
+    ] as const;
+    const rows: SessionRow[] = positions.map(([sourceKey, generation, lineNumber], index) => ({
+      ...row,
+      id: `position-${index}`,
+      parts: [],
+      provenance: [{ sourceKey, generation, lineNumber, selector: 'record' }]
+    }));
+    rows.push({ ...row, id: 'unqualified', parts: [], provenance: [] });
+    const html = render({ rows });
+    const batches = html.split('class="session-batch"').slice(1);
+    expect(
+      batches.map((batch) =>
+        [...batch.matchAll(/data-session-id="(position-\d|unqualified)"/g)].map((match) => match[1])
+      )
+    ).toEqual([
+      ['position-0', 'position-1'],
+      ['position-2'],
+      ['position-3'],
+      ['position-4'],
+      ['position-5'],
+      ['unqualified']
+    ]);
+    const ids = batches.map((batch) => batch.match(/data-session-id="([^"]+)"/)![1]);
+    expect(new Set(ids).size).toBe(batches.length);
+  });
+
   it('honors controlled disclosure state and bounds oversized raw inspection', () => {
     const raw: SessionRow = {
       ...row,

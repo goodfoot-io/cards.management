@@ -26,6 +26,7 @@ import { renderMarkdownNodes } from '../markdown';
 import './session.css';
 import { InspectionPages, LeafViewState, useLeafViewState, useOwnedLeafViewState } from './leaf-view-state';
 import type {
+  NativeRecordProvenance,
   SessionDisclosureState,
   SessionInsertion,
   SessionLayoutHooks,
@@ -669,11 +670,25 @@ function presentationBatches<Payloads extends object>(
   const batches: { id: string; rows: SessionRow<Payloads>[] }[] = [];
   const occurrences = new Map<string, number>();
   let previousKey: string | undefined;
+  let previousOrigin: NativeRecordProvenance | undefined;
+  let previousBucket: number | undefined;
   for (const row of rows) {
     const origin = row.provenance[0];
-    const key = origin
-      ? JSON.stringify([origin.sourceKey, origin.generation, Math.floor((origin.lineNumber - 1) / 128)])
-      : row.id;
+    const bucket = origin ? Math.floor((origin.lineNumber - 1) / 128) : undefined;
+    const sameBucket =
+      origin &&
+      previousOrigin &&
+      origin.sourceKey === previousOrigin.sourceKey &&
+      origin.generation === previousOrigin.generation &&
+      bucket === previousBucket;
+    // Consecutive rows usually share a physical bucket; serialize its stable key only once.
+    const key = sameBucket
+      ? previousKey!
+      : origin
+        ? JSON.stringify([origin.sourceKey, origin.generation, bucket])
+        : row.id;
+    previousOrigin = origin;
+    previousBucket = bucket;
     if (key === previousKey) batches[batches.length - 1]!.rows.push(row);
     else {
       const occurrence = occurrences.get(key) ?? 0;

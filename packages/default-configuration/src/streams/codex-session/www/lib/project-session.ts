@@ -72,6 +72,8 @@ interface StoredEntry {
   readonly details: CodexNativeDetail[];
   readonly rawLine: string;
   preambleLabel?: string;
+  /** Immutable presentation until a reducer mutation invalidates this entry. */
+  projectedRows?: readonly CodexRow[];
 }
 
 interface PreambleEntry {
@@ -143,7 +145,10 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
       else if (line.kind === 'event_msg') duplicate = state.dedup.processEventMsg(line.payload);
       if (duplicate) {
         const original = takeMirror(state, mirror, mirrorSide === 'response_item' ? 'event_msg' : 'response_item');
-        if (original) original.provenance.push(withSelector(record.provenance, itemSelector(line)));
+        if (original) {
+          original.provenance.push(withSelector(record.provenance, itemSelector(line)));
+          original.projectedRows = undefined;
+        }
         return;
       }
     }
@@ -163,6 +168,7 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
         if (typeof callId === 'string') {
           const target = state.calls.get(callId);
           if (target?.item.kind === 'tool_call') {
+            target.projectedRows = undefined;
             target.item.severity = 'error';
             target.item.errorLabel = 'patch failed';
             target.details.push(detailFor(record, line, 'Patch result'));
@@ -186,6 +192,7 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
       if (item.kind === 'orphan_output') {
         const target = state.calls.get(item.callId);
         if (target?.item.kind === 'tool_call') {
+          target.projectedRows = undefined;
           target.item.outputText = item.outputText;
           target.item.hasOutput = true;
           target.item.outputImageCount = item.imageCount;
@@ -265,7 +272,9 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
       }
       const entry = state.entries[index]!;
       if (entry.preambleLabel) continue;
-      const projected = projectEntry(state, entry);
+      // Task completion also depends on the latest assistant text, unlike source-local entries.
+      const projected = entry.projectedRows ?? projectEntry(state, entry);
+      if (entry.item.kind !== 'task_complete') entry.projectedRows = projected;
       rows.push(...projected);
     }
     if (!preambleInserted) pushPreamble();
