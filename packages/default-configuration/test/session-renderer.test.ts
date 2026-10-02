@@ -179,7 +179,7 @@ describe('session content', () => {
           kind: 'raw',
           label: 'Unicode detail',
           reason: 'detail',
-          text: `${'x'.repeat(16383)}😀rest`,
+          text: `${'x'.repeat(4095)}😀rest`,
           provenance: []
         }
       ]
@@ -269,7 +269,7 @@ describe('mounted session interaction', () => {
       function ClaudeApp() {
         const [lines, setLines] = useState(() => [
           {type:'assistant',uuid:'call-event',message:{content:[{type:'tool_use',id:'call',name:'Bash',input:{command:'pwd'}}]}},
-          {type:'attachment',uuid:'hook-event',attachment:{type:'hook_success',hookName:'Check',toolUseID:'call',hookEvent:'PostToolUse',stdout:'a'.repeat(16384)+'b'.repeat(83616),stderr:'',content:'',exitCode:0}}
+          {type:'attachment',uuid:'hook-event',attachment:{type:'hook_success',hookName:'Check',toolUseID:'call',hookEvent:'PostToolUse',stdout:'a'.repeat(4096)+'b'.repeat(95904),stderr:'',content:'',exitCode:0}}
         ].map(value => JSON.stringify(value)));
         window.claudeHarness = {
           append: () => setLines(previous => [...previous, JSON.stringify({type:'user',uuid:'result-event',message:{content:[{type:'tool_result',tool_use_id:'call',content:'done'}]}})]),
@@ -284,7 +284,7 @@ describe('mounted session interaction', () => {
         provenance: [{ sourceKey: 'main', generation: 'one', lineNumber: n, selector: 'record' }],
         parts: [{ id: 'text-' + n, kind: 'text', text: 'Message ' + n, provenance: [] },
           { id: 'raw-' + n, kind: 'raw', label: 'Details ' + n, reason: 'detail',
-            text: 'a'.repeat(16384) + 'b'.repeat(16384) + 'c'.repeat(16384), provenance: [] }] });
+            text: 'a'.repeat(4096) + 'b'.repeat(4096) + 'c'.repeat(40960), provenance: [] }] });
       const childRows = [{ ...makeRow(1), id: 'child-row', provenance: [{ sourceKey: 'child', generation: 'one', lineNumber: 1, selector: 'record' }], parts: [{ id: 'child-text', kind: 'text', text: 'Child output', provenance: [] }] }];
       const insertions = [{ placementId: 'child-placement', childSourceKey: 'child', label: 'Child activity', placement: { kind: 'section', position: 'end' } }];
       function App() {
@@ -436,7 +436,7 @@ describe('mounted session interaction', () => {
       return { page: current.querySelector('.session-inspection-controls span').textContent, focus: document.activeElement.textContent, selection: document.getSelection().toString(), errors: sessionErrors };
     })()`);
     expect(result).toEqual({
-      page: 'Characters 16385–32768 of 49152',
+      page: 'Characters 4097–8192 of 49152',
       focus: 'Next',
       selection: 'bbbbbbbb',
       errors: []
@@ -469,7 +469,7 @@ describe('mounted session interaction', () => {
       return { page: current.querySelector('.session-inspection-controls span').textContent, focus: document.activeElement.textContent, selection: document.getSelection().toString(), open: current.querySelector('button').getAttribute('aria-expanded'), spacers: document.querySelectorAll('[data-message-scroller-spacer]').length, errors: sessionErrors };
     })()`);
     expect(result).toEqual({
-      page: 'Characters 16385–32768 of 100000',
+      page: 'Characters 4097–8192 of 100000',
       focus: 'Next',
       selection: 'bbbbbbbb',
       open: 'true',
@@ -517,7 +517,7 @@ describe('mounted session interaction', () => {
     })()`);
     expect(result).toEqual({
       before: 'false',
-      page: 'Characters 16385–32768 of 100000',
+      page: 'Characters 4097–8192 of 100000',
       focus: 'Next',
       selection: 'bbbbbbbb',
       open: 'true',

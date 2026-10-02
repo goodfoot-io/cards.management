@@ -378,7 +378,7 @@ export function BoundedText({
 }): ReactElement {
   const pages = useContext(InspectionPages);
   const [page, setPage] = useState(() => pages?.get(id)?.get(slot) ?? 0);
-  const size = 16384;
+  const size = 4096;
   const lastPage = Math.max(0, Math.ceil(text.length / size) - 1);
   const current = Math.min(page, lastPage);
   let start = current * size;
@@ -561,6 +561,26 @@ interface MemoSessionRowProps {
   readonly children: () => ReactElement;
 }
 
+/**
+ * Opaque provider payloads may own nested disclosure IDs; shared text rows do not.
+ * @param row - Current semantic row.
+ * @param presentation - Available custom row, part, and tool presentation.
+ * @returns Whether this row can contain disclosures outside its shared leaf identities.
+ */
+function hasCustomDisclosures(
+  row: SessionRow,
+  presentation: Pick<MemoSessionRowProps, 'providerParts' | 'providerRows' | 'renderTool'>
+): boolean {
+  return (
+    (row.kind === 'provider' && !!presentation.providerRows) ||
+    row.parts.some(
+      (part) =>
+        (part.kind === 'provider' && !!presentation.providerParts) ||
+        (part.kind === 'tool' && !!presentation.renderTool)
+    )
+  );
+}
+
 /** Render immutable historical rows only when content or their disclosure state actually changes. */
 const MemoSessionRow = memo(
   function MemoSessionRow(props: MemoSessionRowProps): ReactElement {
@@ -578,7 +598,7 @@ const MemoSessionRow = memo(
       return false;
     if (previous.open === next.open) return true;
     // Custom provider presentation may own nested disclosure keys not present in shared parts.
-    if (next.providerParts || next.providerRows || next.renderTool || next.insertions.length > 0) return false;
+    if (hasCustomDisclosures(next.row, next) || next.insertions.length > 0) return false;
     return [next.row.id, ...next.row.parts.map((part) => part.id)].every(
       (id) => previous.open.get(id) === next.open.get(id)
     );
@@ -631,7 +651,7 @@ const MemoSessionBatch = memo(
     )
       return false;
     if (previous.open === next.open) return true;
-    if (next.providerParts || next.providerRows || next.renderTool || next.insertions.length > 0) return false;
+    if (next.rows.some((row) => hasCustomDisclosures(row, next)) || next.insertions.length > 0) return false;
     return next.rows.every((row) =>
       [row.id, ...row.parts.map((part) => part.id)].every((id) => previous.open.get(id) === next.open.get(id))
     );

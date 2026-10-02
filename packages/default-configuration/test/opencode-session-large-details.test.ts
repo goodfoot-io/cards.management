@@ -209,8 +209,8 @@ describe('OpenCode oversized tool details', () => {
 
       const opened = renderProjection(completed.rows, completed.header);
       expect(opened.length).toBeLessThan(100_000);
-      expect(opened).toContain(`Characters 1–16384 of ${rawLines[0]!.length}`);
-      expect(opened).toContain(`Characters 1–16384 of ${rawLines[2]!.length}`);
+      expect(opened).toContain(`Characters 1–4096 of ${rawLines[0]!.length}`);
+      expect(opened).toContain(`Characters 1–4096 of ${rawLines[2]!.length}`);
       expect(opened).toContain('Next');
       expect(opened).not.toContain('input-sentinel');
       expect(opened).not.toContain('result-sentinel');

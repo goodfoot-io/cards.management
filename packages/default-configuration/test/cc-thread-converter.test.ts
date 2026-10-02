@@ -317,7 +317,7 @@ describe('Claude semantic preservation', () => {
     const payload = { type: 'skill_listing', names: 'x'.repeat(5 * 1024 * 1024) };
     const values = [assistant('start'), attachment(payload)];
     const html = render(values);
-    expect(html).toContain('Characters 1–16384');
+    expect(html).toContain('Characters 1–4096');
     expect(html.length).toBeLessThan(70000);
     expect(parts(project(values).rows).some((part) => part.kind === 'raw' && part.text.includes(payload.names))).toBe(
       true
