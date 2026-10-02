@@ -107,7 +107,12 @@ function renderSessionAtPage(
 describe('Codex native session projection', () => {
   it('projects header, preamble, user content, reasoning, tool output, boundaries, and raw variants', () => {
     const projection = replayTranscript(codexSessionProjector, source(fixture));
-    expect(projection.header).toMatchObject({ model: 'gpt-5.5', cwd: '/repo' });
+    expect(projection.header).toMatchObject({
+      model: 'gpt-5.5',
+      cwd: '/repo',
+      provider: 'openai',
+      threadId: 'thread-1'
+    });
 
     const rows = projected(projection.rows);
     const preamble = provider(rows, 'sessionStart')[0];
@@ -241,6 +246,27 @@ describe('Codex native session projection', () => {
     expect(html).toContain('future_output');
   });
 
+  it('retains historical provider identity through append and metadata, and resets it with the native source', () => {
+    const controller = createTranscriptProjection(codexSessionProjector, 'cards/codex/session');
+    const original = source(fixture);
+    const header = controller.update(original).projection.header;
+    expect(header).toMatchObject({ provider: 'openai', threadId: 'thread-1' });
+    const appended = source([
+      ...fixture,
+      JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'appended' } })
+    ]);
+    expect(controller.update(appended).projection.header).toEqual(header);
+    const metadata = controller.update({ ...appended, meta: { lineCount: appended.lines.length, isActive: true } });
+    expect(metadata.projection.header).toMatchObject({ provider: 'openai', threadId: 'thread-1', status: 'running' });
+    const reset = controller.update({ ...source([]), generation: 'replacement' });
+    expect(reset.projection.header.provider).toBeUndefined();
+    expect(reset.projection.header.threadId).toBeUndefined();
+    const history = controller.update(original).projection;
+    expect(history.header).toEqual(header);
+    expect(history).toEqual(replayTranscript(codexSessionProjector, original));
+    controller.dispose();
+  });
+
   it('keeps five-megabyte tool arguments raw until opened and exposes bounded paging', () => {
     const tail = 'tail-marker';
     const endPadding = 'y'.repeat(100);
@@ -273,7 +299,7 @@ describe('Codex native session projection', () => {
     expect(opened).toContain(largeValue.slice(0, 100));
     expect(opened.length).toBeLessThan(70_000);
     expect(tool.data.argumentsText.endsWith(`${tail}${endPadding}"}`)).toBe(true);
-    const lastPageIndex = Math.ceil(argumentsText.length / 16_384) - 1;
+    const lastPageIndex = Math.ceil(argumentsText.length / 4096) - 1;
     const tailPage = renderSessionAtPage(rows, [tool.id], {
       id: tool.id,
       slot: 'input',
@@ -311,7 +337,7 @@ describe('Codex native session projection', () => {
     expect(opened).toContain(largeValue.slice(0, 100));
     expect(opened.length).toBeLessThan(70_000);
     expect(raw.text.endsWith(`${tail}${endPadding}"}}}`)).toBe(true);
-    const lastPageIndex = Math.ceil(nativeLine.length / 16_384) - 1;
+    const lastPageIndex = Math.ceil(nativeLine.length / 4096) - 1;
     const lastPage = renderSessionAtPage(rows, [raw.id], { id: raw.id, slot: 'content', page: lastPageIndex });
     expect(lastPage).toContain('Previous');
     expect(lastPage).toContain(tail);
@@ -347,7 +373,7 @@ describe('Codex native session projection', () => {
     expect(open).toContain('Next');
     expect(open).not.toContain(largeValue);
     expect(open.length).toBeLessThan(70_000);
-    const lastPage = Math.ceil(formattedInput.length / 16_384) - 1;
+    const lastPage = Math.ceil(formattedInput.length / 4096) - 1;
     const tailPage = renderSessionAtPage(rows, [tool.id], {
       id: tool.id,
       slot: 'input',

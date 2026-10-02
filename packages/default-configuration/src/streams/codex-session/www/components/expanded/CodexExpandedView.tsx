@@ -14,7 +14,7 @@ import { SessionViewport } from '../../../../lib/session/SessionViewport';
 import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
 import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
 import { useStreamStore } from '../../hooks/useStreamStore';
-import { type CodexPayloads, type CodexRow, codexHeader, codexSessionProjector } from '../../lib/project-session';
+import { type CodexPayloads, type CodexRow, codexSessionProjector } from '../../lib/project-session';
 import { CODEX_PARTS, CODEX_ROWS } from './CodexPresentation';
 
 function disclosureIds(rows: readonly CodexRow[]): Set<string> {
@@ -81,15 +81,14 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
   const current =
     projection?.sourceKey === source.sourceKey && projection.generation === source.generation ? projection : null;
   const header = current?.header;
-  const metadata = codexHeader(source);
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       <SessionHeader
         model={header?.model ?? ''}
         cwd={header?.cwd ?? ''}
         status={header?.status === 'done' ? 'success' : (header?.status ?? 'running')}
-        provider={metadata.provider}
-        threadId={metadata.threadId}
+        provider={header?.provider}
+        threadId={header?.threadId}
       />
       {source.error ? (
         <div className="session-tone--error" role="status">

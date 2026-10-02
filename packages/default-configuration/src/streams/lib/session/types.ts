@@ -144,6 +144,8 @@ export type SessionRow<Payloads extends object = Record<string, unknown>> =
 
 /** Provider-derived header facts are display information, never interaction authority. */
 export interface SessionHeaderFacts {
+  readonly provider?: string;
+  readonly threadId?: string;
   readonly model?: string;
   readonly cwd?: string;
   readonly status?: 'running' | 'done' | 'error';

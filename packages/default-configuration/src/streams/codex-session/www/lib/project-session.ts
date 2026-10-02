@@ -282,6 +282,8 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
       generation: source.generation,
       rows: stableRows,
       header: {
+        provider: state.provider,
+        threadId: state.sessionId,
         model: state.model,
         cwd: state.cwd,
         status: source.meta?.isActive ? 'running' : state.hasError || hasToolError(state.entries) ? 'error' : 'done'
@@ -295,24 +297,6 @@ export const codexSessionProjector: NativeTranscriptProjector<CodexProjectionSta
     state.previousRows.clear();
   }
 };
-
-/**
- * Derives Codex header-only metadata with the same native parser as the projection.
- * @param source - Native source snapshot being displayed.
- * @returns Provider and thread ID facts for the shared header.
- */
-export function codexHeader(source: NativeTranscriptSource): { provider?: string; threadId?: string } {
-  let provider: string | undefined;
-  let threadId: string | undefined;
-  for (const raw of source.lines) {
-    const line = parseCodexLine(raw);
-    if (line.kind === 'session_meta') {
-      provider ??= line.payload.model_provider;
-      threadId ??= line.payload.id;
-    }
-  }
-  return { provider, threadId };
-}
 
 function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow[] {
   const item = entry.item;

@@ -260,6 +260,7 @@ describe('mounted session interaction', () => {
         const [meta, setMeta] = useState(null);
         window.providerHarness = {
           switch: key => setSourceKey(key), reset: value => setGeneration(value),
+          identity: (key, id, provider, cwd) => { setSourceKey(key); setLines([JSON.stringify({type:'session_meta',payload:{id,model_provider:provider,cwd}}),JSON.stringify({type:'future_record',value:'raw'})]); },
           metadata: () => setMeta({lineCount:lines.length,isActive:false}),
           append: () => setLines(previous => [...previous, JSON.stringify({type:'future_record',value:'appended raw'})])
         };
@@ -383,6 +384,33 @@ describe('mounted session interaction', () => {
       metadata: 'true',
       switchedBack: 'false',
       resetBack: 'false',
+      errors: []
+    });
+  });
+
+  it('renders Codex historical header facts after append, metadata, and a supplied source change', async () => {
+    await browser('open', `${origin}/?codex`);
+    const result = await evaluate<{
+      original: string;
+      retained: string;
+      replacement: string;
+      stale: boolean;
+      errors: string[];
+    }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      providerHarness.identity('first', 'original-thread', 'original-provider', '/original'); await frame();
+      const original = document.querySelector('[title="original-thread"]').textContent;
+      providerHarness.append(); providerHarness.metadata(); await frame();
+      const retained = document.querySelector('[title="original-thread"]').textContent;
+      providerHarness.identity('second', 'replacement-thread', 'replacement-provider', '/replacement'); await frame();
+      return {original,retained,replacement:document.querySelector('[title="replacement-thread"]').textContent,
+        stale:document.body.textContent.includes('original-provider') || !!document.querySelector('[title="original-thread"]'),errors:sessionErrors};
+    })()`);
+    expect(result).toEqual({
+      original: 'original',
+      retained: 'original',
+      replacement: 'replacem',
+      stale: false,
       errors: []
     });
   });
