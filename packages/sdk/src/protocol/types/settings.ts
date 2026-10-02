@@ -38,7 +38,7 @@
  * @module types/settings
  */
 
-import type { CleanupResultPayload } from './runtime-messages.js';
+import type { BestEffortCleanupResultPayload, LegacyCleanupResultPayload } from './runtime-messages.js';
 import type { StreamDefinition } from './stream.js';
 
 // --- Command ---
@@ -346,7 +346,12 @@ export interface ActionState {
    * (`terminalDecisionId`, `observationId`) and `rootExit` are deliberately
    * not carried: correlation is the journal's job, not the dropdown's.
    */
-  cleanup?: Pick<CleanupResultPayload, 'trigger' | 'status' | 'phase' | 'finalization' | 'detail'>;
+  cleanup?:
+    | Pick<LegacyCleanupResultPayload, 'trigger' | 'status' | 'phase' | 'finalization' | 'detail'>
+    | Pick<
+        BestEffortCleanupResultPayload,
+        'trigger' | 'status' | 'phase' | 'finalization' | 'detail' | 'cleanupMode' | 'rootStatus' | 'survivorPids'
+      >;
 
   /**
    * Capabilities the running handler has advertised through the authenticated runtime.

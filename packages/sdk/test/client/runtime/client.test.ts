@@ -519,8 +519,10 @@ describe('inbound commands and owned lifecycle', () => {
     );
 
     await client.start();
-    await vi.waitFor(() => expect(discoveries).toBeGreaterThan(1));
-    expect(client.state).toBe('connected');
+    await vi.waitFor(() => {
+      expect(discoveries).toBeGreaterThan(1);
+      expect(client?.state).toBe('connected');
+    });
     await client.stop();
   });
 

@@ -278,6 +278,7 @@ export const launchOutcomePayloadSchema = z
         startedAtToken: z.string().min(1),
         ownership: z.discriminatedUnion('kind', [
           z.object({ kind: z.literal('posix-process-group'), groupId: z.number().int().positive() }).strict(),
+          z.object({ kind: z.literal('windows-process') }).strict(),
           z.object({ kind: z.literal('windows-job'), jobId: z.string().min(1) }).strict()
         ])
       })
@@ -290,6 +291,7 @@ export const launchOutcomePayloadSchema = z
         startedAtToken: z.string().min(1),
         ownership: z.discriminatedUnion('kind', [
           z.object({ kind: z.literal('posix-process-group'), groupId: z.number().int().positive() }).strict(),
+          z.object({ kind: z.literal('windows-process') }).strict(),
           z.object({ kind: z.literal('windows-job'), jobId: z.string().min(1) }).strict()
         ])
       })
@@ -312,11 +314,10 @@ export const worktreeAssignmentResultPayloadSchema = z
 export const cleanupTriggerSchema = z.enum(['command', 'root-exit', 'spawn-error', 'terminal-close']);
 
 /**
- * How far containment got. `unknown` is never an error path to be smoothed
- * over: a failed identity check, an uninterruptible member, or a lost anchor
- * all land here, and nothing downstream may read it as drained.
+ * What the bounded cleanup attempt observed. No status certifies that every
+ * descendant stopped: detached or reparented processes can escape observation.
  */
-export const cleanupStatusSchema = z.enum(['drained', 'failed', 'unknown']);
+export const cleanupStatusSchema = z.enum(['observed-stopped', 'survivors', 'unknown']);
 
 /** Which half of the cleanup interval the recorded status was reached in. */
 export const cleanupPhaseSchema = z.enum(['graceful', 'forced']);
@@ -325,22 +326,16 @@ export const cleanupPhaseSchema = z.enum(['graceful', 'forced']);
 export const cleanupFinalizationSchema = z.enum(['complete', 'incomplete', 'not-required']);
 
 /**
- * Payload of `execution.cleanupResult`: the wrapper's single durable report for
- * one ended execution, replacing the separate termination and cleanup records.
- *
- * `status` and `finalization` are deliberately independent. A process boundary
- * can be provably drained while a transcript flush never closed, and that
- * combination has to stay visible rather than collapsing into one verdict —
- * the worktree may be released on the first, but the action result still says
- * the second did not finish.
+ * A valid historical cleanup report, retained without adding fields or changing
+ * serialized evidence. Its original containment semantics remain conservative.
  */
-export const cleanupResultPayloadSchema = z
+const legacyCleanupResultPayloadSchema = z
   .object({
     terminalDecisionId: z.string().min(1),
     /** Wrapper-local observation this report settles; stable across replay. */
     observationId: z.string().min(1),
     trigger: cleanupTriggerSchema,
-    status: cleanupStatusSchema,
+    status: z.enum(['drained', 'failed', 'unknown']),
     phase: cleanupPhaseSchema.optional(),
     rootExit: z
       .object({
@@ -354,8 +349,39 @@ export const cleanupResultPayloadSchema = z
   })
   .strict();
 
-/** The one cleanup report an execution produces. */
+/** A bounded cleanup attempt with explicit root liveness and observation limits. */
+export const bestEffortCleanupResultPayloadSchema = legacyCleanupResultPayloadSchema.extend({
+  cleanupMode: z.literal('best-effort'),
+  status: cleanupStatusSchema,
+  rootStatus: z.enum(['not-started', 'exited', 'live', 'unknown']),
+  survivorPids: z.array(z.number().int().min(2).max(Number.MAX_SAFE_INTEGER)).max(256).optional()
+});
+
+/** The original serialized cleanup evidence produced by an older runtime. */
+export type LegacyCleanupResultPayload = z.infer<typeof legacyCleanupResultPayloadSchema>;
+
+/** The explicit observation contract produced by current cleanup attempts. */
+export type BestEffortCleanupResultPayload = z.infer<typeof bestEffortCleanupResultPayloadSchema>;
+
+/** Strict wire union preserving historical evidence and explicit current reports. */
+export const cleanupResultPayloadSchema = z.union([
+  legacyCleanupResultPayloadSchema,
+  bestEffortCleanupResultPayloadSchema
+]);
+
+/** The one cleanup report an execution produces, including unchanged historical evidence. */
 export type CleanupResultPayload = z.infer<typeof cleanupResultPayloadSchema>;
+
+/**
+ * Classifies root-release evidence independently of descendant diagnostics.
+ * @param cleanup - Current best-effort report or unchanged historical evidence.
+ * @returns Whether root evidence permits ordinary claim release, subject to live guards.
+ */
+export function cleanupAllowsClaimRelease(cleanup: CleanupResultPayload): boolean {
+  return 'cleanupMode' in cleanup
+    ? cleanup.rootStatus === 'not-started' || cleanup.rootStatus === 'exited'
+    : cleanup.status === 'drained';
+}
 
 /**
  * Payload of `execution.branchCleanupRegistration`, sent by the provider while

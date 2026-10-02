@@ -272,7 +272,10 @@ export {
 } from './runtime-identity.js';
 // --- Runtime Protocol: Message Catalogue ---
 export {
+  type BestEffortCleanupResultPayload,
   type CleanupResultPayload,
+  cleanupAllowsClaimRelease,
+  type LegacyCleanupResultPayload,
   launchRequestPayloadSchema,
   MAX_CONTROL_FRAME_BYTES,
   RUNTIME_MESSAGE_PAYLOADS,

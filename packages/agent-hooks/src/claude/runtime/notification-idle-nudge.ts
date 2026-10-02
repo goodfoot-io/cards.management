@@ -222,7 +222,7 @@ function tryExitWhenDoneNudge(sessionId: string, logger: Logger): string | null 
   return [
     'EXIT_WHEN_DONE=true — a reminder for when work is done, not a signal to stop now.',
     '',
-    `Once the card's work is finished and validated, read \`${resolveShutdownRunbookPath()}\` (\`shutdown.md\` in \`runtime:card\`'s \`references/\`) and follow its \`<instructions>\`: ensure all subagents and background work are finished, then make \`cards "$CARD_ID" shutdown --outcome success|blocked|error --message "..."\` the sole tool call in your final assistant turn. Do not make any later tool call. The action handler terminates the validated Claude launcher after the Stop hook confirms the process tree is drained.`
+    `Once the card's work is finished and validated, read \`${resolveShutdownRunbookPath()}\` (\`shutdown.md\` in \`runtime:card\`'s \`references/\`) and follow its \`<instructions>\`: ensure all subagents and background work are finished, then make \`cards "$CARD_ID" shutdown --outcome success|blocked|error --message "..."\` the sole tool call in your final assistant turn. Do not make any later tool call. The action handler stops the validated Claude launcher and completes bounded best-effort subprocess cleanup. Detached or reparented descendants may survive.`
   ].join('\n');
 }
 
