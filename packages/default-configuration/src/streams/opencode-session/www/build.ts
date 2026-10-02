@@ -30,6 +30,9 @@ const result = await Bun.build({
   entrypoints: [indexPath],
   outdir: './dist/www/opencode-session',
   minify: true,
+  // Shipping artifacts use production React and JSX regardless of the build process environment.
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+  jsx: { development: false },
   plugins: [tailwind],
   target: 'browser',
   compile: true

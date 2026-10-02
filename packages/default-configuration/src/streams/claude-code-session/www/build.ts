@@ -14,6 +14,9 @@ const result = await Bun.build({
   entrypoints: ['./src/streams/claude-code-session/www/index.html'],
   outdir: './dist/www/claude-code-session',
   minify: true,
+  // Shipping artifacts use production React and JSX regardless of the build process environment.
+  define: { 'process.env.NODE_ENV': JSON.stringify('production') },
+  jsx: { development: false },
   plugins: [tailwind],
   target: 'browser',
   compile: true
