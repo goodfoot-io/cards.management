@@ -269,6 +269,7 @@ describe('mounted session interaction', () => {
     directory = await mkdtemp(join(tmpdir(), 'cards-session-review-'));
     await symlink(resolve(packageDirectory, '../../..', 'node_modules'), join(directory, 'node_modules'), 'junction');
     const viewportPath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/SessionViewport.tsx'));
+    const leafStatePath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/leaf-view-state.ts'));
     const contentPath = JSON.stringify(join(packageDirectory, 'src/streams/lib/session/SessionContent.tsx'));
     const claudePath = JSON.stringify(
       join(packageDirectory, 'src/streams/claude-code-session/www/components/expanded/ExpandedView.tsx')
@@ -281,22 +282,28 @@ describe('mounted session interaction', () => {
     await writeFile(
       join(directory, 'main.jsx'),
       `
-      import React, { useState, useRef, useCallback, Suspense, startTransition } from 'react';
+      import React, { useState, useRef, useCallback, useContext, Suspense, startTransition } from 'react';
       import { createRoot } from 'react-dom/client';
       import { SessionViewport } from ${viewportPath};
       import { SessionContent, SessionDisclosure } from ${contentPath};
+      import { LeafViewState } from ${leafStatePath};
       import { ClaudeSourceView } from ${claudePath};
       import { CodexSourceView } from ${providerViews[0]};
       import { OpencodeSourceView } from ${providerViews[1]};
       import { AntigravitySourceView } from ${providerViews[2]};
       const customRows = ['one', 'two', 'event', 'observer'].map(id => ({id, kind:'provider', providerKind:'custom', data:id, provenance:[{sourceKey:'custom',generation:'one',lineNumber:1,selector:'record'}], parts:[]}));
+      function LeafProbe({label}) {
+        const state = useContext(LeafViewState);
+        window.leafRenders[label] = (window.leafRenders[label] ?? 0) + 1;
+        return <small data-leaf-probe={label}>{state ? 'Owned inspection' : 'Missing inspection'}</small>;
+      }
       const customRegistry = {custom: {
         disclosureKeys: (leaf, data) => data === 'observer' ? undefined : [data === 'event' ? 'nested-one' : 'nested-' + data],
         render: ({data, disclosures, layout}) => {
           window.customRenders[data] = (window.customRenders[data] ?? 0) + 1;
           if (data === 'observer') return <output>{[...disclosures.open.values()].filter(Boolean).length}</output>;
           if (data === 'event') return <button data-read="event" onClick={() => { window.eventRead = {value:disclosures.open.get('nested-one'),present:disclosures.open.has('nested-one')}; }}>Read latest</button>;
-          return <SessionDisclosure id={'nested-' + data} label={data} context={{disclosures,layout}}><p>{data} body</p></SessionDisclosure>;
+          return <><LeafProbe label={data} /><SessionDisclosure id={'nested-' + data} label={data} context={{disclosures,layout}}><p>{data} body</p></SessionDisclosure></>;
         }
       }};
       const customInsertions = [{placementId:'custom-child',childSourceKey:'child',label:'Custom child',placement:{kind:'witnessed',parentSourceKey:'custom',rowId:'one',position:'after'}}];
@@ -306,15 +313,18 @@ describe('mounted session interaction', () => {
       function CustomApp() {
         const [open, setOpen] = useState(new Map());
         const [pending, setPending] = useState(false);
+        const [rows, setRows] = useState(customRows);
         const onOpenChange = useCallback((id,value)=>setOpen(previous=>new Map(previous).set(id,value)), []);
         window.customHarness = {
+          replaceTwo: () => setRows(previous => previous.map(row => row.id === 'two' ? {...row, parts:[{id:'two-raw',kind:'raw',label:'Changed raw',reason:'detail',text:'a'.repeat(4096)+'b'.repeat(4096)+'c'.repeat(40000),provenance:[]}]} : row)),
           false: () => setOpen(new Map([['nested-one',false]])),
           absent: () => setOpen(new Map()),
           speculative: () => startTransition(() => { setOpen(new Map([['nested-one',true]])); setPending(true); })
         };
-        return <><SessionContent rows={customRows} providerRows={customRegistry} insertions={location.search === '?custom-insertion' ? customInsertions : undefined} renderInsertion={renderCustomInsertion} disclosures={{open,onOpenChange}} /><Pending active={pending} /></>;
+        return <><SessionContent rows={rows} providerRows={customRegistry} insertions={location.search === '?custom-insertion' ? customInsertions : undefined} renderInsertion={renderCustomInsertion} disclosures={{open,onOpenChange}} /><Pending active={pending} /></>;
       }
       window.customRenders = {};
+      window.leafRenders = {};
       function ProviderApp() {
         const [sourceKey, setSourceKey] = useState('first');
         const [generation, setGeneration] = useState('one');
@@ -356,25 +366,27 @@ describe('mounted session interaction', () => {
             text: 'a'.repeat(4096) + 'b'.repeat(4096) + 'c'.repeat(40960), provenance: [] }] });
       const childRows = [{ ...makeRow(1), id: 'child-row', provenance: [{ sourceKey: 'child', generation: 'one', lineNumber: 1, selector: 'record' }], parts: [{ id: 'child-text', kind: 'text', text: 'Child output', provenance: [] }] }];
       const insertions = [{ placementId: 'child-placement', childSourceKey: 'child', label: 'Child activity', placement: { kind: 'section', position: 'end' } }];
-      function App() {
-        const [rows, setRows] = useState(() => Array.from({ length: 50 }, (_, i) => makeRow(i + 1)));
+      function App({large = false}) {
+        const [rows, setRows] = useState(() => Array.from({ length: large ? 1200 : 50 }, (_, i) => makeRow(i + 1)));
         const [open, setOpen] = useState(new Map());
         const handle = useRef(null);
-        const disclosures = { open, onOpenChange: (id, value) => setOpen(previous => new Map(previous).set(id, value)) };
+        const onOpenChange = useCallback((id,value) => setOpen(previous => new Map(previous).set(id,value)),[]);
+        const disclosures = { open, onOpenChange };
         window.sessionHarness = {
           append: () => setRows(previous => [...previous, makeRow(previous.length + 1)]),
+          replaceAnchor: id => setRows(previous => previous.map(row => row.parts[0].id === id ? {...row, id:row.id+'-replacement'} : row)),
           regroup: () => setRows(previous => previous.map(row => row.parts[0].id === 'text-40' ? { ...row, id: row.id + '-regrouped' } : row)),
           toggle: id => setOpen(previous => new Map(previous).set(id, !previous.get(id))),
           follow: () => handle.current.followLatest(),
           navigate: id => handle.current.navigateTo(id),
           capture: () => handle.current.captureAnchor()
         };
-        return <SessionViewport rows={rows} viewportRef={handle} disclosures={disclosures} insertions={insertions}
-          renderInsertion={() => <SessionContent rows={childRows} disclosures={disclosures} />} />;
+        return <SessionViewport rows={rows} viewportRef={handle} disclosures={disclosures} insertions={large ? undefined : insertions}
+          renderInsertion={large ? undefined : () => <SessionContent rows={childRows} disclosures={disclosures} />} />;
       }
       window.sessionErrors = [];
       addEventListener('error', event => window.sessionErrors.push(event.message));
-      createRoot(document.getElementById('root')).render(location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
+      createRoot(document.getElementById('root')).render(location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?viewport-cache' ? <App large /> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
     `
     );
     await writeFile(
@@ -422,6 +434,73 @@ describe('mounted session interaction', () => {
       await new Promise<void>((resolveClosed) => (server ? server.close(() => resolveClosed()) : resolveClosed()));
       if (directory) await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it('keeps unchanged inspection consumers out of disclosure updates while changed rows and paging remain live', async () => {
+    await browser('open', `${origin}/?custom`);
+    await browser('wait', '--text', 'Owned inspection');
+    const result = await evaluate<{
+      before: number;
+      afterOpen: number;
+      afterChanged: number;
+      expanded: string | null;
+      page: string | null;
+    }>(`(async () => {
+      const settle = () => new Promise(resolve => setTimeout(resolve,250));
+      const before = window.leafRenders.two;
+      document.querySelector('[data-session-disclosure="nested-one"] button').click(); await settle();
+      const expanded = document.querySelector('[data-session-disclosure="nested-one"] button').getAttribute('aria-expanded');
+      const afterOpen = window.leafRenders.two;
+      customHarness.replaceTwo(); await settle(); const afterChanged = window.leafRenders.two;
+      document.querySelector('[data-session-disclosure="two-raw"] button').click(); await settle();
+      [...document.querySelector('[data-session-disclosure="two-raw"]').querySelectorAll('button')].find(button => button.textContent === 'Next').click(); await settle();
+      return {before,afterOpen,afterChanged,expanded,page:document.querySelector('[data-session-disclosure="two-raw"] pre').textContent};
+    })()`);
+    expect(result.afterOpen).toBe(result.before);
+    expect(result.afterChanged).toBeGreaterThan(result.afterOpen);
+    expect(result.expanded).toBe('true');
+    expect(result.page).toBe('b'.repeat(4096));
+  });
+
+  it('reuses a validated held anchor lookup across both layout frames and re-resolves detached targets', async () => {
+    await browser('open', `${origin}/?viewport-cache`);
+    await browser('wait', '--text', 'Details 1200');
+    const result = await evaluate<{
+      lookups: number;
+      same: boolean;
+      replacement: boolean;
+      anchor: string;
+      offset: number;
+      followed: boolean;
+      errors: string[];
+    }>(`(async () => {
+      const settle = () => new Promise(resolve => setTimeout(resolve,250));
+      sessionHarness.navigate('text-1100'); await settle();
+      const root = document.querySelector('.session-viewport');
+      const nativeQuery = root.querySelector.bind(root); let lookups = 0;
+      root.querySelector = selector => { if(selector.includes('data-session-id')) lookups++; return nativeQuery(selector); };
+      const before = sessionHarness.capture();
+      sessionHarness.toggle('raw-1'); await settle();
+      const same = Math.abs(sessionHarness.capture().offset - before.offset) < 1;
+      const transactionLookups = lookups;
+      const previous = nativeQuery('[data-session-id="text-1100"]');
+      // Regroup the held native leaf between the existing restoration frames.
+      sessionHarness.toggle('raw-2');
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      sessionHarness.replaceAnchor('text-1100');
+      await settle();
+      const saved = sessionHarness.capture();
+      sessionHarness.follow(); await settle();
+      const followed = root.scrollHeight - root.clientHeight - root.scrollTop < 1;
+      return {lookups:transactionLookups,same,replacement:lookups > transactionLookups && !previous.isConnected,anchor:saved.id,offset:Math.abs(saved.offset-before.offset),followed,errors:sessionErrors};
+    })()`);
+    expect(result.lookups).toBeLessThanOrEqual(2);
+    expect(result.same).toBe(true);
+    expect(result.replacement).toBe(true);
+    expect(result.anchor).toBe('text-1100');
+    expect(result.offset).toBeLessThan(1);
+    expect(result.followed).toBe(true);
+    expect(result.errors).toEqual([]);
   });
 
   it('updates arbitrary nested disclosure owners and map observers without redrawing unrelated custom rows', async () => {

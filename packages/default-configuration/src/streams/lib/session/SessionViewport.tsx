@@ -141,6 +141,7 @@ function ViewportBody<Payloads extends object>({
   const anchor = useRef<SessionStableAnchor | null>(null);
   const settlingLayout = useRef(false);
   const settlementFrame = useRef<number | null>(null);
+  const settlementElement = useRef<{ id: SessionIdentity; element: HTMLElement } | null>(null);
   const opened = useRef(false);
   const latest = useRef({ intent, layout });
   latest.current = { intent, layout };
@@ -174,7 +175,14 @@ function ViewportBody<Payloads extends object>({
     return null;
   }, []);
   const find = useCallback((id: SessionIdentity): HTMLElement | undefined => {
-    return viewport.current?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"]`) ?? undefined;
+    const root = viewport.current;
+    if (!root) return undefined;
+    const cached = settlementElement.current;
+    if (cached?.id === id && cached.element.dataset['sessionId'] === id && root.contains(cached.element))
+      return cached.element;
+    const element = root.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(id)}"]`) ?? undefined;
+    settlementElement.current = element ? { id, element } : null;
+    return element;
   }, []);
   const restoreAnchor = useCallback(
     (saved: SessionStableAnchor): boolean => {
@@ -190,6 +198,7 @@ function ViewportBody<Payloads extends object>({
   const cancelSettlement = useCallback((): void => {
     if (settlementFrame.current !== null) cancelAnimationFrame(settlementFrame.current);
     settlementFrame.current = null;
+    settlementElement.current = null;
     settlingLayout.current = false;
   }, []);
   useEffect(() => cancelSettlement, [cancelSettlement]);
@@ -204,6 +213,7 @@ function ViewportBody<Payloads extends object>({
         settlementFrame.current = requestAnimationFrame(() => {
           restoreAnchor(saved);
           settlementFrame.current = null;
+          settlementElement.current = null;
           settlingLayout.current = false;
           anchor.current = captureAnchor();
         });

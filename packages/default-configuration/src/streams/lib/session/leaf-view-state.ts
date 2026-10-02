@@ -3,7 +3,7 @@
  * @summary Renderer-local paging, focus and selection preservation
  * @module streams/lib/session/leaf-view-state
  */
-import { createContext, useContext, useEffect, useLayoutEffect, useRef } from 'react';
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import type { SessionDisclosureState, SessionRow } from './types';
 
 /** Per-leaf inspection slots separate tool input and output without exposing view state to providers. */
@@ -91,7 +91,7 @@ export function useOwnedLeafViewState(rows: readonly SessionRow[], disclosures: 
     };
   }, []);
 
-  const restore = (): void => {
+  const restore = useCallback((): void => {
     const previous = focus.current;
     if (previous && !previous.node.isConnected && document.activeElement === document.body) {
       const control = resolve(previous, elements.current);
@@ -111,7 +111,7 @@ export function useOwnedLeafViewState(rows: readonly SessionRow[], disclosures: 
         document.getSelection()?.setBaseAndExtent(anchor, saved.anchorOffset, end, saved.focusOffset);
       }
     }
-  };
+  }, []);
   useLayoutEffect(restore);
   useEffect(() => {
     const retained = new Set([
@@ -124,7 +124,7 @@ export function useOwnedLeafViewState(rows: readonly SessionRow[], disclosures: 
     if (selection.current && (!retained.has(selection.current.anchor.id) || !retained.has(selection.current.focus.id)))
       selection.current = null;
   }, [rows, disclosures.open]);
-  return { pages: pages.current, elements: elements.current, restore };
+  return useMemo(() => ({ pages: pages.current, elements: elements.current, restore }), [restore]);
 }
 
 /** All nested render-only content participates in one expanded view's inspection state. */
