@@ -55,7 +55,6 @@ describe('env', () => {
         SWITCH_TO_INTERACTIVE_DATA_PATH: 'SWITCH_TO_INTERACTIVE_DATA_PATH',
         CONFIG_PATH: 'CONFIG_PATH',
         WORKSPACE_PATH: 'WORKSPACE_PATH',
-        WORKTREE_DIRECTIVE: 'CARDS_WORKTREE_DIRECTIVE',
         REPO_ROOT: 'REPO_ROOT',
         CARD_REPO_PATH: 'CARD_REPO_PATH',
         ACTION_COMMAND: 'ACTION_COMMAND',
@@ -241,7 +240,6 @@ describe('env', () => {
       process.env[CARDS_ENV_VARS.BASE_BRANCH] = 'main';
       process.env[CARDS_ENV_VARS.WORKSPACE_BRANCH] = 'cards/main-1/1';
       process.env[CARDS_ENV_VARS.EXECUTION_ID] = 'execution-1';
-      process.env[CARDS_ENV_VARS.WORKTREE_DIRECTIVE] = JSON.stringify({ kind: 'reuse' });
     }
 
     it('should extract all action input fields when all are set', () => {
@@ -252,7 +250,6 @@ describe('env', () => {
 
       expect(input).toEqual({
         executionId: 'execution-1',
-        worktreeDirective: { kind: 'reuse' },
         cardId: 'card-123',
         actionName: 'Launch Claude',
         environment: 'production',
@@ -275,7 +272,6 @@ describe('env', () => {
 
       expect(input).toEqual({
         executionId: 'execution-1',
-        worktreeDirective: { kind: 'reuse' },
         cardId: 'card-123',
         actionName: 'Launch Claude',
         environment: 'production',

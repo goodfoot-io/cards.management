@@ -87,7 +87,6 @@ describe('SubagentStart Hook', () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
         executionId: 'execution-123',
-        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -134,7 +133,6 @@ describe('SubagentStart Hook', () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
         executionId: 'execution-123',
-        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',

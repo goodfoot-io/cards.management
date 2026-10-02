@@ -85,9 +85,17 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) observes the complete
 
 ### Corruption Recovery
 
-On `SQLITE_CORRUPT`, `SQLITE_NOTADB`, `SQLITE_IOERR`, FTS corruption (`vtable constructor failed` or `cards_fts has an unexpected schema`), or `CacheSchemaMismatchError`, the disposable SQLite cache is deleted and rebuilt from the authoritative card Git repositories. A cache schema mismatch is an incompatible read-model layout, not proof that Git data is corrupt; rebuilding restores fields such as branch registration revisions and execution ownership before serving operations. WAL/SHM/journal files are also cleaned up. Do not remove card repositories or durable runtime records as part of cache recovery.
+On `SQLITE_CORRUPT`, `SQLITE_NOTADB`, `SQLITE_IOERR`, FTS corruption (`vtable constructor failed` or `cards_fts has an unexpected schema`), or `CacheSchemaMismatchError`, the disposable SQLite cache is deleted and rebuilt from the authoritative card Git repositories. A cache schema mismatch is an incompatible read-model layout, not proof that Git data is corrupt; rebuilding restores branch registration metadata and separate invalid-entry evidence. Assignment and execution authority live in the durable runtime admission journal, independently of this cache. WAL/SHM/journal files are also cleaned up. Do not remove card repositories or durable runtime records as part of cache recovery.
 
 **Source**: the extension's database-corruption check, run whenever opening the database fails.
+
+### Unreadable Admission Recovery
+
+An unreadable or invalid live admission causes startup refusal naming the exact file. Preserve it for diagnosis. To explicitly abandon that action, move only that named file into `runtime/admission/quarantine/` under the same runtime root, then reload the window. Create the quarantine directory if needed; leave the admission authority marker, claims and all other records in place. This is manual recovery, not an automatic quarantine command.
+
+The action is then treated as lost, including its assignment protection. Verify or terminate any remaining processes before permitting slot reuse. Moving the file cannot stop its agent. Do not delete the runtime directory or rebuild admissions from the disposable cache. The [journal reader](./packages/cards/server/src/runtime/admission/journal.ts#L271) scans top-level admission JSON files and fails closed on malformed live records.
+
+Utility Git has a 30-second execution deadline followed by bounded best-effort cleanup using Node process groups and operating-system commands. On every platform, detached or reparented descendants can survive. Diagnostics distinguish observed termination, known survivors and incomplete observation; an OS-command exit does not certify that every descendant stopped. Inspect these decisions before retrying a failed mutation. Dirty or unmerged work remains protected independently of process cleanup.
 
 ### Lock Conflicts
 

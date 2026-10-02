@@ -98,7 +98,6 @@ beforeEach(() => {
   mockExtractActionInput.mockReturnValue({
     cardId: 'card-123',
     executionId: 'execution-123',
-    worktreeDirective: { kind: 'reuse' },
     actionName: 'Launch Claude',
     environment: 'default',
     executionMode: 'background',
@@ -241,7 +240,6 @@ describe('Notification(idle_prompt) nudge hook', () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
         executionId: 'execution-123',
-        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -268,7 +266,6 @@ describe('Notification(idle_prompt) nudge hook', () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
         executionId: 'execution-123',
-        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -334,7 +331,6 @@ describe('Notification(idle_prompt) nudge hook', () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
         executionId: 'execution-123',
-        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',
@@ -362,7 +358,6 @@ describe('Notification(idle_prompt) nudge hook', () => {
       mockExtractActionInput.mockReturnValue({
         cardId: 'card-123',
         executionId: 'execution-123',
-        worktreeDirective: { kind: 'reuse' },
         actionName: 'Launch Claude',
         environment: 'default',
         executionMode: 'background',

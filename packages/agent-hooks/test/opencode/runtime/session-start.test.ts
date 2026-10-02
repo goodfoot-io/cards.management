@@ -61,7 +61,6 @@ function actionInput(overrides: Partial<ActionInput> = {}): ActionInput {
     cardId: 'main-453',
     actionName: 'Launch Cards',
     executionId: 'execution-453',
-    worktreeDirective: { kind: 'reuse' },
     environment: 'default',
     executionMode: 'interactive',
     exitWhenDone: false,

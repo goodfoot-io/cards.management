@@ -199,8 +199,7 @@ function createMockChild(): ChildProcess {
  */
 function createMockContext(): ActionContext {
   return {
-    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
-    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
+    assignWorktree: async () => ({ branch: 'cards/card-123/1', worktreePath: checkoutPath }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -217,7 +216,6 @@ function createMockContext(): ActionContext {
 function baseInput(overrides: Partial<ActionInput> = {}): ActionInput {
   return {
     executionId: 'execution-test',
-    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Launch',
     environment: 'default',
@@ -430,7 +428,15 @@ beforeEach(async () => {
       return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
+        new Response(
+          JSON.stringify({
+            branches: [{ name: 'cards/card-123/1', parentBranch: 'main', addedAt: '2026-10-01T00:00:00.000Z' }],
+            invalidEntries: [],
+            commits: [],
+            defaultBranch: 'main'
+          }),
+          { status: 200 }
+        )
       );
     }
     return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
@@ -541,24 +547,6 @@ describe('spawnAntigravitySession — workspace trust preparation', () => {
     await run.done;
 
     expect(await readTrustedWorkspaces()).toEqual([]);
-    expect(await inodeOf(settingsPath)).toBe(inode);
-  });
-
-  it('carries no trust when worktree settlement rejects, before any spawn', async () => {
-    await writeSettings({ toolPermission: 'always-proceed', trustedWorkspaces: [repoRoot] });
-    const inode = await inodeOf(settingsPath);
-    const { createWorktree } = await import('@cards.management/sdk/worktree');
-    // The rejection is deliberate, and the launcher consumes it by awaiting
-    // settle; the no-op handler only keeps Node from reporting the rejection as
-    // unhandled in the window before that await is reached.
-    const settle = Promise.reject(new Error('worktree outfit failed'));
-    settle.catch(() => undefined);
-    vi.mocked(createWorktree).mockResolvedValue({ path: checkoutPath, settle });
-
-    await expect(launch(baseInput()).done).rejects.toThrow(/worktree outfit failed/);
-
-    expect(agySpawns).toHaveLength(0);
-    expect(await readTrustedWorkspaces()).toEqual([repoRoot]);
     expect(await inodeOf(settingsPath)).toBe(inode);
   });
 });

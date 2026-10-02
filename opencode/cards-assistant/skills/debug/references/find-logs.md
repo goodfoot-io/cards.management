@@ -82,13 +82,16 @@ find ~/.config/Code/logs ~/Library/Application\ Support/Code/logs -name "Cards.l
 | **Source** | `public/packages/sdk/src/config/logger.ts` |
 | **Resolution order** | 1. `config.logFilePath` (explicit) — 2. `$CARDS_HOOKS_LOG_FILE` env var — 3. `$CARDS_LOG_DIR/{subsystem}.log` — 4. `{main-repo-root}/.cards/logs/{subsystem}.log` (computed via `git rev-parse --path-format=absolute --git-common-dir`) — 5. `null` (file output disabled) |
 
-### Branch Cleanup Watcher
+### Owner Worktree Authority
 
 | Field | Value |
 |-------|-------|
-| **Path** | Nonempty inherited `$CARDS_HOOKS_LOG_FILE`; no subsystem-derived file by default |
-| **Format** | JSON Lines |
-| **Source** | `public/packages/default-configuration/src/bin/branch-cleanup-watcher.ts` constructs `Logger()` without a subsystem. The extension effect inherits the environment rather than computing a worker log path; `resolveLogFilePath()` disables file output when neither an explicit path nor the inherited override is present. |
+| **Decisions** | Cards extension output, with structured `worktree-import`, assignment, cleanup and refusal records |
+| **Deletion audit** | `{runtime-root}/worktree-deletions.log`, JSON Lines retained for 30 days |
+| **Runtime root** | `runtime/` beside the API discovery file; production normally `~/.cards/runtime/` and EDH uses its isolated runtime root |
+| **Source** | [Owner authority](./packages/cards/server/src/runtime/worktrees/authority.ts#L341) and [runtime composition](./packages/extension/src/runtime/createExtensionRuntimeAuthority.ts#L231) |
+
+The startup summary reports current projected cards, invalid entries, imported legacy assignments and refused cards. Cleanup runs in the API owner process; providers no longer launch a branch cleanup watcher.
 
 ### Detached Child Output
 
@@ -97,7 +100,7 @@ find ~/.config/Code/logs ~/Library/Application\ Support/Code/logs -name "Cards.l
 | **Default path** | `{main-repo-root}/.cards/logs/cards-detached-child-stderr.log` |
 | **Format** | Append-only plain text containing the combined, verbatim stdout and stderr of detached cleanup children, plus versioned attribution records described below. This is **not JSON Lines**. |
 | **Resolution order** | 1. A nonempty `$CARDS_DETACHED_STDERR_LOG_FILE` selects that exact file. 2. Otherwise, a nonempty `$CARDS_LOG_DIR` selects `$CARDS_LOG_DIR/cards-detached-child-stderr.log`. 3. Otherwise, the main repository is resolved using nonempty `REPO_ROOT`, then `git rev-parse --path-format=absolute --git-common-dir`, and the default path above is used. 4. If no main repository can be resolved, capture is disabled (`null`) and the child is spawned with ignored output. Empty override values are skipped. `$CARDS_HOOKS_LOG_FILE` is never consulted. |
-| **Sources** | `prepareDetachedChildOutputCapture()` in `public/packages/sdk/src/config/detached-child-output.ts` defines this opt-in capture format. The current branch-maintenance worker is launched and awaited by `branchCleanupEffect.ts` without this capture helper; older records do not prove that a current worker started. |
+| **Sources** | `prepareDetachedChildOutputCapture()` in `public/packages/sdk/src/config/detached-child-output.ts` defines this opt-in capture format. Branch-cleanup child records below are historical; current worktree cleanup runs in the API owner and produces the authority decisions above. |
 | **No file?** | Path-resolution, directory-creation, open, or initial-write failure produces a warning through the caller's existing logging channel, then leaves cleanup fail-open with ignored output. A healthy child normally adds only the two small attribution records below. |
 
 Each attribution record occupies one physical line and starts with the magic prefix `@@CARDS_DETACHED_CHILD_V1@@`, immediately followed by a JSON object. The parent writes a `spawn` record before launching the child. If Node reaches the generated preload, the child writes a `started` record before loading the existing cleanup entry module. Both records carry the same correlation ID, card ID, nullable session ID, and child kind; the second also records the runtime PID. Card, session, and child-kind values are bounded to 512 Unicode code points and visibly end in `...[truncated]` when shortened. JSON serialization keeps embedded newlines and other identity delimiters inside the physical record line.

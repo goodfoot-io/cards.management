@@ -3,8 +3,8 @@
  *
  * Mirrors the launch mechanics of {@link ./codex-session.js} and
  * {@link ./opencode-session.js} for the `agy` CLI: worktree resolution,
- * process-group ownership, cancel/shutdown drain wiring, status settle, and
- * mode-dependent post-exit branch cleanup.
+ * process-group ownership, cancel/shutdown drain wiring and status settlement.
+ * Worktree assignment and maintenance run in the API owner.
  *
  * Invocation contract (notes/antigravity-host-contract.md, verified launch
  * surface): interactive launches run terminal-owned `agy -i <prompt>`;
@@ -33,7 +33,7 @@ import {
 } from '@cards.management/sdk/transcript-sync';
 import { createAntigravityTerminationController } from './antigravity-termination.js';
 import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
-import { cleanupMergedBranches, errorMessage, resolveBaseBranch, resolveOrCreateWorktree } from './claude-session.js';
+import { errorMessage, resolveAssignedWorktree, resolveBaseBranch } from './claude-session.js';
 import { spawnAgentCli } from './spawn-cli.js';
 
 /**
@@ -302,22 +302,9 @@ export async function spawnAntigravitySession(
   }
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
-  const {
-    worktreePath: cwd,
-    branchName,
-    parentBranch,
-    reason,
-    settle
-  } = await resolveOrCreateWorktree(input, client, baseBranch, context.logger, sessionId);
+  const { worktreePath: cwd, branchName, parentBranch } = await resolveAssignedWorktree(input, client, context);
 
-  await context.reportWorktreeAssignment({ branch: branchName, worktreePath: cwd, reason });
-
-  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch, reason });
-
-  // Worktree outfit/registration is part of launch preparation. Await it
-  // before exposing the path to an agent process; a rejected settle removes
-  // the worktree and must prevent spawn entirely.
-  if (settle) await settle;
+  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
   // Carry the already authorized project's native folder trust into the exact
   // checkout before any agent process is exposed to it. `agy` raises its native
@@ -573,38 +560,5 @@ export async function spawnAntigravitySession(
     });
   }
 
-  // Settle before the mode split: both modes settle with the same policy and
-  // differ only in who performs post-exit branch cleanup, and the settle has to
-  // stay ahead of the cleanup watcher's on-disk status read in either mode.
-
-  if (!isInteractive) {
-    context.logger.info(`${input.actionName} background launch settled`, { sessionId });
-
-    // Post-exit cleanup: remove fully-merged branches inline — there is no
-    // terminal to keep open in background mode.
-    try {
-      await cleanupMergedBranches(input, input.cardRepoPath, context.logger, sessionId);
-    } catch (error) {
-      const message = errorMessage(error);
-      if (message.includes('self-referential parentBranch') || message.includes('data corruption')) {
-        throw error;
-      }
-      context.logger.warn('Post-exit cleanup failed (non-fatal)', { error: message, sessionId });
-    }
-    return;
-  }
-
   context.logger.info(`${input.actionName} action completed`, { sessionId, exitCode: outcome.exitCode });
-
-  // Interactive mode: hand post-exit cleanup to the detached watcher so the
-  // terminal closes immediately (the watcher calls the same
-  // {@link cleanupMergedBranches} function).
-  try {
-    await context.reportBranchCleanupRegistration({ sessionId });
-  } catch (error) {
-    context.logger.warn('Failed to register branch cleanup (non-fatal)', {
-      error: errorMessage(error),
-      sessionId
-    });
-  }
 }

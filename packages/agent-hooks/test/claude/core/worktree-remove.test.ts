@@ -167,7 +167,7 @@ describe('WorktreeRemove hook', () => {
 
   it('routes a card-bound worktree through removeWorktreeForCard with the derived cardId', async () => {
     resetMocks();
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     mockRemoveWorktreeForCard.mockResolvedValue(undefined);
 
     await hookFn({ ...baseInput, worktree_path }, { logger: mockLogger as unknown as Logger });
@@ -183,7 +183,7 @@ describe('WorktreeRemove hook', () => {
   it('preserves a bound worktree when its cleanup authority is unavailable', async () => {
     resetMocks();
     mockCreateCardsClient.mockResolvedValue(null);
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     mockRemoveWorktree.mockResolvedValue(undefined);
 
     await hookFn({ ...baseInput, worktree_path }, { logger: mockLogger as unknown as Logger });
@@ -200,7 +200,7 @@ describe('WorktreeRemove hook', () => {
 
   it('acquires the client with retryOnNetworkError disabled (fail-fast) for a bound worktree', async () => {
     resetMocks();
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     mockRemoveWorktreeForCard.mockResolvedValue(undefined);
 
     await hookFn({ ...baseInput, worktree_path }, { logger: mockLogger as unknown as Logger });
@@ -210,7 +210,7 @@ describe('WorktreeRemove hook', () => {
 
   it('fails open (logs, does not throw) when the unregister phase fails (BranchUnregisterError)', async () => {
     resetMocks();
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     // The unregister phase failed: the worktree was already torn down, only the
     // branch record is orphaned. Classified by error type, not path existence.
     mockRemoveWorktreeForCard.mockRejectedValue(new BranchUnregisterError(new Error('removeBranch failed')));
@@ -227,7 +227,7 @@ describe('WorktreeRemove hook', () => {
 
   it('treats a non-BranchUnregisterError as a teardown failure (logged under WorktreeRemove failed)', async () => {
     resetMocks();
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     // A teardown-phase failure (e.g. git worktree prune failing AFTER the dir
     // was deleted) is NOT wrapped in BranchUnregisterError. The old heuristic
     // would have downgraded it to fail-open because the path is gone; type
@@ -252,7 +252,7 @@ describe('WorktreeRemove hook', () => {
 
   it('rethrows WorktreeScopeError from the unregister-routing path (still a teardown failure)', async () => {
     resetMocks();
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     mockRemoveWorktreeForCard.mockRejectedValue(new WorktreeScopeError('path outside worktrees root'));
 
     await expect(
@@ -262,7 +262,7 @@ describe('WorktreeRemove hook', () => {
 
   it('still routes a detached-HEAD bound worktree through removeWorktreeForCard', async () => {
     resetMocks();
-    const worktree_path = await makeCardBoundWorktree('main-77', 'cards/main-77/3');
+    const worktree_path = await makeCardBoundWorktree('main-77', 'agent-main-77-3');
     // Detach HEAD so rev-parse --abbrev-ref yields the literal "HEAD".
     const sha = execFileSync('git', ['-C', worktree_path, 'rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
     execFileSync('git', ['-C', worktree_path, 'checkout', '-q', '--detach', sha]);

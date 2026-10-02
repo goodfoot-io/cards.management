@@ -108,6 +108,7 @@ async function resolveParentBranch(sourceRoot: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(ref!)) throw new Error('Dedicated slots require runtime worktree assignment');
   // Explicit selection must not touch marker state: a corrupt or unreadable
   // source marker is irrelevant when the operator already chose the card.
   let source: GitRoots;

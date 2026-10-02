@@ -17,7 +17,7 @@ cards "$CARD_ID" shutdown --outcome error --message "what failed"
 
 Use `success` for completion and normal review or approval boundaries. Use `blocked` only after loading `$runtime:blocker-contract` and committing a compliant blocker record. Use `error` when execution must end without a valid success or blocker record. `--outcome` defaults to `success`; exit 0 confirms request acceptance, not cleanup.
 
-Do not make any later tool call after the shutdown command. Delivery is not completion: the runtime records one terminal decision, and the execution wrapper reports containment and output finalization after stopping its owned processes.
+Do not make any later tool call after the shutdown command. Delivery is not completion: the wrapper reports bounded best-effort cleanup, root state and output finalization after the accepted terminal decision.
 
 3. End the session cleanly. The execution wrapper owns termination in response to the accepted decision — no separate kill commands are needed.
 

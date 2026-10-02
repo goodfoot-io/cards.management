@@ -932,6 +932,18 @@ describe('rerouteNodeModules', () => {
 describe('rerouteAllNodeModules', () => {
   let tempDir: string;
 
+  async function materializeCheckout(sourceRoot: string, worktreeDir: string, names: string[]): Promise<void> {
+    await fsExtra.ensureDir(worktreeDir);
+    await fs.copyFile(path.join(sourceRoot, 'package.json'), path.join(worktreeDir, 'package.json'));
+    for (const name of names) {
+      for (const root of [sourceRoot, worktreeDir]) {
+        const directory = path.join(root, 'packages', name);
+        await fsExtra.ensureDir(directory);
+        await fs.writeFile(path.join(directory, 'package.json'), JSON.stringify({ name }));
+      }
+    }
+  }
+
   beforeAll(async () => {
     tempDir = await fsExtra.mkdtemp(path.join(os.tmpdir(), 'reroute-all-test-'));
   });
@@ -979,7 +991,8 @@ describe('rerouteAllNodeModules', () => {
 
     const rootNM = path.join(sourceRoot, 'node_modules');
     await fsExtra.ensureDir(rootNM);
-    await fs.symlink('../../packages/pkg1', path.join(rootNM, 'pkg1'));
+    await fs.symlink('../packages/pkg1', path.join(rootNM, 'pkg1'));
+    await materializeCheckout(sourceRoot, worktreeDir, ['pkg1']);
 
     const count = await rerouteAllNodeModules({
       sourceRoot,
@@ -990,7 +1003,7 @@ describe('rerouteAllNodeModules', () => {
     expect(count).toBeGreaterThanOrEqual(1);
 
     const target = await fs.readlink(path.join(worktreeDir, 'node_modules', 'pkg1'));
-    expect(toPosix(target)).toBe('../../packages/pkg1');
+    expect(toPosix(target)).toBe('../packages/pkg1');
   });
 
   it('reroutes per-package node_modules under packages/', async () => {
@@ -1003,7 +1016,8 @@ describe('rerouteAllNodeModules', () => {
 
     const pkg1NM = path.join(sourceRoot, 'packages', 'pkg1', 'node_modules');
     await fsExtra.ensureDir(pkg1NM);
-    await fs.symlink('../../../packages/shared', path.join(pkg1NM, 'shared'));
+    await fs.symlink('../../shared', path.join(pkg1NM, 'shared'));
+    await materializeCheckout(sourceRoot, worktreeDir, ['pkg1', 'shared']);
 
     const rootNM = path.join(sourceRoot, 'node_modules');
     await fsExtra.ensureDir(rootNM);
@@ -1017,7 +1031,7 @@ describe('rerouteAllNodeModules', () => {
     expect(count).toBeGreaterThanOrEqual(1);
 
     const target = await fs.readlink(path.join(worktreeDir, 'packages', 'pkg1', 'node_modules', 'shared'));
-    expect(toPosix(target)).toBe('../../../packages/shared');
+    expect(toPosix(target)).toBe('../../shared');
   });
 
   it('returns total count of internal rerouted symlinks', async () => {
@@ -1030,12 +1044,14 @@ describe('rerouteAllNodeModules', () => {
 
     const rootNM = path.join(sourceRoot, 'node_modules');
     await fsExtra.ensureDir(rootNM);
-    await fs.symlink('../../packages/internal1', path.join(rootNM, 'internal1'));
-    await fs.symlink('../../packages/internal2', path.join(rootNM, 'internal2'));
+    await fs.symlink('../packages/internal1', path.join(rootNM, 'internal1'));
+    await fs.symlink('../packages/internal2', path.join(rootNM, 'internal2'));
+    await materializeCheckout(sourceRoot, worktreeDir, ['internal1', 'internal2']);
 
     const pkg1NM = path.join(sourceRoot, 'packages', 'pkg1', 'node_modules');
     await fsExtra.ensureDir(pkg1NM);
-    await fs.symlink('../../../packages/shared', path.join(pkg1NM, 'shared'));
+    await fs.symlink('../../shared', path.join(pkg1NM, 'shared'));
+    await materializeCheckout(sourceRoot, worktreeDir, ['pkg1', 'shared']);
 
     const count = await rerouteAllNodeModules({
       sourceRoot,
@@ -1232,6 +1248,8 @@ describe('enumerateReroutedNodeModules', () => {
     await fsExtra.ensureDir(rootNM);
     await fs.symlink('../../packages/shared', path.join(rootNM, 'shared'));
 
+    await fsExtra.ensureDir(worktreeDir);
+    await fs.copyFile(path.join(sourceRoot, 'package.json'), path.join(worktreeDir, 'package.json'));
     await rerouteAllNodeModules({ sourceRoot, worktreeDir, repoRoot });
 
     // Write a file into the worktree's node_modules

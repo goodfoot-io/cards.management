@@ -81,7 +81,6 @@ describe('executeCommand', () => {
       [CARDS_ENV_VARS.CARD_ID]: 'card-123',
       [CARDS_ENV_VARS.ACTION_NAME]: 'Test Action',
       [CARDS_ENV_VARS.EXECUTION_ID]: 'execution-1',
-      [CARDS_ENV_VARS.WORKTREE_DIRECTIVE]: JSON.stringify({ kind: 'reuse' }),
       [CARDS_ENV_VARS.ENVIRONMENT]: 'default',
       [CARDS_ENV_VARS.EXECUTION_MODE]: 'interactive',
       [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false',
@@ -432,7 +431,7 @@ describe('executeCommand', () => {
       expect.objectContaining({
         type: 'execution.interactiveHandoff',
         causationId: 'switch-command-1',
-        payload: { continuation: { kind: 'inline', value: '{"sessionId":"claude-session-1"}' } }
+        payload: { worktreeProtocol: 2, continuation: { kind: 'inline', value: '{"sessionId":"claude-session-1"}' } }
       })
     );
     expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SWITCH_TO_INTERACTIVE);

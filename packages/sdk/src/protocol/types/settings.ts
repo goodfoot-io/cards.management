@@ -285,13 +285,10 @@ export interface ActionState {
    */
   mode: 'interactive' | 'background';
 
-  /** Settled worktree owned by this exact execution; absent while allocation is pending. */
+  /** Durable checkout assignment for this instance; absent before assignment completes. */
   worktreeAssignment?: {
-    readonly executionId: string;
     readonly branch: string;
     readonly worktreePath: string;
-    readonly reason: 'reused' | 'reattached' | 'allocated';
-    readonly ownership: 'active-execution';
   };
 
   /** Authoritative runtime transport state; absence is never interpreted as terminal. */

@@ -46,19 +46,14 @@ export type {
   AddBranchResponse,
   BranchesResponse,
   BranchInfo,
-  BranchOwnerExpectation,
   BranchRegistrationIntent,
-  RemoveBranchRequest,
   RemoveBranchResponse,
-  UpdateBranchOwnerRequest,
-  UpdateBranchOwnerResponse,
   WorkspaceBranch
 } from './branch.js';
 export {
   BRANCHES_DIR,
   COMMITS_DIR,
-  EMPTY_TREE_SHA,
-  UpdateBranchOwnerRequestSchema
+  EMPTY_TREE_SHA
 } from './branch.js';
 // --- Card Types ---
 export type { Card, CardGates, CardMetadata, CardRelation, CardRelationType } from './card.js';

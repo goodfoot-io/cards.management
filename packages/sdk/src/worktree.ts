@@ -418,6 +418,7 @@ export interface EarlyWorktreeResult {
  * @returns Early result with `path` available immediately and `settle` resolving when setup completes.
  */
 export async function createWorktree(ref: string, options?: CreateWorktreeOptions): Promise<EarlyWorktreeResult> {
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(ref)) throw new Error('Dedicated slots require runtime worktree assignment');
   // Opt-in phase timing (CARDS_WORKTREE_PERF). A no-op fast path when unset, so
   // the common case allocates nothing and reads no clock. t0 is captured here,
   // so every offset is measured from the start of the call the contributor waits on.
@@ -812,6 +813,10 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
     throw error;
   }
 
+  const branch = (
+    await execFileAsync('git', ['-C', resolved, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5_000 })
+  ).stdout.trim();
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(branch)) throw new Error('Dedicated slots require runtime worktree cleanup');
   await execFileAsync('git', ['worktree', 'remove', '--force', resolved], { cwd: repoRoot });
 
   // On Windows a just-exited `git worktree remove` subprocess (or a watcher/AV

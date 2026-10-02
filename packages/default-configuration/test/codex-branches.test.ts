@@ -2,7 +2,7 @@
  * Exercises Codex branches of the consolidated action handlers (launch, chat,
  * interview) through end-to-end scenarios. Locks in plugin-cache population,
  * spawn argv (including the `--profile cards` enablement and the separate
- * profile-config write), error paths, cancellation, and branch-cleanup wiring
+ * profile-config write), error paths, cancellation, and owner worktree assignment
  * for the Codex path.
  *
  * @summary Tests Codex branches of consolidated action handlers
@@ -284,7 +284,15 @@ beforeEach(async () => {
       return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
+        new Response(
+          JSON.stringify({
+            branches: [{ name: 'cards/card-123/1', parentBranch: 'main', addedAt: '2026-10-01T00:00:00.000Z' }],
+            invalidEntries: [],
+            commits: [],
+            defaultBranch: 'main'
+          }),
+          { status: 200 }
+        )
       );
     }
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
@@ -398,8 +406,10 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
-    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
-    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
+    assignWorktree: async () => ({
+      branch: 'cards/card-123/1',
+      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
+    }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -427,7 +437,6 @@ function createMockChild(): ChildProcess {
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
     executionId: 'execution-test',
-    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Launch',
     environment: 'default',
@@ -597,27 +606,7 @@ describe('launch action — codex branch', () => {
     await promise;
   });
 
-  it('registers branch cleanup after session exits', async () => {
-    const { spawn, execFile } = await import('node:child_process');
-    const child = createMockChild();
-    vi.mocked(spawn).mockReturnValue(child);
-
-    const action = (await import('../src/actions/launch.js')).default;
-    const context = createMockContext();
-    const promise = action(baseInput(), context);
-    await flushMicrotasks();
-
-    child.emit('close', 0);
-    await promise;
-
-    expect(context.reportBranchCleanupRegistration).toHaveBeenCalledWith({});
-
-    const execCalls = vi.mocked(execFile).mock.calls;
-    const mergeBaseCall = execCalls.find((call) => (call[1] as string[])?.includes('merge-base'));
-    expect(mergeBaseCall).toBeUndefined();
-  });
-
-  it('runs background-mode launch through codex exec with console-less stdio and inline cleanup', async () => {
+  it('runs background-mode launch through codex exec with console-less stdio', async () => {
     const { spawn } = await import('node:child_process');
     const stderr = new EventEmitter();
     const child = createMockChild();
@@ -644,8 +633,6 @@ describe('launch action — codex branch', () => {
 
     child.emit('close', 0);
     await promise;
-
-    expect(context.reportBranchCleanupRegistration).not.toHaveBeenCalled();
   });
 });
 

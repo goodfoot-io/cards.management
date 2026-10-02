@@ -29,9 +29,6 @@ export interface ActionInput {
   /** Server-minted identity of this admitted execution. */
   executionId: string;
 
-  /** Authority-issued worktree policy for this admission. */
-  worktreeDirective: WorktreeAllocationDirective;
-
   /**
    * Unique identifier for the current card.
    *
@@ -178,22 +175,8 @@ export interface ActionContext {
    */
   cwd: string;
 
-  /**
-   * Reports the worktree successfully settled for this execution. The runtime
-   * binds the report to the authenticated execution; handlers cannot nominate
-   * another execution identity.
-   */
-  reportWorktreeAssignment(assignment: WorktreeAssignmentResult): Promise<void>;
-
-  /**
-   * Durably registers the provider's session-specific inputs for a later
-   * detached branch-cleanup run, while the provider still holds them. The
-   * server derives `cardId`/`repoRoot`/`cardRepoPath` from the admitted
-   * execution and its reservation itself — this carries nothing else on
-   * purpose, so no path supplied by a producer can steer the maintenance
-   * worker.
-   */
-  reportBranchCleanupRegistration(registration: BranchCleanupRegistration): Promise<void>;
+  /** Requests the authenticated execution's durable, fully provisioned checkout before spawning. */
+  assignWorktree(): Promise<import('../protocol/types/worktree-slots.js').AssignedWorktree>;
 
   /**
    * Register a callback to be invoked when the action is cancelled.
@@ -219,31 +202,6 @@ export interface ActionContext {
    * @param callback - Function that returns data to pass to the relaunched handler
    */
   onSwitchToInteractive(callback: () => unknown | Promise<unknown>): void;
-}
-
-/** Immutable worktree policy selected while an admitted execution is reserved. */
-export type WorktreeAllocationDirective =
-  | { readonly kind: 'reuse' }
-  | { readonly kind: 'allocate' }
-  | {
-      readonly kind: 'preowned';
-      readonly branch: string;
-      readonly worktreePath: string;
-    };
-
-/** Worktree settlement reported by the admitted action handler. */
-export interface WorktreeAssignmentResult {
-  readonly branch: string;
-  readonly worktreePath: string;
-  readonly reason: 'reused' | 'reattached' | 'allocated';
-}
-
-/**
- * Branch-cleanup registration reported by the admitted action handler while
- * it still holds its session-specific inputs.
- */
-export interface BranchCleanupRegistration {
-  readonly sessionId?: string;
 }
 
 // ============================================================================

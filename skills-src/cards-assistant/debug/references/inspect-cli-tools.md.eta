@@ -83,7 +83,7 @@ Routes through `POST /execute-command` with `{command: "cards.reportIssue", args
 
 **Usage**: `remove-worktree <path>`. **Exit codes**: 0 success, 2 failure.
 
-**Behavior**: Reads `{worktree}/.cards/CARD_ID` → if bound, unregisters branch via API → removes worktree via `git worktree remove` or `rm -rf` fallback.
+**Behavior**: Resolves checkout HEAD and refuses reserved `cards/<cardId>/<positive integer>` slots before removal. Ordinary card-bound checkouts are removed, then their branch registration is removed through the API; an unavailable API or failed unregistration is logged. Unbound ordinary worktrees use the same SDK teardown. Dedicated slots require authenticated owner cleanup.
 
 ### `cards-sdk`
 
@@ -109,7 +109,6 @@ Routes through `POST /execute-command` with `{command: "cards.reportIssue", args
 |--------|-----------|---------|
 | `stream-sync-watcher` | SessionStart/`EnterWorktree` hooks | Remains in the spawning session, monitors agent PID, and finalizes transcript capture on stop or signal |
 | `adhoc-cleanup` | `EnterWorktree` hook | Monitors agent PID, transitions card to `needs_review` on session end |
-| Branch cleanup watcher | Extension durable branch-cleanup effect | Runs the installed worker with server-derived environment parameters and awaits its exit; failure remains a failed effect |
 
 ## Shell Shim Pattern
 
@@ -158,7 +157,7 @@ All CLIs authenticate via Bearer token from the API discovery file.
 
 ## Platform-Specific Behavior
 
-**Win32 transcript/adhoc spawns**: Resolve `node.exe` directly (not through a `.cmd` shim) via `resolveDetachedNodeInterpreter()` with `windowsHide: true`. The stream-sync watcher stays in the spawning session; adhoc cleanup is detached. The branch-maintenance effect separately invokes the installed worker shim and awaits its exit.
+**Win32 transcript/adhoc spawns**: Resolve `node.exe` directly (not through a `.cmd` shim) via `resolveDetachedNodeInterpreter()` with `windowsHide: true`. The stream-sync watcher stays in the spawning session; adhoc cleanup is detached. Dedicated worktree cleanup runs in the API owner process, with bounded utility Git helpers.
 
 ## Out of Scope
 

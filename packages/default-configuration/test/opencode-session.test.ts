@@ -545,7 +545,15 @@ describe('opencode-session library', () => {
           return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
         if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
           return Promise.resolve(
-            new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
+            new Response(
+              JSON.stringify({
+                branches: [{ name: 'cards/card-123/1', parentBranch: 'main', addedAt: '2026-10-01T00:00:00.000Z' }],
+                invalidEntries: [],
+                commits: [],
+                defaultBranch: 'main'
+              }),
+              { status: 200 }
+            )
           );
         }
         if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
@@ -624,8 +632,10 @@ describe('opencode-session library', () => {
 
     function createMockContext(): ActionContext {
       return {
-        reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
-        reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
+        assignWorktree: async () => ({
+          branch: 'cards/card-123/1',
+          worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
+        }),
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),
@@ -653,7 +663,6 @@ describe('opencode-session library', () => {
     function baseInput(overrides?: Partial<ActionInput>): ActionInput {
       return {
         executionId: 'execution-test',
-        worktreeDirective: { kind: 'reuse' },
         cardId: 'card-123',
         actionName: 'Launch',
         environment: 'default',
@@ -754,7 +763,7 @@ describe('opencode-session library', () => {
       await promise;
     });
 
-    it('registers onCancel that terminates the owned process tree and runs the branch-cleanup watcher after exit', async () => {
+    it('registers onCancel that terminates the owned process tree', async () => {
       const { spawn } = await import('node:child_process');
       const { spawnOpencodeSession } = await import('../src/lib/opencode-session.js');
       const child = createMockChild();
@@ -786,8 +795,6 @@ describe('opencode-session library', () => {
 
       child.emit('close', 0);
       await promise;
-
-      expect(context.reportBranchCleanupRegistration).toHaveBeenCalledWith({});
 
       killSpy.mockRestore();
     });

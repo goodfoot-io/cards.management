@@ -46,7 +46,6 @@ const logger = new Logger();
 const baseActionInput = {
   cardId: 'card-123',
   executionId: 'execution-123',
-  worktreeDirective: { kind: 'reuse' } as const,
   actionName: 'Launch',
   environment: 'default',
   executionMode: 'interactive' as const,

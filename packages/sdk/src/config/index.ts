@@ -71,9 +71,7 @@ export type {
   ActionContext,
   ActionInput,
   CardsAssistantContext,
-  CardsAssistantInput,
-  WorktreeAllocationDirective,
-  WorktreeAssignmentResult
+  CardsAssistantInput
 } from './inputs.js';
 
 // ============================================================================

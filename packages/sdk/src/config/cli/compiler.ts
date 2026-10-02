@@ -243,18 +243,13 @@ export async function compileHandler(options: CompileOptions): Promise<CompileRe
     };
     const sourceImport = toRelativeImport(sourcePath);
 
-    // Generate wrapper code that imports the handler and calls executeCommand.
-    // Guard against --branch-cleanup: the branch-cleanup watcher re-executes
-    // this same bundle with that flag. Without the guard, executeCommand runs
-    // alongside the cleanup logic, spawning an unintended action loop.
+    // Generate the compiled handler entrypoint.
     const runtimeImport = toRelativeImport(path.resolve(getPackageRoot(), 'src/config/runtime.ts'));
     const wrapperContent = `
 import handler from '${sourceImport}';
 import { executeCommand } from '${runtimeImport}';
 
-if (!process.argv.includes('--branch-cleanup')) {
-  executeCommand(handler);
-}
+executeCommand(handler);
 `;
 
     // Create output directory if it doesn't exist

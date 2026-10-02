@@ -80,7 +80,11 @@ export type AdmissionRejectionReason =
   | 'scope-mismatch'
   | 'retired'
   | 'revoked'
-  | 'retention-exhausted';
+  | 'retention-exhausted'
+  | 'card_deleting'
+  | 'source_has_no_worktree'
+  | 'reload-window'
+  | 'upgrade-cli-sdk';
 
 /**
  * Why the authority cannot answer definitively. A client must never treat any
@@ -122,6 +126,10 @@ export interface LaunchAdmissionRequest {
    * concurrent producers coexist without sharing an identity.
    */
   readonly credentialRoles: readonly ProducerRole[];
+  /** Capability marker outside immutable/fingerprinted action parameters. */
+  readonly worktreeProtocol?: number;
+  /** Server-only preowned source, authenticated before fresh successor admission. */
+  readonly sourceExecutionId?: string;
 }
 
 /**

@@ -83,7 +83,6 @@ describe('Antigravity live transcript chain', () => {
 
     const actionInput: ActionInput = {
       executionId: 'execution-test',
-      worktreeDirective: { kind: 'reuse' },
       cardId: 'main-645',
       actionName: 'Launch',
       environment: 'default',

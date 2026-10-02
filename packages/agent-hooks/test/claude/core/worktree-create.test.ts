@@ -113,7 +113,6 @@ const fakeClient = {} as unknown as CardsClient;
  */
 function settledResult(worktreePath: string, reroutedSymlinks = 0) {
   return {
-    registrationRevision: 'test-registration',
     path: worktreePath,
     settle: Promise.resolve({
       branch: 'feature/test-branch',

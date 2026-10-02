@@ -151,7 +151,11 @@ export interface OutboundMessage<TType extends RuntimeMessageType = RuntimeMessa
 }
 
 /** Why a send was refused outright. Drawn from the admission and transport vocabularies. */
-export type SendRejectionReason = AdmissionRejectionReason | RegistrationRefusalReason | FrameRefusalReason;
+export type SendRejectionReason =
+  | AdmissionRejectionReason
+  | RegistrationRefusalReason
+  | FrameRefusalReason
+  | import('../../protocol/types/worktree-slots.js').WorktreeAssignmentRefusal;
 
 /**
  * Why a send's fate is unknown.
@@ -174,7 +178,11 @@ export type SendOutcome =
       readonly status: 'accepted';
       readonly messageId: string;
     }
-  | { readonly status: 'completed'; readonly messageId: string; readonly payload: unknown }
+  | {
+      readonly status: 'completed';
+      readonly messageId: string;
+      readonly payload: import('../../protocol/types/worktree-slots.js').AssignedWorktree;
+    }
   | { readonly status: 'rejected'; readonly messageId: string; readonly reason: SendRejectionReason }
   | {
       readonly status: 'uncertain';

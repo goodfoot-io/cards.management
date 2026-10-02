@@ -105,6 +105,8 @@ async function resolveParentBranch(cwd: string): Promise<string> {
 }
 
 export default worktreeCreateHook({}, async (input, { logger }) => {
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(input.name))
+    throw new Error('Dedicated slots require runtime worktree assignment');
   // Point hook file logging at <mainRepoRoot>/.cards/logs/claude-code-cards-api-hooks.log,
   // computed from the payload cwd. No-op under an explicit CLAUDE_CODE_HOOKS_LOG_FILE.
   applyDefaultLogFile(input.cwd);

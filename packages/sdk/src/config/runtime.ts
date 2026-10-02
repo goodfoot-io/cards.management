@@ -52,6 +52,7 @@ import { extractActionInput, extractCardsAssistantInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
 import type { ActionContext, ActionInput, CardsAssistantContext, CardsAssistantInput } from './inputs.js';
 import { Logger } from './logger.js';
+import { createWorktreeAssignmentCallback } from './worktree-assignment.js';
 
 /**
  * Logger for the handler runtime process.
@@ -283,13 +284,7 @@ function handleHandlerError(error: unknown): never {
  * ```
  */
 export async function executeCommand(command: AnyCommand): Promise<void> {
-  // Prevent SIGHUP from killing the action handler before post-exit cleanup
-  // (e.g. spawnBranchCleanupWatcher) can run. When a VSCode terminal closes,
-  // node-pty sends SIGHUP to the process group. Without this handler, Node.js
-  // terminates immediately and any post-exit code after the awaited child
-  // process never executes. The handler is a no-op: the child process (e.g.
-  // claude CLI) will receive SIGHUP independently, exit, and the awaiting
-  // code will resume to run post-exit cleanup.
+  // Let the child CLI settle after terminal closure before reporting the handler outcome.
   process.on('SIGHUP', () => {});
 
   try {
@@ -340,12 +335,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
         throw new Error('Action execution identity does not match its runtime credential');
       }
       const sendDurable = async <
-        T extends
-          | 'execution.commandCustody'
-          | 'execution.interactiveHandoff'
-          | 'execution.commandEffectResult'
-          | 'execution.worktreeAssignmentResult'
-          | 'execution.branchCleanupRegistration'
+        T extends 'execution.commandCustody' | 'execution.interactiveHandoff' | 'execution.commandEffectResult'
       >(
         type: T,
         payload: RuntimePayload<T>,
@@ -367,22 +357,10 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       const context: ActionContext = {
         logger,
         cwd: process.cwd(),
-        reportWorktreeAssignment: async (assignment) => {
-          const accepted = await sendDurable(
-            'execution.worktreeAssignmentResult',
-            assignment,
-            `${loaded.execution.executionId}:worktree-assignment`
-          );
-          if (!accepted) throw new Error('Runtime authority did not accept the worktree assignment');
-        },
-        reportBranchCleanupRegistration: async (registration) => {
-          const accepted = await sendDurable(
-            'execution.branchCleanupRegistration',
-            registration,
-            `${loaded.execution.executionId}:branch-cleanup-registration`
-          );
-          if (!accepted) throw new Error('Runtime authority did not accept the branch-cleanup registration');
-        },
+        assignWorktree: () =>
+          createWorktreeAssignmentCallback(runtimeClient, loaded.execution, loaded.credential.requestId, (error) =>
+            logger.warn(`Assignment connection close failed: ${getErrorMessage(error)}`)
+          )(),
         onCancel: (callback) => {
           cancelCallback = callback;
         },
@@ -631,7 +609,7 @@ async function handleSwitchToInteractiveCommand(
     const continuation = await toPromise(callback());
     const accepted = await sendDurable(
       'execution.interactiveHandoff',
-      { continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
+      { worktreeProtocol: 2, continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
       command.messageId
     );
     await recordObserved();

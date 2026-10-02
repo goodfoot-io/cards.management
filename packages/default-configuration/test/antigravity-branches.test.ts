@@ -175,7 +175,15 @@ beforeEach(async () => {
       return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
+        new Response(
+          JSON.stringify({
+            branches: [{ name: 'cards/card-123/1', parentBranch: 'main', addedAt: '2026-10-01T00:00:00.000Z' }],
+            invalidEntries: [],
+            commits: [],
+            defaultBranch: 'main'
+          }),
+          { status: 200 }
+        )
       );
     }
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
@@ -236,8 +244,10 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
-    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
-    reportBranchCleanupRegistration: vi.fn().mockResolvedValue(undefined),
+    assignWorktree: async () => ({
+      branch: 'cards/card-123/1',
+      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
+    }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -271,7 +281,6 @@ function createMockChild(): ChildProcess {
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
     executionId: 'execution-test',
-    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Launch',
     environment: 'default',
@@ -301,33 +310,6 @@ describe('resolveCodingAgent — antigravity', () => {
 });
 
 describe('launch action — antigravity branch', () => {
-  it('awaits worktree settlement and does not spawn when it rejects', async () => {
-    const { spawn } = await import('node:child_process');
-    const { createWorktree } = await import('@cards.management/sdk/worktree');
-
-    let rejectSettle!: (reason: Error) => void;
-    const settle = new Promise<{
-      branch: string;
-      worktree: string;
-      baseSha: string;
-      copiedFromInclude: number;
-      reroutedSymlinks: number;
-    }>((_resolve, reject) => {
-      rejectSettle = reject;
-    });
-    vi.mocked(createWorktree).mockResolvedValue({ path: WORKTREE_PATH, settle });
-
-    const action = (await import('../src/actions/launch.js')).default;
-    const promise = action(baseInput(), createMockContext());
-    const failure = expect(promise).rejects.toThrow(/worktree outfit failed/);
-    await flushMicrotasks();
-    expect(spawn).not.toHaveBeenCalled();
-
-    rejectSettle(new Error('worktree outfit failed'));
-    await failure;
-    expect(spawn).not.toHaveBeenCalled();
-  });
-
   it('spawns terminal-owned agy -i in the card worktree with card env and the minted session id', async () => {
     const { spawn } = await import('node:child_process');
     const child = createMockChild();
@@ -365,8 +347,6 @@ describe('launch action — antigravity branch', () => {
 
     child.emit('close', 0);
     await promise;
-
-    expect(context.reportBranchCleanupRegistration).toHaveBeenCalledWith({ sessionId: expect.any(String) });
   });
 
   it('does not settle a successful child exit before the launcher-owned final poll settles', async () => {
@@ -883,7 +863,6 @@ describe('launch action — antigravity branch', () => {
     await promise;
 
     // Inline cleanup only — no registration behind a headless run.
-    expect(context.reportBranchCleanupRegistration).not.toHaveBeenCalled();
   });
 
   it('fails a background launch on nonzero exit and signal termination', async () => {

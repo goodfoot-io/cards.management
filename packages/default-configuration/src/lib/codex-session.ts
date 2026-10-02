@@ -19,13 +19,7 @@ import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { applyCodexConfig } from './applyCodexConfig.js';
-import {
-  cleanupMergedBranches,
-  errorMessage,
-  resolveBaseBranch,
-  resolveMarketplacePath,
-  resolveOrCreateWorktree
-} from './claude-session.js';
+import { resolveAssignedWorktree, resolveBaseBranch, resolveMarketplacePath } from './claude-session.js';
 import { buildPluginHooksState, type HooksJson, type HookTrustEntry } from './codex-hook-trust.js';
 import { createCodexTerminationController } from './codex-termination.js';
 import { spawnAgentCli } from './spawn-cli.js';
@@ -917,16 +911,9 @@ export async function spawnCodexSession(
   }
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
-  const {
-    worktreePath: cwd,
-    branchName,
-    parentBranch,
-    reason
-  } = await resolveOrCreateWorktree(input, client, baseBranch, context.logger);
+  const { worktreePath: cwd, branchName, parentBranch } = await resolveAssignedWorktree(input, client, context);
 
-  await context.reportWorktreeAssignment({ branch: branchName, worktreePath: cwd, reason });
-
-  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch, reason });
+  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
   const codexHome = resolveDefaultCodexHome();
   const { bundlePath, pluginPaths, pluginCachePaths } = await populateCodexPluginCache(codexHome, marketplacePath);
@@ -1000,30 +987,4 @@ export async function spawnCodexSession(
   });
 
   context.logger.info(`${input.actionName} action completed`, { exitCode });
-
-  // Settle the card's status (active → needs_review) before the watcher can
-  // read it: the sweep's first gate is the on-disk status, which otherwise
-  // races this exit path from a separate process. See
-  // Interactive sessions hand cleanup to a detached watcher so their terminal
-  // closes immediately. Background actions have no terminal to release, so run
-  // the same sweep inline before reporting completion.
-  if (isInteractive) {
-    try {
-      await context.reportBranchCleanupRegistration({});
-    } catch (error) {
-      context.logger.warn('Failed to register branch cleanup (non-fatal)', {
-        error: errorMessage(error)
-      });
-    }
-  } else {
-    try {
-      await cleanupMergedBranches(input, input.cardRepoPath, context.logger);
-    } catch (error) {
-      const message = errorMessage(error);
-      if (message.includes('self-referential parentBranch') || message.includes('data corruption')) {
-        throw error;
-      }
-      context.logger.warn('Post-exit cleanup failed (non-fatal)', { error: message });
-    }
-  }
 }

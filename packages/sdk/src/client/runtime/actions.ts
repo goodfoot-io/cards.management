@@ -199,6 +199,7 @@ export interface RuntimeActionLaunchRequest {
   readonly requestId: OriginalCallerRequestId;
   readonly messageId: string;
   readonly params: ImmutableActionParams;
+  readonly worktreeProtocol?: number;
 }
 
 /** Client configuration for discovered authenticated runtime action requests. */
@@ -353,7 +354,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
     async launch(cardId, request): Promise<PublicActionLaunchResult> {
       const value = await transport(`/cards/${encodeURIComponent(cardId)}/runtime/actions`, {
         method: 'POST',
-        body: JSON.stringify(request)
+        body: JSON.stringify({ ...request, worktreeProtocol: 2 })
       });
       if (isHttpRejection(value)) {
         return { status: 'rejected', requestId: request.requestId, messageId: request.messageId, reason: value };

@@ -74,6 +74,28 @@ const EXECUTION_PRODUCERS: readonly ProducerRole[] = [
 export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, MessageContract>> = {
   // An admitted CLI must register before it can submit shutdown. Registration
   // does not grant execution-owner liveness, capabilities, or cleanup authority.
+  'worktree.assign': {
+    type: 'worktree.assign',
+    direction: 'client-to-server',
+    deliveryClass: 'durable-intent',
+    allowedRoles: ['agent-handler'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: false,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
+  'worktree.assignResult': {
+    type: 'worktree.assignResult',
+    direction: 'server-to-client',
+    deliveryClass: 'reconciled-snapshot',
+    allowedRoles: ['server'],
+    executionRequirement: 'admitted',
+    requiresRequestId: true,
+    requiresCausationId: true,
+    requiresOwnershipCurrent: true,
+    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+  },
   'runtime.register': {
     type: 'runtime.register',
     direction: 'client-to-server',

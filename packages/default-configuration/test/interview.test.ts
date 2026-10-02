@@ -2,7 +2,6 @@ import type { ChildProcess } from 'node:child_process';
 import path from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
-import type { BranchInfo } from '@cards.management/sdk/protocol';
 import { flushMicrotasks } from '@cards.management/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -65,7 +64,7 @@ const originalFetch = globalThis.fetch;
  * path.join so the expectation matches production's `\`-separated paths on
  * Windows.
  */
-const EXPECTED_COMPILED_SCRIPT_PATHS = {
+const _EXPECTED_COMPILED_SCRIPT_PATHS = {
   'pre-commit': path.join('/test/extension', 'dist', 'git-hooks', 'pre-commit.mjs'),
   'post-commit': path.join('/test/extension', 'dist', 'git-hooks', 'post-commit.mjs'),
   'post-rewrite': path.join('/test/extension', 'dist', 'git-hooks', 'post-rewrite.mjs')
@@ -119,7 +118,15 @@ beforeEach(async () => {
       return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
-        new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
+        new Response(
+          JSON.stringify({
+            branches: [{ name: 'cards/card-123/1', parentBranch: 'main', addedAt: '2026-10-01T00:00:00.000Z' }],
+            invalidEntries: [],
+            commits: [],
+            defaultBranch: 'main'
+          }),
+          { status: 200 }
+        )
       );
     }
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
@@ -160,7 +167,10 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
-    reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+    assignWorktree: async () => ({
+      branch: 'cards/card-123/1',
+      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
+    }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -196,7 +206,6 @@ function createMockChild(overrides?: Partial<ChildProcess>): ChildProcess {
 function baseInput(overrides?: Partial<ActionInput>): ActionInput {
   return {
     executionId: 'execution-test',
-    worktreeDirective: { kind: 'reuse' },
     cardId: 'card-123',
     actionName: 'Interview',
     environment: 'default',
@@ -217,7 +226,7 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
  *
  * @param branches - Branch data keyed by authoritative branch name.
  */
-async function configureBranchEntries(
+async function _configureBranchEntries(
   branches: Record<string, { worktree?: string; parentBranch: string; addedAt: string }>
 ): Promise<void> {
   const { readdir, readFile } = await import('node:fs/promises');
@@ -485,279 +494,6 @@ describe('Default Actions', () => {
       child.emit('close', 0);
       await promise;
       expect(resolved).toBe(true);
-    });
-
-    describe('worktree lifecycle', () => {
-      /**
-       * Configures execFile mock to handle specific git commands.
-       * Commands not matched fall through to a default error callback.
-       * @param handlers - Map of command strings to their mock stdout/stderr responses.
-       */
-      async function configureExecFile(handlers: Record<string, { stdout: string; stderr?: string }>): Promise<void> {
-        const { execFile } = await import('node:child_process');
-        vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
-          const cb = args[args.length - 1];
-          const cmd = args[0] as string;
-          const cmdArgs = args[1] as string[];
-          const key = `${cmd} ${cmdArgs.join(' ')}`;
-
-          if (typeof cb === 'function') {
-            // Match against registered handlers by prefix
-            for (const [pattern, result] of Object.entries(handlers)) {
-              if (key.startsWith(pattern) || key.includes(pattern)) {
-                cb(null, { stdout: result.stdout, stderr: result.stderr ?? '' });
-                return {} as ReturnType<typeof execFile>;
-              }
-            }
-            cb(new Error(`mock: unhandled command: ${key}`));
-          }
-          return {} as ReturnType<typeof execFile>;
-        });
-      }
-
-      function configureBranchesResponse(branches: BranchInfo[]): void {
-        globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-          if (opts?.method === 'PATCH')
-            return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
-          if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
-            return Promise.resolve(
-              new Response(JSON.stringify({ branches, commits: [], defaultBranch: 'main' }), { status: 200 })
-            );
-          }
-          if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
-            return Promise.resolve(new Response(JSON.stringify({}), { status: 201 }));
-          }
-          if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'DELETE') {
-            return Promise.resolve(new Response(null, { status: 204 }));
-          }
-          return Promise.resolve(
-            new Response(
-              JSON.stringify({
-                filename: 'test.jsonl',
-                streamType: 'claude-code-session',
-                lineCount: 0,
-                status: 'completed'
-              }),
-              { status: 200 }
-            )
-          );
-        });
-      }
-
-      it('creates worktree when no branches exist', async () => {
-        const { spawn } = await import('node:child_process');
-        const { createWorktree } = await import('@cards.management/sdk/worktree');
-
-        await configureExecFile({
-          'git rev-parse --abbrev-ref HEAD': { stdout: 'main\n' }
-        });
-
-        configureBranchesResponse([]);
-
-        vi.mocked(createWorktree).mockResolvedValue({
-          path: '/test/workspace/.worktrees/cards/card-123/1',
-          settle: Promise.resolve({
-            branch: 'cards/card-123/1',
-            worktree: '/test/workspace/.worktrees/cards/card-123/1',
-            baseSha: 'abc123'
-          })
-        });
-
-        const child = createMockChild();
-        vi.mocked(spawn).mockReturnValue(child);
-
-        const action = (await import('../src/actions/interview.js')).default;
-        const promise = action(baseInput(), createMockContext());
-        await flushMicrotasks();
-
-        expect(createWorktree).toHaveBeenCalledWith('cards/card-123/1', {
-          cwd: '/test/workspace',
-          cardId: 'card-123',
-          compiledScriptPaths: EXPECTED_COMPILED_SCRIPT_PATHS
-        });
-
-        const spawnOpts = vi.mocked(spawn).mock.calls[0][2] as { cwd: string };
-        expect(spawnOpts.cwd).toBe('/test/workspace/.worktrees/cards/card-123/1');
-
-        child.emit('close', 0);
-        await promise;
-      });
-
-      it('reuses existing worktree when branch exists on disk', async () => {
-        const { spawn } = await import('node:child_process');
-        const { access } = await import('node:fs/promises');
-        const { createWorktree } = await import('@cards.management/sdk/worktree');
-
-        await configureExecFile({
-          'git rev-parse --abbrev-ref HEAD': { stdout: 'main\n' }
-        });
-
-        configureBranchesResponse([
-          {
-            name: 'cards/card-123/1',
-            worktree: '/test/workspace/.worktrees/cards/card-123/1',
-            parentBranch: 'main',
-            addedAt: '2025-01-01T00:00:00Z',
-            exists: true
-          }
-        ]);
-
-        vi.mocked(access).mockResolvedValue(undefined);
-
-        const child = createMockChild();
-        vi.mocked(spawn).mockReturnValue(child);
-
-        const action = (await import('../src/actions/interview.js')).default;
-        const promise = action(baseInput(), createMockContext());
-        await flushMicrotasks();
-
-        // Should NOT create a new worktree
-        expect(createWorktree).not.toHaveBeenCalled();
-
-        const spawnOpts = vi.mocked(spawn).mock.calls[0][2] as { cwd: string };
-        expect(spawnOpts.cwd).toBe('/test/workspace/.worktrees/cards/card-123/1');
-
-        child.emit('close', 0);
-        await promise;
-      });
-
-      it('skips branch cleanup in interactive mode (watcher handles it)', async () => {
-        const { spawn, execFile } = await import('node:child_process');
-        const { access } = await import('node:fs/promises');
-
-        await configureExecFile({
-          'git rev-parse --abbrev-ref HEAD': { stdout: 'main\n' }
-        });
-
-        configureBranchesResponse([
-          {
-            name: 'cards/card-123/1',
-            worktree: '/test/workspace/.worktrees/cards/card-123/1',
-            parentBranch: 'main',
-            addedAt: '2025-01-01T00:00:00Z',
-            exists: true
-          }
-        ]);
-
-        vi.mocked(access).mockResolvedValue(undefined);
-
-        const child = createMockChild();
-        vi.mocked(spawn).mockReturnValue(child);
-
-        const action = (await import('../src/actions/interview.js')).default;
-        const promise = action(baseInput(), createMockContext());
-        await flushMicrotasks();
-
-        child.emit('close', 0);
-        await promise;
-
-        // Interactive mode: no merge-base, worktree remove, or branch delete
-        const execCalls = vi.mocked(execFile).mock.calls;
-        const mergeBaseCall = execCalls.find((c) => (c[1] as string[])?.includes('merge-base'));
-        expect(mergeBaseCall).toBeUndefined();
-
-        const worktreeRemoveCall = execCalls.find(
-          (c) => (c[1] as string[])?.includes('worktree') && (c[1] as string[])?.includes('remove')
-        );
-        expect(worktreeRemoveCall).toBeUndefined();
-      });
-
-      it('cleans up merged branches in background mode', async () => {
-        const { spawn, execFile } = await import('node:child_process');
-        const { access } = await import('node:fs/promises');
-
-        await configureBranchEntries({
-          'cards/card-123/1': {
-            worktree: '/test/workspace/.worktrees/cards/card-123/1',
-            parentBranch: 'main',
-            addedAt: '2025-01-01T00:00:00Z'
-          }
-        });
-
-        await configureExecFile({
-          'git rev-parse --abbrev-ref HEAD': { stdout: 'main\n' },
-          'git branch --list': { stdout: '  cards/card-123/1\n' },
-          'git merge-base --is-ancestor cards/card-123/1 main': { stdout: '' },
-          'git worktree remove': { stdout: '' },
-          'git branch -d cards/card-123/1': { stdout: '' },
-          'git rm': { stdout: '' },
-          'git commit': { stdout: '' }
-        });
-
-        globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-          if (opts?.method === 'PATCH')
-            return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
-          if (typeof url === 'string' && url.includes('/branches')) {
-            if (!opts?.method || opts.method === 'GET') {
-              return Promise.resolve(
-                new Response(
-                  JSON.stringify({
-                    branches: [{ name: 'cards/card-123/1', revision: 'cleanup-ready' }],
-                    commits: [],
-                    defaultBranch: 'main'
-                  }),
-                  {
-                    status: 200
-                  }
-                )
-              );
-            }
-            if (opts?.method === 'DELETE') return Promise.resolve(new Response(JSON.stringify({ outcome: 'removed' })));
-            if (opts?.method === 'POST') {
-              return Promise.resolve(new Response(JSON.stringify({}), { status: 201 }));
-            }
-          }
-          return Promise.resolve(
-            new Response(JSON.stringify({ status: 'completed', lineCount: 0, filename: 'x' }), {
-              status: 200
-            })
-          );
-        });
-
-        vi.mocked(access).mockResolvedValue(undefined);
-
-        const child = createMockChild();
-        vi.mocked(spawn).mockReturnValue(child);
-
-        const action = (await import('../src/actions/interview.js')).default;
-        const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
-        await flushMicrotasks();
-
-        child.emit('close', 0);
-        await promise;
-
-        // Verify cleanup was attempted: worktree remove and branch delete
-        const execCalls = vi.mocked(execFile).mock.calls;
-        const worktreeRemoveCall = execCalls.find(
-          (c) => (c[1] as string[])?.includes('worktree') && (c[1] as string[])?.includes('remove')
-        );
-        expect(worktreeRemoveCall).toBeDefined();
-
-        const branchDeleteCall = execCalls.find(
-          (c) => (c[1] as string[])?.includes('branch') && (c[1] as string[])?.includes('-d')
-        );
-        expect(branchDeleteCall).toBeDefined();
-      });
-
-      it('throws when resolveBaseBranch fails', async () => {
-        const { execFile } = await import('node:child_process');
-        vi.mocked(execFile).mockImplementation((...args: unknown[]) => {
-          const cb = args[args.length - 1];
-          if (typeof cb === 'function') cb(new Error('not a git repo'));
-          return {} as ReturnType<typeof execFile>;
-        });
-
-        const action = (await import('../src/actions/interview.js')).default;
-        await expect(action(baseInput(), createMockContext())).rejects.toThrow('not a git repo');
-      });
-
-      it('throws when createWorktree fails', async () => {
-        const { createWorktree } = await import('@cards.management/sdk/worktree');
-        vi.mocked(createWorktree).mockRejectedValue(new Error('disk full'));
-
-        const action = (await import('../src/actions/interview.js')).default;
-        await expect(action(baseInput(), createMockContext())).rejects.toThrow('disk full');
-      });
     });
 
     describe('agent routing', () => {

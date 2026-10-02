@@ -19,7 +19,6 @@ describe('defineAction', () => {
     cardId: 'card-123',
     actionName: 'Test Action',
     executionId: 'execution-1',
-    worktreeDirective: { kind: 'reuse' },
     environment: 'default',
     executionMode: 'interactive',
     exitWhenDone: false,
@@ -42,8 +41,7 @@ describe('defineAction', () => {
   const mockContext: ActionContext = {
     logger: mockLogger,
     cwd: '/workspace',
-    reportWorktreeAssignment: vi.fn(),
-    reportBranchCleanupRegistration: vi.fn(),
+    assignWorktree: async () => ({ branch: 'cards/card-123/1', worktreePath: '/worktree' }),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };

@@ -476,7 +476,15 @@ describe('codex-session library', () => {
           return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
         if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
           return Promise.resolve(
-            new Response(JSON.stringify({ branches: [], commits: [], defaultBranch: 'main' }), { status: 200 })
+            new Response(
+              JSON.stringify({
+                branches: [{ name: 'cards/card-123/1', parentBranch: 'main', addedAt: '2026-10-01T00:00:00.000Z' }],
+                invalidEntries: [],
+                commits: [],
+                defaultBranch: 'main'
+              }),
+              { status: 200 }
+            )
           );
         }
         if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
@@ -595,7 +603,10 @@ describe('codex-session library', () => {
 
     function createMockContext(): ActionContext {
       return {
-        reportWorktreeAssignment: vi.fn().mockResolvedValue(undefined),
+        assignWorktree: async () => ({
+          branch: 'cards/card-123/1',
+          worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
+        }),
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),
@@ -626,7 +637,6 @@ describe('codex-session library', () => {
 
       const input: ActionInput = {
         executionId: 'execution-test',
-        worktreeDirective: { kind: 'reuse' },
         cardId: 'card-123',
         actionName: 'Chat',
         environment: 'default',

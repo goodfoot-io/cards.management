@@ -70,9 +70,7 @@ export {
 // --- Input Types ---
 export type {
   ActionContext,
-  ActionInput,
-  WorktreeAllocationDirective,
-  WorktreeAssignmentResult
+  ActionInput
 } from './config/inputs.js';
 // --- Logger ---
 export {

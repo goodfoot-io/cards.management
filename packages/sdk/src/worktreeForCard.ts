@@ -9,7 +9,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { createHash, randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { access, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -187,8 +187,6 @@ export interface OutfitAttributionOutcome {
   activated?: boolean;
   /** Why attribution was skipped; present only when `attribution` is `'skipped'`. */
   reason?: string;
-  /** Opaque revision returned by the branch registration write. */
-  registrationRevision: string;
 }
 
 /**
@@ -247,9 +245,9 @@ export interface CardWorktreeProvisioningOptions {
 }
 
 /**
- * Installs the native card marker, hooks, excludes and parent configuration without registering a branch.
+ * Installs the card marker, hooks, excludes and parent configuration without registering a branch.
  * @param worktreeDir - Existing usable checkout to bind.
- * @param options - Card identity, compiled attribution hooks and contained Git executor.
+ * @param options - Card identity, compiled attribution hooks and bounded Git executor.
  * @returns Actual checked-out branch name after binding completes.
  */
 export async function provisionCardWorktree(
@@ -266,7 +264,7 @@ export async function provisionCardWorktree(
 }
 
 /**
- * Shares the native binding disk phase with ordinary non-slot card orchestration.
+ * Shares the card-binding disk phase with ordinary non-slot card orchestration.
  * @param worktreeDir - Checkout whose marker and hook configuration are prepared.
  * @param options - Card identity, hooks and optional owner-process Git executor.
  * @returns Checked-out branch name once every disk operation has settled.
@@ -388,6 +386,9 @@ async function outfitWithPublicationBarrier(
   const { cardId, parentBranch, sessionId, transcriptPath, runtime } = options;
 
   const perf = createWorktreePerf();
+  const checkedOutBranch = await resolveWorktreeBranchName(worktreeDir);
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(checkedOutBranch))
+    throw new Error('Dedicated slots require runtime worktree assignment');
   const branchName = await provisionCardWorktreeDisk(worktreeDir, options);
 
   // --- API phase ---
@@ -398,7 +399,6 @@ async function outfitWithPublicationBarrier(
   // pre-check: the store upserts, and a pre-check would reintroduce the TOCTOU.
   // Fail-closed: a lock-acquire timeout propagates.
   const lockPath = resolveBindLockPath(worktreeDir);
-  let registrationRevision!: string;
   await perf.measure('outfit:acquireLock', () => acquireLock(lockPath, BIND_LOCK_TIMEOUT_MS));
   try {
     // Record the parent branch as durable `branch.<name>.cardsParent` git
@@ -409,7 +409,7 @@ async function outfitWithPublicationBarrier(
       writeCardsParentConfig(worktreeDir, branchName, parentBranch)
     );
     publication.attempted = true;
-    const registration = await perf.measure('outfit:addBranch', () =>
+    await perf.measure('outfit:addBranch', () =>
       client.addBranch(
         cardId,
         {
@@ -421,7 +421,6 @@ async function outfitWithPublicationBarrier(
         { sessionId }
       )
     );
-    registrationRevision = registration.revision;
   } finally {
     releaseLock(lockPath);
   }
@@ -434,7 +433,7 @@ async function outfitWithPublicationBarrier(
   // unchanged. Activation is NOT written here; it stays inside adhoc-cleanup so
   // an `active` card always has a live monitor + ref.
   if (!transcriptPath || transcriptPath.length === 0 || !sessionId || sessionId.length === 0) {
-    return { attribution: 'skipped', reason: 'no-transcript', registrationRevision };
+    return { attribution: 'skipped', reason: 'no-transcript' };
   }
 
   // A transcript with no resolvable runtime cannot select a SessionSyncManifest
@@ -444,7 +443,7 @@ async function outfitWithPublicationBarrier(
       'outfitWorktreeForCard: bound worktree but could not resolve the session runtime — attribution not spawned',
       { cardId }
     );
-    return { attribution: 'skipped', reason: 'runtime-unresolved', registrationRevision };
+    return { attribution: 'skipped', reason: 'runtime-unresolved' };
   }
 
   const cardRepoPath = await resolveCardRepoPath(cardId, stderrLogger);
@@ -455,7 +454,7 @@ async function outfitWithPublicationBarrier(
         cardId
       }
     );
-    return { attribution: 'skipped', reason: 'card-repo-path-unresolved', registrationRevision };
+    return { attribution: 'skipped', reason: 'card-repo-path-unresolved' };
   }
 
   const agentPid = options.agentPid ?? (await findAgentPid());
@@ -466,7 +465,7 @@ async function outfitWithPublicationBarrier(
         cardId
       }
     );
-    return { attribution: 'skipped', reason: 'agent-pid-unresolved', registrationRevision };
+    return { attribution: 'skipped', reason: 'agent-pid-unresolved' };
   }
 
   const attributionLockPath = join(resolveGlobalCardsConfigDir(), 'adhoc-sessions', `${sessionId}.lock`);
@@ -475,9 +474,9 @@ async function outfitWithPublicationBarrier(
     stderrLogger
   );
   if (spawnOutcome && spawnOutcome.activated === false) {
-    return { attribution: 'skipped', activated: false, reason: spawnOutcome.reason, registrationRevision };
+    return { attribution: 'skipped', activated: false, reason: spawnOutcome.reason };
   }
-  return { attribution: 'spawned', registrationRevision };
+  return { attribution: 'spawned' };
 }
 
 /**
@@ -525,13 +524,14 @@ export interface CreateWorktreeForCardOptions {
  * @param client - CardsClient used to register the branch record.
  * @param ref - Branch name to create.
  * @param options - Card-binding options.
- * @returns Settled worktree and the exact registration revision created by this invocation.
+ * @returns Settled ordinary worktree after card registration.
  */
 export async function createWorktreeForCard(
   client: CardsClient,
   ref: string,
   options: CreateWorktreeForCardOptions
-): Promise<EarlyWorktreeResult & { registrationRevision: string }> {
+): Promise<EarlyWorktreeResult> {
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(ref)) throw new Error('Dedicated slots require runtime worktree assignment');
   const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId, registrationIntent } = options;
 
   // Settlement and outfit deliberately overlap on the early path. Keep cleanup
@@ -568,7 +568,7 @@ export async function createWorktreeForCard(
 
   const publication = { attempted: false };
   try {
-    const outfit = await outfitWithPublicationBarrier(
+    await outfitWithPublicationBarrier(
       client,
       result.path,
       {
@@ -581,7 +581,7 @@ export async function createWorktreeForCard(
       registrationReady,
       publication
     );
-    return { path: result.path, settle: result.settle, registrationRevision: outfit.registrationRevision };
+    return { path: result.path, settle: result.settle };
   } catch (outfitError) {
     // Once registration was dispatched, even a rejected promise may hide a
     // committed registration and a sibling claim. Never infer absence from a
@@ -624,33 +624,6 @@ export async function createWorktreeForCard(
   }
 }
 
-/**
- * Acquires exclusive cleanup ownership before unbinding or removing a checkout.
- * @param client - Durable branch authority.
- * @param cardId - Card owning the registration.
- * @param branchName - Exact branch being reclaimed.
- * @param sessionId - Optional commit attribution.
- * @returns Exact cleanup token retained until all local effects finish.
- */
-async function claimReclamation(client: CardsClient, cardId: string, branchName: string, sessionId?: string) {
-  const branch = (await client.getBranches(cardId)).branches.find((entry) => entry.name === branchName);
-  if (!branch || branch.activeExecutionOwner !== undefined)
-    throw new Error(`Worktree is owned or unregistered: ${branchName}`);
-  const owner = `cleanup:${randomUUID()}`;
-  const claim = await client.updateBranchOwner(
-    cardId,
-    branchName,
-    {
-      expectedRevision: branch.revision,
-      expectedOwner: { kind: 'none' },
-      replacementOwner: owner
-    },
-    sessionId ? { sessionId } : undefined
-  );
-  if (claim.outcome !== 'applied' || !claim.revision) throw new Error(`Worktree reclamation conflicted: ${branchName}`);
-  return { expectedRevision: claim.revision, expectedCleanupOwner: owner, sessionId };
-}
-
 export interface ReleaseWorktreeForCardOptions {
   /** Card identifier whose branch record will be unregistered. */
   cardId: string;
@@ -667,9 +640,8 @@ export interface ReleaseWorktreeForCardOptions {
  * {@link removeWorktree} — so it is usable on externally-located worktrees a
  * caller wants to un-bind but keep on disk.
  *
- * An exact cleanup claim excludes new execution owners while hooks and the
- * binding marker are restored. The registration is removed only after those
- * effects succeed; any failure retains the claim for explicit recovery.
+ * Dedicated slots are refused before hooks or binding markers change. Ordinary
+ * registrations are removed after the local unbinding effects succeed.
  *
  * @param client - CardsClient used to unregister the branch record.
  * @param worktreeDir - Absolute path to the worktree directory (must still exist).
@@ -684,7 +656,7 @@ export async function releaseWorktreeForCard(
   const { cardId, sessionId } = options;
 
   const branchName = await resolveWorktreeBranchName(worktreeDir);
-  const claim = await claimReclamation(client, cardId, branchName, sessionId);
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(branchName)) throw new Error('Dedicated slots require runtime worktree cleanup');
 
   // Step 3 — Restore the worktree's original core.hooksPath from the snapshot.
   // Skip-with-warning if the snapshot is missing (hand-made worktree or a
@@ -712,8 +684,8 @@ export async function releaseWorktreeForCard(
   // Step 4 — Clear the CARD_ID marker.
   await clearCardBoundFile(worktreeDir);
   try {
-    const removal = await client.removeBranch(cardId, branchName, claim);
-    if (removal.outcome !== 'removed') throw new Error(`Cleanup claim changed for ${branchName}`);
+    const removal = await client.removeBranch(cardId, branchName, sessionId === undefined ? undefined : { sessionId });
+    if (removal.outcome !== 'removed') throw new Error(`Branch registration was preserved for ${branchName}`);
   } catch (error) {
     throw new BranchUnregisterError(error);
   }
@@ -735,9 +707,8 @@ export interface RemoveWorktreeForCardOptions {
 /**
  * Removes a card-bound worktree and unregisters its branch from the Cards API.
  *
- * Holds an exact durable cleanup claim throughout disk teardown, then removes
- * that registration. Missing authority, active ownership, or contention refuses
- * deletion. A teardown failure leaves the cleanup claim intact for recovery.
+ * Dedicated slots are refused before disk teardown. An ordinary registration
+ * is removed after its checkout is removed; a teardown failure retains it.
  *
  * @param client - CardsClient used to unregister the branch record.
  * @param worktreePath - Absolute path to the worktree directory.
@@ -752,11 +723,11 @@ export async function removeWorktreeForCard(
   const { cardId, sessionId } = options;
 
   const branchName = await resolveWorktreeBranchName(worktreePath);
-  const claim = await claimReclamation(client, cardId, branchName, sessionId);
+  if (/^cards\/[^/]+\/[1-9]\d*$/.test(branchName)) throw new Error('Dedicated slots require runtime worktree cleanup');
   await removeWorktree(worktreePath);
   try {
-    const removal = await client.removeBranch(cardId, branchName, claim);
-    if (removal.outcome !== 'removed') throw new Error(`Cleanup claim changed for ${branchName}`);
+    const removal = await client.removeBranch(cardId, branchName, sessionId === undefined ? undefined : { sessionId });
+    if (removal.outcome !== 'removed') throw new Error(`Branch registration was preserved for ${branchName}`);
   } catch (error) {
     throw new BranchUnregisterError(error);
   }

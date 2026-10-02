@@ -37,7 +37,7 @@ describe('stale worktree directory repair', () => {
 
   it('succeeds when a stale directory with a .keep file exists at the worktree path', async () => {
     const repoRoot = workspace.getPath();
-    const branchName = 'cards/test-card/1';
+    const branchName = 'feature/test-card';
     const staleDir = path.join(repoRoot, '.worktrees', generateRepoId(repoRoot), branchName);
 
     // Simulate a crashed previous session that left a stale directory

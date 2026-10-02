@@ -126,10 +126,7 @@ export function createProcessTreeAuthority(): ProcessTreeAuthority {
  * membership via `authority.members` before the force phase so a late fork
  * during the graceful window isn't missed.
  *
- * Shared by {@link createOwnedTreeTerminator} (action-tree cleanup) and the
- * branch-cleanup worker's own deadline enforcement over its git descendants,
- * so both use the same identity-checked TERM/KILL discipline instead of a
- * bare `setTimeout`/promise-race abandonment.
+ * Used by {@link createOwnedTreeTerminator} for identity-checked action cleanup.
  *
  * @param members - Identity-verified members to signal. Must not include a
  *   process the caller wants left alone (e.g. its own control identity) —

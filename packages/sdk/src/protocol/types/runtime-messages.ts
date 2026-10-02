@@ -150,7 +150,8 @@ export const cancelPayloadSchema = z
  */
 export const interactiveHandoffPayloadSchema = z
   .object({
-    continuation: inlineOrReferencedSchema
+    continuation: inlineOrReferencedSchema,
+    worktreeProtocol: z.number().int().optional()
   })
   .strict();
 
@@ -384,11 +385,9 @@ export function cleanupAllowsClaimRelease(cleanup: CleanupResultPayload): boolea
 }
 
 /**
- * Payload of `execution.branchCleanupRegistration`, sent by the provider while
- * it still holds its session-specific inputs. It carries nothing else on
- * purpose: `cardId`, `repoRoot`, and `cardRepoPath` are derived by the server
- * from the admitted execution and its reservation, so no path supplied by a
- * producer can steer the maintenance worker.
+ * Previous-build `execution.branchCleanupRegistration` reports remain valid
+ * so already-running handlers can settle. Current providers use owner assignments.
+ * No producer path can steer owner-process cleanup.
  */
 export const branchCleanupRegistrationPayloadSchema = z
   .object({
@@ -397,13 +396,9 @@ export const branchCleanupRegistrationPayloadSchema = z
   .strict();
 
 /**
- * Payload of `execution.branchCleanupEffect`, journaled by the server only
- * after a `cleanupResult` with accepted `status: 'drained'`, and implemented by
- * the extension authority outside the ended wrapper session.
- *
- * Every path here is server-derived from the admitted execution, never echoed
- * from the registration, and the effect names no program: the extension
- * resolves its packaged worker entrypoint from its own installation.
+ * Historical `execution.branchCleanupEffect` records remain replayable after
+ * an upgrade. The extension resolves the admission and runs current owner-process
+ * content checks; these legacy path fields never select a program or checkout.
  */
 export const branchCleanupEffectPayloadSchema = z
   .object({
@@ -544,6 +539,24 @@ export const commandCustodyPayloadSchema = z
   })
   .strict();
 
+/** Empty request; the authenticated envelope supplies scope and execution. */
+export const worktreeAssignPayloadSchema = z.strictObject({});
+/** Correlated, replayable assignment result returned only after durable assignment. */
+export const worktreeAssignResultPayloadSchema = z.strictObject({
+  requestMessageId: z.string().min(1),
+  outcome: z.discriminatedUnion('status', [
+    z.strictObject({
+      status: z.literal('completed'),
+      payload: z.strictObject({ branch: z.string().min(1), worktreePath: z.string().min(1) })
+    }),
+    z.strictObject({
+      status: z.literal('rejected'),
+      reason: z.enum(['worktree_busy', 'card_deleting', 'not_running', 'creation_failed', 'authority_unavailable']),
+      detail: z.string()
+    })
+  ])
+});
+
 // --- Catalogue ---
 
 /**
@@ -559,6 +572,8 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'runtime.liveness': livenessPayloadSchema,
   'runtime.resumeAck': resumeAckPayloadSchema,
   'runtime.accepted': acceptedPayloadSchema,
+  'worktree.assign': worktreeAssignPayloadSchema,
+  'worktree.assignResult': worktreeAssignResultPayloadSchema,
   'execution.commandCustody': commandCustodyPayloadSchema,
   'runtime.log': logPayloadSchema,
   'runtime.heartbeat': heartbeatPayloadSchema,

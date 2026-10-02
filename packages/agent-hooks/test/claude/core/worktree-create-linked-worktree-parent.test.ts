@@ -123,10 +123,9 @@ describe('WorktreeCreate parentBranch derivation from a linked worktree (card-bo
     process.env['CARD_ID'] = 'main-188';
     const worktreePath = path.join(tempRoot, 'new-card-worktree');
     vi.mocked(createWorktreeForCard).mockResolvedValue({
-      registrationRevision: 'test-registration',
       path: worktreePath,
       settle: Promise.resolve({
-        branch: 'cards/main-188/1',
+        branch: 'agent-main-188',
         worktree: worktreePath,
         baseSha: 'abc123',
         copiedFromInclude: 0,
@@ -140,7 +139,7 @@ describe('WorktreeCreate parentBranch derivation from a linked worktree (card-bo
         transcript_path: '/tmp/transcript.jsonl',
         cwd: linkedWorktree,
         hook_event_name: 'WorktreeCreate' as const,
-        name: 'cards/main-188/1'
+        name: 'agent-main-188'
       },
       { logger: mockLogger as unknown as Logger }
     );

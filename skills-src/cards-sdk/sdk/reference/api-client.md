@@ -38,10 +38,16 @@ All are `async` and throw on HTTP failure.
 | Cards | `listCards`, `listCardSummaries`, `getCard`, `createCard`, `updateCard`, `deleteCard` |
 | Attachments | `uploadAttachment`, `getAttachment`, `listAttachments` |
 | Files & gates | `putFile`, `approveGate` (`'plan' \| 'mergeRequest'`) |
-| Branches | `getBranches`, `addBranch`, `removeBranch` |
+| Branches | `getBranches`, `addBranch`, `removeBranch`, `previewWorktreeCleanup`, `cleanupWorktrees` |
 | Streams | `listStreams`, `getStream` |
 | Workspace | `getTags`, `getEnvironments`, `getTimeline`, `executeAction` |
 | Compare | `setCompare`, `getCompare`, `clearCompare` |
+
+[Branch registration](./public/packages/sdk/src/protocol/types/branch.ts#L1) contains `name`, `parentBranch`, `addedAt` and optional absolute `worktree`; [getBranches](./public/packages/sdk/src/client/cardsClient.ts#L785) returns malformed registrations separately in `invalidEntries`. There are no revision or owner tokens.
+
+[addBranch](./public/packages/sdk/src/client/cardsClient.ts#L800) and [removeBranch](./public/packages/sdk/src/client/cardsClient.ts#L822) manage ordinary branches. They reject every reserved `cards/<cardId>/<positive integer>` slot, including another card's slots and large decimal ordinals. An admitted action obtains `{branch, worktreePath}` from [context.assignWorktree()](./public/packages/sdk/src/config/inputs.ts#L179); use that authenticated path rather than creating a slot locally. The API owner records assignments durably and cleans eligible checkout content after terminal transitions.
+
+[previewWorktreeCleanup](./public/packages/sdk/src/client/cardsClient.ts#L836) reports each slot's safety decision without mutation. [cleanupWorktrees](./public/packages/sdk/src/client/cardsClient.ts#L846) runs authenticated requesterless cleanup: it spares no warm or open-editor slot, but preserves running, dirty, unmerged, invalid or unusable checkouts. Inspect its returned decisions. Card deletion uses the same checks and keeps the card if any registration cannot be removed.
 
 Non-async accessors: `updateAccessToken(token)`, `getBaseUrl()`, `hasHttpClient()`.
 

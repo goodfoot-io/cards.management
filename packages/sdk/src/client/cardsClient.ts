@@ -16,9 +16,9 @@ import type {
   RemoveBranchResponse,
   StreamMeta,
   TimelineItem,
-  UpdateBranchOwnerRequest,
-  UpdateBranchOwnerResponse,
-  VariableGroupsResponse
+  VariableGroupsResponse,
+  WorktreeCleanupPreview,
+  WorktreeCleanupResponse
 } from '../protocol/index.js';
 import type {
   AddBranchRequest,
@@ -798,15 +798,6 @@ export class CardsClient {
     return this.request(() => this.getHttpClient().get<BranchesResponse>(url));
   }
 
-  /**
-   * Adds a branch to a card.
-   *
-   * @param cardId - Unique identifier of the card to add the branch to.
-   * @param data - Branch data including name and optional worktree path.
-   * @param options - Optional parameters.
-   * @param options.sessionId - Claude Code session ID forwarded as `X-Cards-Session-Id` header so the card repo post-commit hook can attribute the commit.
-   * @returns Promise resolving when the branch is added.
-   */
   async addBranch(
     cardId: string,
     data: AddBranchRequest,
@@ -820,17 +811,6 @@ export class CardsClient {
     return this.request(() => this.getHttpClient().post<AddBranchResponse>(url, data, { headers }), false);
   }
 
-  async updateBranchOwner(
-    cardId: string,
-    branchName: string,
-    data: UpdateBranchOwnerRequest,
-    options?: { sessionId?: string }
-  ): Promise<UpdateBranchOwnerResponse> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(branchName)}/owner`);
-    const headers = options?.sessionId ? { 'X-Cards-Session-Id': options.sessionId } : undefined;
-    return this.request(() => this.getHttpClient().patch<UpdateBranchOwnerResponse>(url, data, { headers }), false);
-  }
-
   /**
    * Removes a branch from a card.
    *
@@ -838,24 +818,39 @@ export class CardsClient {
    * @param name - Branch name to remove (will be URL-encoded).
    * @param options - Optional parameters.
    * @param options.sessionId - Claude Code session ID forwarded as `X-Cards-Session-Id` header so the card repo post-commit hook can attribute the commit.
-   * @param options.expectedRevision - Delete only the registration with this opaque revision; preserve a newer registration.
-   * @param options.expectedCleanupOwner - Exact cleanup owner retained throughout resource teardown.
    * @returns Promise resolving when the branch is removed.
    */
-  async removeBranch(
-    cardId: string,
-    name: string,
-    options?: { sessionId?: string; expectedRevision?: string; expectedCleanupOwner?: string }
-  ): Promise<RemoveBranchResponse> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(name)}`, {
-      expectedRevision: options?.expectedRevision,
-      expectedCleanupOwner: options?.expectedCleanupOwner
-    });
+  async removeBranch(cardId: string, name: string, options?: { sessionId?: string }): Promise<RemoveBranchResponse> {
+    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches/${encodeURIComponent(name)}`, {});
     const headers: Record<string, string> = {};
     if (options?.sessionId) {
       headers['X-Cards-Session-Id'] = options.sessionId;
     }
     return this.request(() => this.getHttpClient().delete<RemoveBranchResponse>(url, { headers }));
+  }
+
+  /**
+   * Reads authenticated owner-process cleanup decisions before card deletion or explicit cleanup.
+   * @param cardId - Card whose dedicated slots are inspected.
+   * @returns Per-slot preservation reasons and card-deletion eligibility.
+   */
+  async previewWorktreeCleanup(cardId: string): Promise<WorktreeCleanupPreview> {
+    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/worktree-cleanup/preview`, {});
+    return this.request(() =>
+      this.getHttpClient().get<WorktreeCleanupPreview>(url, { signal: AbortSignal.timeout(120_000) })
+    );
+  }
+
+  /**
+   * Requests full content cleanup in the API owner without a requester warm-slot exemption.
+   * @param cardId - Card whose dedicated slots may be removed.
+   * @returns Actual per-slot removal, preservation, and failure decisions.
+   */
+  async cleanupWorktrees(cardId: string): Promise<WorktreeCleanupResponse> {
+    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/worktree-cleanup`, {});
+    return this.request(() =>
+      this.getHttpClient().post<WorktreeCleanupResponse>(url, {}, { signal: AbortSignal.timeout(120_000) })
+    );
   }
 
   // --- Tag Operations ---

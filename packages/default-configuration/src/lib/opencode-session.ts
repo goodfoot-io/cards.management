@@ -4,9 +4,7 @@
  * Mirrors {@link ./codex-session.js} launch-for-launch: it populates a
  * content-addressed plugin cache from the bundled `opencode` payload tree,
  * writes per-plugin-set staged config documents, and spawns the `opencode`
- * CLI with card context, worktree lifecycle, cancel handling, status settle,
- * and mode-dependent post-exit branch cleanup (detached watcher when
- * interactive, inline sweep in background mode).
+ * CLI with card context, owner-assigned worktree, cancel handling and status settlement.
  *
  * Isolation model (verified against the installed binary, v1.18.21): the child
  * is pointed at one staged config document via the `OPENCODE_CONFIG` env var,
@@ -53,13 +51,7 @@ import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
-import {
-  cleanupMergedBranches,
-  errorMessage,
-  resolveBaseBranch,
-  resolveMarketplacePath,
-  resolveOrCreateWorktree
-} from './claude-session.js';
+import { resolveAssignedWorktree, resolveBaseBranch, resolveMarketplacePath } from './claude-session.js';
 import {
   CODEX_PLUGIN_CONTENT_STAMP,
   composeDeveloperInstructions,
@@ -1036,14 +1028,13 @@ export async function assertOpencodeBinaryAvailable(): Promise<string> {
  * Stage order mirrors {@link ./codex-session.js} launch-for-launch: pre-spawn
  * binary probe → marketplace resolution → API client → base branch → worktree →
  * plugin-cache staging → per-set staged config → CLI spawn with card env vars →
- * cancel handling → exit settle → card status settle → branch cleanup.
+ * cancel handling → exit settle → card status settle.
  *
  * Execution modes mirror the Claude launcher: interactive sessions inherit
- * stdio (direct terminal control) and hand post-exit cleanup to the detached
- * branch-cleanup watcher so the terminal closes immediately; background runs
+ * stdio (direct terminal control); background runs
  * execute headlessly via `opencode run` under console-less stdio (`ignore`,
- * `ignore`, piped stderr), log captured stderr for diagnostics, and run the
- * merged-branch sweep inline before resolving.
+ * `ignore`, piped stderr) and log captured stderr for diagnostics.
+ * The API owner performs worktree maintenance from durable execution outcomes.
  *
  * Named degradations (documented plan decisions):
  * - **Per-card `references`**: the Config v2 shape is verified (a record
@@ -1091,16 +1082,9 @@ export async function spawnOpencodeSession(
   }
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
-  const {
-    worktreePath: cwd,
-    branchName,
-    parentBranch,
-    reason
-  } = await resolveOrCreateWorktree(input, client, baseBranch, context.logger);
+  const { worktreePath: cwd, branchName, parentBranch } = await resolveAssignedWorktree(input, client, context);
 
-  await context.reportWorktreeAssignment({ branch: branchName, worktreePath: cwd, reason });
-
-  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch, reason });
+  context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
   const configDir = resolveDefaultOpencodeConfigDir();
   const { bundlePath, pluginPaths, pluginCachePaths } = await populateOpencodePluginCache(configDir, marketplacePath);
@@ -1209,32 +1193,4 @@ export async function spawnOpencodeSession(
   });
 
   context.logger.info(`${input.actionName} action completed`, { exitCode });
-
-  // Settle the card's status (active → needs_review) before cleanup can
-  // read it: the sweep's first gate is the on-disk status, which otherwise
-  // races this exit path from a separate process. See
-  // Post-exit cleanup: remove fully-merged branches. In background mode there
-  // is no terminal to keep open, so the sweep runs inline before the action
-  // resolves; in interactive mode a detached watcher takes over so the
-  // terminal closes immediately (the watcher calls the same
-  // {@link cleanupMergedBranches} function).
-  if (isInteractive) {
-    try {
-      await context.reportBranchCleanupRegistration({});
-    } catch (error) {
-      context.logger.warn('Failed to register branch cleanup (non-fatal)', {
-        error: errorMessage(error)
-      });
-    }
-  } else {
-    try {
-      await cleanupMergedBranches(input, input.cardRepoPath, context.logger);
-    } catch (error) {
-      const message = errorMessage(error);
-      if (message.includes('self-referential parentBranch') || message.includes('data corruption')) {
-        throw error;
-      }
-      context.logger.warn('Post-exit cleanup failed (non-fatal)', { error: message });
-    }
-  }
 }

@@ -26,7 +26,6 @@ export {
   classifyProtocol,
   isApiServerIdentity
 } from './types/apiHandoff.js';
-export { UpdateBranchOwnerRequestSchema } from './types/branch.js';
 export type {
   Action,
   ActionClientMessage,
@@ -57,7 +56,6 @@ export type {
   BoundExecution,
   BranchesResponse,
   BranchInfo,
-  BranchOwnerExpectation,
   BranchRegistrationIntent,
   CancelAcknowledgment,
   CancelCommand,
@@ -164,7 +162,6 @@ export type {
   PresentedCredential,
   ProcessState,
   ReadFileCallback,
-  RemoveBranchRequest,
   RemoveBranchResponse,
   ReplayedLaunchAdmission,
   ResourceReferenceClass,
@@ -195,8 +192,6 @@ export type {
   TimelineItem,
   TimelineRequest,
   TimelineResponse,
-  UpdateBranchOwnerRequest,
-  UpdateBranchOwnerResponse,
   UpdateCardRequest,
   ValidationErrorCode,
   ValidationErrorMessage,
