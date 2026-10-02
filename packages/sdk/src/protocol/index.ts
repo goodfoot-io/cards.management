@@ -363,3 +363,14 @@ export {
   type RuntimeCredentialFile,
   runtimeCredentialFileSchema
 } from './types/runtime-credential-file.js';
+export type {
+  AssignedWorktree,
+  InvalidBranchEntry,
+  WorktreeAssignment,
+  WorktreeAssignmentOutcome,
+  WorktreeAssignmentRefusal,
+  WorktreeCleanupDecision,
+  WorktreeCleanupPreview,
+  WorktreeCleanupReason,
+  WorktreeCleanupResponse
+} from './types/worktree-slots.js';
