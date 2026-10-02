@@ -45,6 +45,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import ignore from 'ignore';
 import { minimatch } from 'minimatch';
+import type { WorktreeGitRunner } from './worktree.js';
 import { WorktreeIncludeError } from './worktreeInclude.js';
 
 /**
@@ -266,9 +267,21 @@ function assertBeforeDeadline(deadline: number): void {
  * @throws {WorktreeIncludeError} When git fails, cannot be spawned, does not
  *   finish within `timeoutMs`, or starts after the shared enumeration
  *   `deadline`.
+ * @param runGit - Optional owner-process executor used by every Git step on the injected path.
  */
-function gitLsFiles(cwd: string, args: string[], deadline: number, timeoutMs: number): Promise<string[]> {
+function gitLsFiles(
+  cwd: string,
+  args: string[],
+  deadline: number,
+  timeoutMs: number,
+  runGit?: WorktreeGitRunner
+): Promise<string[]> {
   assertBeforeDeadline(deadline);
+  if (runGit)
+    return runGit(cwd, ['--literal-pathspecs', 'ls-files', ...args]).then((stdout) => {
+      assertBeforeDeadline(deadline);
+      return stdout.split('\0').filter(Boolean);
+    });
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['--literal-pathspecs', 'ls-files', ...args], {
       cwd,
@@ -404,14 +417,36 @@ async function collectPolicyCandidates(
  * @param candidates - Repository-relative paths to query.
  * @param deadline - Shared policy enumeration deadline.
  * @returns Candidate paths Git confirms are ignored and untracked.
+ * @param runGit - Optional owner-process executor used by every Git step on the injected path.
  */
 async function checkIgnoredCandidates(
   sourceRoot: string,
   candidates: readonly string[],
-  deadline: number
+  deadline: number,
+  runGit?: WorktreeGitRunner
 ): Promise<Set<string>> {
   if (candidates.length === 0) return new Set();
   assertBeforeDeadline(deadline);
+  if (runGit) {
+    let stdout: string;
+    try {
+      stdout = await runGit(
+        sourceRoot,
+        ['check-ignore', '--stdin', '-z'],
+        `${candidates.map((candidate) => `./${candidate}`).join('\0')}\0`
+      );
+    } catch (error) {
+      if ((error as { exitCode?: unknown }).exitCode === 1) stdout = '';
+      else throw error;
+    }
+    assertBeforeDeadline(deadline);
+    return new Set(
+      stdout
+        .split('\0')
+        .filter(Boolean)
+        .map((entry) => entry.slice(2))
+    );
+  }
   return new Promise((resolve, reject) => {
     const child = spawn('git', ['check-ignore', '--stdin', '-z'], {
       cwd: sourceRoot,
@@ -652,20 +687,23 @@ async function matchSymlinkedDescendants(
  * @param includeMatcher - Selects descendants for the copy executor.
  * @param deadline - Shared enumeration deadline.
  * @returns Match lists aligned with the collapsed directory input.
+ * @param runGit - Optional owner-process executor used by every Git step on the injected path.
  */
 async function enumerateIgnoredPolicyMatches(
   sourceRoot: string,
   directories: readonly string[],
   omitMatcher: ReturnType<typeof ignore>,
   includeMatcher: ReturnType<typeof ignore>,
-  deadline: number
+  deadline: number,
+  runGit?: WorktreeGitRunner
 ): Promise<Array<{ dir: string; omitMatches: string[]; copyMatches: string[] }>> {
   const matchesByDir = directories.map((dir) => ({ dir, omitMatches: [] as string[], copyMatches: [] as string[] }));
   const candidates = await collectPolicyCandidates(sourceRoot, directories, omitMatcher, includeMatcher, deadline);
   const eligibility = await checkIgnoredCandidates(
     sourceRoot,
     [...new Set([...candidates.matches, ...candidates.symlinks].map((entry) => entry.path))],
-    deadline
+    deadline,
+    runGit
   );
 
   for (const candidate of candidates.matches) {
@@ -996,6 +1034,7 @@ async function walkWorkspaceGlob(sourceRoot: string, glob: string, deadline?: nu
  *   their synthesized descendants.
  * @throws {WorktreeIncludeError} When a TRACKED node_modules-segment symlink
  *   lies outside the owned trees, naming each offending path.
+ * @param runGit - Optional owner-process executor used by every Git step on the injected path.
  */
 async function enumerateTrackedSymlinkInteriors(
   sourceRoot: string,
@@ -1003,9 +1042,10 @@ async function enumerateTrackedSymlinkInteriors(
   includeMatcher: ReturnType<typeof ignore>,
   deadline: number,
   timeoutMs: number,
-  ownedNodeModules: string[]
+  ownedNodeModules: string[],
+  runGit?: WorktreeGitRunner
 ): Promise<{ omitMatches: string[]; copyMatches: string[] }> {
-  const tracked = await gitLsFiles(sourceRoot, ['-s', '-z'], deadline, timeoutMs);
+  const tracked = await gitLsFiles(sourceRoot, ['-s', '-z'], deadline, timeoutMs, runGit);
   const trackedSymlinkEntries = tracked
     .map((line): string | undefined => {
       const tab = line.indexOf('\t');
@@ -1130,12 +1170,14 @@ function posixNormalize(relativePath: string): string {
  * @throws {WorktreeIncludeError} When a config file is unreadable or otherwise
  *   unprocessable, or the enumeration phase (including its deadline) fails —
  *   before any matching source path can be provisioned.
+ * @param opts.runGit - Optional contained executor preserving literal Git paths and stdin.
  */
 export async function loadWorktreePathPolicy(opts: {
   sourceRoot: string;
   ignored: WorktreeIgnoredPaths;
+  runGit?: WorktreeGitRunner;
 }): Promise<WorktreePathPolicy> {
-  const { sourceRoot, ignored } = opts;
+  const { sourceRoot, ignored, runGit } = opts;
 
   const ignorePatterns = parsePatterns(await readConfigFile(sourceRoot, '.worktreeignore'));
   const includePatterns = parsePatterns(await readConfigFile(sourceRoot, '.worktreeinclude'));
@@ -1198,7 +1240,8 @@ export async function loadWorktreePathPolicy(opts: {
           ignored.directories,
           omitMatcher,
           includeMatcher,
-          enumerationDeadline
+          enumerationDeadline,
+          runGit
         ),
         enumerateTrackedSymlinkInteriors(
           sourceRoot,
@@ -1206,7 +1249,8 @@ export async function loadWorktreePathPolicy(opts: {
           includeMatcher,
           enumerationDeadline,
           enumerationTimeoutMs,
-          ownedNodeModules
+          ownedNodeModules,
+          runGit
         )
       ])
     : [[], { omitMatches: [], copyMatches: [] }];

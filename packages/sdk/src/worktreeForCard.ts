@@ -33,6 +33,7 @@ import {
   provisionSharedHooksDir,
   removeWorktree,
   resolveHomeDir,
+  type WorktreeGitRunner,
   WorktreeSettlementCleanupError,
   writeCardBoundFile
 } from './worktree.js';
@@ -236,25 +237,48 @@ export async function outfitWorktreeForCard(
   return outfitWithPublicationBarrier(client, worktreeDir, options, Promise.resolve(), { attempted: false });
 }
 
-/**
- * Outfits a checkout while recording whether registration might have published it.
- * @param client - Registration authority.
- * @param worktreeDir - Checkout being prepared.
- * @param options - Card binding and attribution settings.
- * @param registrationReady - Materialization completion barrier.
- * @param publication - Invocation-local publication evidence retained on failures.
- * @param publication.attempted - True before dispatching registration, including ambiguous response loss.
- * @returns The completed binding and attribution result.
- */
-async function outfitWithPublicationBarrier(
-  client: CardsClient,
-  worktreeDir: string,
-  options: OutfitWorktreeForCardOptions,
-  registrationReady: Promise<unknown>,
-  publication: { attempted: boolean }
-): Promise<OutfitAttributionOutcome> {
-  const { cardId, parentBranch, sessionId, transcriptPath, runtime, compiledScriptPaths } = options;
+/** Card binding inputs for owner-process provisioning without public registration. */
+export interface CardWorktreeProvisioningOptions {
+  readonly cardId: string;
+  readonly parentBranch: string;
+  readonly compiledScriptPaths: Record<string, string>;
+  readonly sharedHooksDir: string;
+  readonly runGit: WorktreeGitRunner;
+}
 
+/**
+ * Installs the native card marker, hooks, excludes and parent configuration without registering a branch.
+ * @param worktreeDir - Existing usable checkout to bind.
+ * @param options - Card identity, compiled attribution hooks and contained Git executor.
+ * @returns Actual checked-out branch name after binding completes.
+ */
+export async function provisionCardWorktree(
+  worktreeDir: string,
+  options: CardWorktreeProvisioningOptions
+): Promise<string> {
+  const branchName = await provisionCardWorktreeDisk(worktreeDir, options);
+  await gitConfigWithRetry(
+    ['-C', worktreeDir, 'config', `branch.${branchName}.cardsParent`, options.parentBranch],
+    8,
+    options.runGit
+  );
+  return branchName;
+}
+
+/**
+ * Shares the native binding disk phase with ordinary non-slot card orchestration.
+ * @param worktreeDir - Checkout whose marker and hook configuration are prepared.
+ * @param options - Card identity, hooks and optional owner-process Git executor.
+ * @returns Checked-out branch name once every disk operation has settled.
+ */
+async function provisionCardWorktreeDisk(
+  worktreeDir: string,
+  options: Omit<CardWorktreeProvisioningOptions, 'runGit' | 'sharedHooksDir'> & {
+    runGit?: WorktreeGitRunner;
+    sharedHooksDir?: string;
+  }
+): Promise<string> {
+  const { cardId, compiledScriptPaths, runGit } = options;
   if (cardId.length === 0) {
     throw new Error('outfitWorktreeForCard: cardId must be a non-empty string');
   }
@@ -272,7 +296,7 @@ async function outfitWithPublicationBarrier(
 
   const { repoRoot } = await perf.measure('outfit:findGitRoots', () => findGitRoots(worktreeDir));
 
-  const sharedHooksDir = cardsSharedHooksDir();
+  const sharedHooksDir = options.sharedHooksDir ?? cardsSharedHooksDir();
   const originalHookPathFile = join(worktreeDir, '.cards', 'CARD_ORIGINAL_HOOK_PATH');
 
   // 1. Write .cards/CARD_ID first — this mkdir -p's .cards, which the hooks-path
@@ -285,54 +309,86 @@ async function outfitWithPublicationBarrier(
   // concurrently instead of serially. The branch name is resolved here too so it
   // is ready for the API phase. The ordered git-config writes (steps below) are
   // the only part that must stay sequential.
-  const [, , , branchName] = await perf.measure('outfit:disk-parallel', () =>
-    Promise.all([
-      // 2. Snapshot the pre-existing hooks dir — GUARDED. If the snapshot already
-      //    exists, a previous outfit already captured the user's original hooks
-      //    dir; re-capturing now would record the cards shared dispatcher dir as
-      //    the "original" and break hook chaining. Skip on re-run. The per-worktree
-      //    `core.hooksPath` set below is a `--worktree` write, so it cannot change
-      //    the repo-level `core.hooksPath` this reads — capture is order-independent.
-      perf.measure('outfit:captureOriginalHooks', async () => {
-        let originalHookPathExists = false;
-        try {
-          await access(originalHookPathFile);
-          originalHookPathExists = true;
-        } catch (error: unknown) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-            throw error;
-          }
+  const tasks = [
+    // 2. Snapshot the pre-existing hooks dir — GUARDED. If the snapshot already
+    //    exists, a previous outfit already captured the user's original hooks
+    //    dir; re-capturing now would record the cards shared dispatcher dir as
+    //    the "original" and break hook chaining. Skip on re-run. The per-worktree
+    //    `core.hooksPath` set below is a `--worktree` write, so it cannot change
+    //    the repo-level `core.hooksPath` this reads — capture is order-independent.
+    perf.measure('outfit:captureOriginalHooks', async () => {
+      let originalHookPathExists = false;
+      try {
+        await access(originalHookPathFile);
+        originalHookPathExists = true;
+      } catch (error: unknown) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+          throw error;
         }
-        if (!originalHookPathExists) {
-          const originalHooksDir = await captureOriginalHooksPath(repoRoot);
-          await writeFile(originalHookPathFile, originalHooksDir);
-        }
-      }),
-      // 3. Provision the shared dispatcher dir (idempotent, content-addressed skip).
-      //    Global flat location (`~/.cards/workspace-hooks`); byte-identical across
-      //    worktrees. `$HOME` is the same anchor the dispatcher uses for VSCODE_NODE.
-      perf.measure('outfit:provisionSharedHooksDir', () =>
-        provisionSharedHooksDir(sharedHooksDir, compiledScriptPaths)
-      ),
-      // 6. Hide the binding markers from git status so they are never staged.
-      perf.measure('outfit:appendWorktreeGitExcludes', () =>
-        appendWorktreeGitExcludes(worktreeDir, ['.cards/CARD_ID', '.cards/CARD_ORIGINAL_HOOK_PATH'])
-      ),
-      // Resolve the branch name now so the API phase need not wait on a git read.
-      perf.measure('outfit:resolveBranchName', () => resolveWorktreeBranchName(worktreeDir))
-    ])
-  );
+      }
+      if (!originalHookPathExists) {
+        const originalHooksDir = await captureOriginalHooksPath(repoRoot, runGit);
+        await writeFile(originalHookPathFile, originalHooksDir);
+      }
+    }),
+    // 3. Provision the shared dispatcher dir (idempotent, content-addressed skip).
+    //    Global flat location (`~/.cards/workspace-hooks`); byte-identical across
+    //    worktrees. `$HOME` is the same anchor the dispatcher uses for VSCODE_NODE.
+    perf.measure('outfit:provisionSharedHooksDir', () => provisionSharedHooksDir(sharedHooksDir, compiledScriptPaths)),
+    // 6. Hide the binding markers from git status so they are never staged.
+    perf.measure('outfit:appendWorktreeGitExcludes', () =>
+      appendWorktreeGitExcludes(worktreeDir, ['.cards/CARD_ID', '.cards/CARD_ORIGINAL_HOOK_PATH'], runGit)
+    ),
+    // Resolve the branch name now so the API phase need not wait on a git read.
+    perf.measure('outfit:resolveBranchName', () =>
+      runGit
+        ? runGit(worktreeDir, ['rev-parse', '--abbrev-ref', 'HEAD']).then((value) => value.trim())
+        : resolveWorktreeBranchName(worktreeDir)
+    )
+  ] as const;
+  let branchName: string;
+  try {
+    const results = await perf.measure('outfit:disk-parallel', () => Promise.all(tasks));
+    branchName = results[3];
+  } finally {
+    await Promise.allSettled(tasks);
+  }
 
   // 4 + 5. Ordered git-config chain: enable per-worktree config on the repo
   //   (MUST precede the --worktree write, D9), then point this worktree at the
   //   shared dispatcher dir. Retried on config-lock contention: createWorktree's
   //   settle phase writes the same repo key concurrently on the early path.
   await perf.measure('outfit:config:worktreeConfig', () =>
-    gitConfigWithRetry(['-C', repoRoot, 'config', 'extensions.worktreeConfig', 'true'])
+    gitConfigWithRetry(['-C', repoRoot, 'config', 'extensions.worktreeConfig', 'true'], 8, runGit)
   );
   await perf.measure('outfit:config:hooksPath', () =>
-    gitConfigWithRetry(['-C', worktreeDir, 'config', '--worktree', 'core.hooksPath', sharedHooksDir])
+    gitConfigWithRetry(['-C', worktreeDir, 'config', '--worktree', 'core.hooksPath', sharedHooksDir], 8, runGit)
   );
+
+  return branchName;
+}
+
+/**
+ * Outfits a checkout while recording whether registration might have published it.
+ * @param client - Registration authority.
+ * @param worktreeDir - Checkout being prepared.
+ * @param options - Card binding and attribution settings.
+ * @param registrationReady - Materialization completion barrier.
+ * @param publication - Invocation-local publication evidence retained on failures.
+ * @param publication.attempted - True before dispatching registration, including ambiguous response loss.
+ * @returns The completed binding and attribution result.
+ */
+async function outfitWithPublicationBarrier(
+  client: CardsClient,
+  worktreeDir: string,
+  options: OutfitWorktreeForCardOptions,
+  registrationReady: Promise<unknown>,
+  publication: { attempted: boolean }
+): Promise<OutfitAttributionOutcome> {
+  const { cardId, parentBranch, sessionId, transcriptPath, runtime } = options;
+
+  const perf = createWorktreePerf();
+  const branchName = await provisionCardWorktreeDisk(worktreeDir, options);
 
   // --- API phase ---
   await registrationReady;
