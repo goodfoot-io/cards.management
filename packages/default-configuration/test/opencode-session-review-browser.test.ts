@@ -63,7 +63,7 @@ describe('OpenCode composed revision controls', () => {
       import {flushSync} from 'react-dom';
       import {createTranscriptProjection} from ${JSON.stringify(resolve(packageDirectory, 'src/streams/lib/session/projection.ts'))};
       import {SessionViewport} from ${JSON.stringify(resolve(packageDirectory, 'src/streams/lib/session/SessionViewport.tsx'))};
-      import {BoundedText,SessionDisclosure} from ${JSON.stringify(resolve(packageDirectory, 'src/streams/lib/session/SessionContent.tsx'))};
+      import {BoundedText,SessionDisclosure,SessionContent} from ${JSON.stringify(resolve(packageDirectory, 'src/streams/lib/session/SessionContent.tsx'))};
       import {opencodeSessionProjector} from ${JSON.stringify(resolve(packageDirectory, 'src/streams/opencode-session/www/lib/project-session.ts'))};
       import {OPENCODE_PRESENTATION,OpenCodeTool} from ${JSON.stringify(resolve(packageDirectory, 'src/streams/opencode-session/www/components/expanded/OpencodePresentation.tsx'))};
       function App() {
@@ -103,9 +103,25 @@ describe('OpenCode composed revision controls', () => {
         window.rowHarness={focus:focus.current,navigate:id=>viewport.current.navigateTo(id),regroup:()=>flushSync(()=>setLine(128)),capture:()=>viewport.current.captureAnchor(),hold:()=>viewport.current.hold()};
         return <SessionViewport viewportRef={viewport} rows={rows} providerRows={registry} layout={{onFocusChange:id=>focus.current.push(id)}} disclosures={{open,onOpenChange:(id,value)=>setOpen(prior=>new Map(prior).set(id,value))}}/>;
       }
+      function CallbackOwnership() {
+        const [owner,setOwner]=useState('A');
+        const [extra,setExtra]=useState(false);
+        const [layoutVersion,setLayoutVersion]=useState(0);
+        const [mounted,setMounted]=useState(true);
+        const [open,setOpen]=useState(new Map());
+        const events=useRef([]);
+        const callbacks=useMemo(()=>Object.fromEntries(['A','B','C'].map(name=>[name,(id,node)=>events.current.push({name,id,node})])),[]);
+        const rows=useMemo(()=>['typed','fallback'].map(kind=>({id:kind,kind:'provider',providerKind:kind,anchor:'none',provenance:[],
+          parts:[{id:kind+'-child',kind:'raw',label:'Child details',reason:'unknown',text:'x'.repeat(4096)+'CHILD_PAGE',provenance:[]}],
+          data:{label:kind,text:'x'.repeat(4096)+'ROW_PAGE'}})),[]);
+        const registry=useMemo(()=>({typed:{disclosureKeys:leaf=>[leaf.id],render:({leaf,data,...context})=><SessionDisclosure id={leaf.id} label={data.label} context={context}><BoundedText text={data.text} id={leaf.id} context={context}/></SessionDisclosure>}}),[]);
+        window.callbackHarness={events:events.current,replace:name=>flushSync(()=>setOwner(name)),refresh:()=>flushSync(()=>setLayoutVersion(layoutVersion+1)),insert:()=>flushSync(()=>setExtra(true)),remove:()=>flushSync(()=>setExtra(false)),unmount:()=>flushSync(()=>setMounted(false))};
+        return mounted?<SessionContent rows={extra?[...rows,{...rows[0],id:'inserted',parts:[]}]:rows} providerRows={registry} layout={{onAnchorElement:callbacks[owner]}}
+          disclosures={{open,onOpenChange:(id,value)=>setOpen(prior=>new Map(prior).set(id,value))}}/>:null;
+      }
       window.sessionErrors=[];
       addEventListener('error',e=>sessionErrors.push(e.message));
-      createRoot(document.getElementById('root')).render(location.search==='?row-bookmarks'?<RowBookmarks/>:<App/>);
+      createRoot(document.getElementById('root')).render(location.search==='?callback-ownership'?<CallbackOwnership/>:location.search==='?row-bookmarks'?<RowBookmarks/>:<App/>);
     `
     );
     await writeFile(
@@ -246,6 +262,53 @@ describe('OpenCode composed revision controls', () => {
     })()`);
     expect(result.anchor, JSON.stringify(result)).toBe(true);
     expect(result).toMatchObject({ focus: true, selection: true, page: true, anchor: true, registered: 1, errors: [] });
+  });
+
+  it.each([
+    'typed',
+    'fallback',
+    'typed-child'
+  ])('transfers the mounted %s anchor to the replacement callback before unmount', async (id) => {
+    await browser('open', `${origin}/?callback-ownership`);
+    const result = await evaluate<{
+      events: string[];
+      sameElement: boolean;
+      inserted: string[];
+      preserved: boolean;
+      registered: number;
+      errors: string[];
+    }>(`(async()=>{
+        const wait=()=>new Promise(r=>setTimeout(r,250));await wait();
+        const id=${JSON.stringify(id)};
+        const element=document.querySelector('[data-session-id="'+id+'"]');
+        const owner=element.querySelector('[data-session-disclosure="'+id+'"]');
+        owner.querySelector('button').click();await wait();
+        const button=text=>[...owner.querySelectorAll('button')].find(b=>b.textContent.trim()===text);
+        button('Next').click();await wait();button('Previous').focus();
+        const text=owner.querySelector('pre');const shown=text.textContent;
+        const range=document.createRange();range.selectNodeContents(text);
+        const selection=getSelection();selection.removeAllRanges();selection.addRange(range);const selected=selection.toString();
+        callbackHarness.replace('B');await wait();
+        callbackHarness.refresh();await wait();
+        callbackHarness.insert();await wait();callbackHarness.remove();await wait();
+        callbackHarness.replace('none');await wait();
+        callbackHarness.replace('C');await wait();
+        const preserved=document.activeElement===button('Previous')&&selection.toString()===selected&&text.textContent===shown;
+        const registered=document.querySelectorAll('[data-session-id="'+id+'"]').length;
+        callbackHarness.unmount();await wait();
+        const events=callbackHarness.events.filter(event=>event.id===id);
+        return {events:events.map(event=>event.name+':'+(event.node?'node':'null')),
+          sameElement:events.filter(event=>event.node).every(event=>event.node===element),
+          inserted:callbackHarness.events.filter(event=>event.id==='inserted').map(event=>event.name+':'+(event.node?'node':'null')),preserved,registered,errors:sessionErrors};
+      })()`);
+    expect(result).toEqual({
+      events: ['A:node', 'A:null', 'B:node', 'B:null', 'C:node', 'C:null'],
+      inserted: ['B:node', 'B:null'],
+      sameElement: true,
+      preserved: true,
+      registered: 1,
+      errors: []
+    });
   });
 
   it('keeps a nested part as the focus owner inside a registered provider row', async () => {

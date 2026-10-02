@@ -342,17 +342,17 @@ function SessionLeafFrame({
 }): ReactElement {
   const Frame = frame ?? 'div';
   const element = useRef<HTMLDivElement>(null);
-  const latest = useRef({ onElement, context });
-  latest.current = { onElement, context };
+  const latestElement = useRef(onElement);
+  latestElement.current = onElement;
   useLayoutEffect(() => {
-    const node = element.current;
-    latest.current.onElement(node);
-    latest.current.context.layout.onAnchorElement?.(leaf.id, node);
-    return () => {
-      latest.current.onElement(null);
-      latest.current.context.layout.onAnchorElement?.(leaf.id, null);
-    };
-  }, [leaf.id]);
+    latestElement.current(element.current);
+    return () => latestElement.current(null);
+  }, []);
+  const onAnchorElement = context.layout.onAnchorElement;
+  useLayoutEffect(() => {
+    onAnchorElement?.(leaf.id, element.current);
+    return () => onAnchorElement?.(leaf.id, null);
+  }, [leaf.id, onAnchorElement]);
   return (
     <Frame
       ref={element}
