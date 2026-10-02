@@ -219,27 +219,36 @@ function formatDeferredArguments(nativeRecord: string): string {
 
 /** Every registry key is implemented so a provider row or part remains renderable through either seam. */
 export const CODEX_PRESENTATION: SessionProviderRegistry<CodexPayloads> = {
-  imageNote: ({ data }) => <ImageNote data={data} />,
-  eventActivity: ({ data, leaf, ...context }) => (
-    <div className="cx-event">
-      <div className="cx-event-label">{data.label}</div>
-      {data.detailText ? (
-        data.label === 'plan_update' && looksLikeMarkdown(data.detailText) ? (
-          <div className="session-markdown">{renderMarkdownNodes(data.detailText, leaf.id)}</div>
-        ) : (
-          <RawBody text={data.detailText} leaf={leaf} context={context} />
-        )
-      ) : null}
-    </div>
-  ),
-  turnTime: ({ data }) => <div className="session-muted">{data.text}</div>,
-  sessionStart: (props) => <SessionStart {...props} />,
-  tool: (props) => <Tool {...props} />,
-  boundary: ({ data }) => (
-    <div className="session-tone--boundary" title={data.tooltip}>
-      {data.label ? <span className="session-muted">{data.label}</span> : null}
-    </div>
-  )
+  imageNote: { render: ({ data }) => <ImageNote data={data} />, disclosureKeys: () => [] },
+  eventActivity: {
+    render: ({ data, leaf, ...context }) => (
+      <div className="cx-event">
+        <div className="cx-event-label">{data.label}</div>
+        {data.detailText ? (
+          data.label === 'plan_update' && looksLikeMarkdown(data.detailText) ? (
+            <div className="session-markdown">{renderMarkdownNodes(data.detailText, leaf.id)}</div>
+          ) : (
+            <RawBody text={data.detailText} leaf={leaf} context={context} />
+          )
+        ) : null}
+      </div>
+    ),
+    disclosureKeys: () => []
+  },
+  turnTime: { render: ({ data }) => <div className="session-muted">{data.text}</div>, disclosureKeys: () => [] },
+  sessionStart: { render: (props) => <SessionStart {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  tool: {
+    render: (props) => <Tool {...props} />,
+    disclosureKeys: (leaf, data) => [leaf.id, ...data.details.map((detail) => detail.id)]
+  },
+  boundary: {
+    render: ({ data }) => (
+      <div className="session-tone--boundary" title={data.tooltip}>
+        {data.label ? <span className="session-muted">{data.label}</span> : null}
+      </div>
+    ),
+    disclosureKeys: () => []
+  }
 };
 
 /** Provider part registry consumed by shared SessionContent. */

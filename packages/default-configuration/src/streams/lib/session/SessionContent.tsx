@@ -47,9 +47,22 @@ export interface ProviderPresentationProps<Payload> extends SessionRenderContext
   readonly data: Payload;
 }
 
-/** Mapped keys preserve each provider payload type without casting through vendor messages. */
+/**
+ * Provider presentation declares every controlled map key read by rendering and event callbacks.
+ * Each mounted row receives the full immutable map from its last relevant committed render,
+ * including for nested child content. Declare every key that can affect rendering or a callback;
+ * map iteration, size, or arbitrary dependent child content requires an undefined declaration.
+ * Selectors depend only on immutable leaf/payload data and include closed descendants' keys.
+ */
+export interface SessionProviderPresentation<Payload> {
+  readonly render: (props: ProviderPresentationProps<Payload>) => ReactNode;
+  /** Exact keys, or undefined for map-wide iteration, size, or arbitrary child content. */
+  readonly disclosureKeys: (leaf: SessionLeaf, data: Payload) => readonly string[] | undefined;
+}
+
+/** Mapped keys preserve provider payload types across rendering and dependency declarations. */
 export type SessionProviderRegistry<Payloads extends object> = {
-  readonly [Kind in keyof Payloads & string]: (props: ProviderPresentationProps<Payloads[Kind]>) => ReactNode;
+  readonly [Kind in keyof Payloads & string]: SessionProviderPresentation<Payloads[Kind]>;
 };
 
 /** Caller supplies already-projected rows and already-validated composition descriptors. */
@@ -112,28 +125,13 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
     emptyContent,
     className
   } = props;
+  const batches = useMemo(() => presentationBatches(rows), [rows]);
   const frames = useContext(SessionFrames);
   const Root = frames?.Root ?? 'div';
   const Row = frames?.Row ?? 'div';
-  const liveContext = useRef({ disclosures, layout });
-  liveContext.current = { disclosures, layout };
-  const context = useMemo<SessionRenderContext>(
-    () => ({
-      disclosures: {
-        get open() {
-          return liveContext.current.disclosures.open;
-        },
-        onOpenChange: (id, open) => liveContext.current.disclosures.onOpenChange(id, open)
-      },
-      layout: {
-        onBeforeLayoutChange: (id) => liveContext.current.layout.onBeforeLayoutChange?.(id),
-        onAfterLayoutChange: (id) => liveContext.current.layout.onAfterLayoutChange?.(id),
-        onAnchorElement: (id, element) => liveContext.current.layout.onAnchorElement?.(id, element),
-        onFocusChange: (id) => liveContext.current.layout.onFocusChange?.(id)
-      }
-    }),
-    []
-  );
+  // The full immutable map remains available to nested content. Declarations govern memoization,
+  // including event-only reads; each mounted row retains one coherent render/event snapshot.
+  const context = useMemo<SessionRenderContext>(() => ({ disclosures, layout }), [disclosures, layout]);
   const { root: rootElement, pages, elements } = useLeafViewState();
   const latestLayout = useRef({ layout, rows });
   latestLayout.current = { layout, rows };
@@ -175,10 +173,11 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
         <Root ref={rootElement} className={`session-content ${className ?? ''}`}>
           {sections('start')}
           {rows.length === 0 ? (emptyContent ?? <p className="session-muted">No output yet.</p>) : null}
-          {presentationBatches(rows).map((batch) => (
+          {batches.map((batch) => (
             <MemoSessionBatch
               key={batch.id}
               rows={batch.rows}
+              context={context}
               open={disclosures.open}
               providerParts={providerParts}
               providerRows={providerRows}
@@ -192,6 +191,7 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
                     <MemoSessionRow
                       key={row.id}
                       row={row}
+                      context={context}
                       open={disclosures.open}
                       providerParts={providerParts}
                       providerRows={providerRows}
@@ -207,7 +207,7 @@ function SessionContentBody<Payloads extends object>(props: SessionContentProps<
                         >
                           {witnessed(row, 'before')}
                           {row.kind === 'provider' && providerRows?.[row.providerKind] ? (
-                            providerRows[row.providerKind]({ leaf: row, data: row.data, ...context })
+                            providerRows[row.providerKind].render({ leaf: row, data: row.data, ...context })
                           ) : row.kind === 'message' ? (
                             <div className="session-label">{row.label ?? row.role}</div>
                           ) : row.kind === 'structural' ? (
@@ -525,7 +525,7 @@ function SessionPartView<Payloads extends object>({
       );
     case 'provider':
       return registry?.[part.providerKind] ? (
-        registry[part.providerKind]({ leaf: part, data: part.data, ...context })
+        registry[part.providerKind].render({ leaf: part, data: part.data, ...context })
       ) : (
         <ProviderFallback leaf={part} data={part.data} context={context} />
       );
@@ -552,6 +552,7 @@ const EMPTY_INSERTIONS: readonly SessionInsertion[] = [];
 /** Props affecting one immutable row; the render closure is evaluated only when those inputs change. */
 interface MemoSessionRowProps {
   readonly row: SessionRow;
+  readonly context: SessionRenderContext;
   readonly open: ReadonlyMap<string, boolean>;
   readonly providerParts?: object;
   readonly providerRows?: object;
@@ -562,22 +563,78 @@ interface MemoSessionRowProps {
 }
 
 /**
- * Opaque provider payloads may own nested disclosure IDs; shared text rows do not.
- * @param row - Current semantic row.
- * @param presentation - Available custom row, part, and tool presentation.
- * @returns Whether this row can contain disclosures outside its shared leaf identities.
+ * Collects controlled dependencies declared by custom presentation and shared primitives.
+ * @param row - Immutable row being compared.
+ * @param presentation - Presentation registries and composition inputs.
+ * @returns Exact keys, or undefined when this row owns arbitrary map-wide content.
  */
-function hasCustomDisclosures(
+function rowDisclosureKeys(
   row: SessionRow,
-  presentation: Pick<MemoSessionRowProps, 'providerParts' | 'providerRows' | 'renderTool'>
+  presentation: Pick<MemoSessionRowProps, 'providerParts' | 'providerRows' | 'renderTool' | 'insertions'>
+): readonly string[] | undefined {
+  const ids = [row.id, ...row.parts.map((part) => part.id)];
+  const providerKeys = (registry: object | undefined, leaf: SessionLeaf, kind: string, data: unknown): boolean => {
+    const entry = (registry as Record<string, SessionProviderPresentation<unknown>> | undefined)?.[kind];
+    if (!entry) return true;
+    const keys = entry.disclosureKeys(leaf, data);
+    if (keys === undefined) return false;
+    ids.push(...keys);
+    return true;
+  };
+  if (row.kind === 'provider' && !providerKeys(presentation.providerRows, row, row.providerKind, row.data))
+    return undefined;
+  for (const part of row.parts) {
+    if (part.kind === 'tool' && presentation.renderTool) return undefined;
+    if (part.kind === 'provider' && !providerKeys(presentation.providerParts, part, part.providerKind, part.data))
+      return undefined;
+  }
+  // A witnessed insertion can mount arbitrary child state; only its owning row is map-wide.
+  if (
+    presentation.insertions.some((entry) => {
+      const placement = entry.placement;
+      return (
+        placement.kind === 'witnessed' &&
+        placement.rowId === row.id &&
+        row.provenance.some((origin) => origin.sourceKey === placement.parentSourceKey)
+      );
+    })
+  )
+    return undefined;
+  return ids;
+}
+
+/**
+ * Compares declared values and membership without conflating absent and explicit false.
+ * @param row - Immutable row being compared.
+ * @param presentation - Current custom presentation and composition inputs.
+ * @param previous - Previous immutable controlled map.
+ * @param next - Next immutable controlled map.
+ * @returns Whether this row's complete declared state remains unchanged.
+ */
+function sameRowDisclosures(
+  row: SessionRow,
+  presentation: Pick<MemoSessionRowProps, 'providerParts' | 'providerRows' | 'renderTool' | 'insertions'>,
+  previous: ReadonlyMap<string, boolean>,
+  next: ReadonlyMap<string, boolean>
 ): boolean {
+  if (previous === next) return true;
+  const keys = rowDisclosureKeys(row, presentation);
+  return keys?.every((id) => previous.get(id) === next.get(id) && previous.has(id) === next.has(id)) ?? false;
+}
+
+/**
+ * Callback changes also invalidate immutable row snapshots so events never retain obsolete handlers.
+ * @param previous - Prior render/event context.
+ * @param next - Next render/event context.
+ * @returns Whether all non-map callbacks are unchanged.
+ */
+function sameContextCallbacks(previous: SessionRenderContext, next: SessionRenderContext): boolean {
   return (
-    (row.kind === 'provider' && !!presentation.providerRows) ||
-    row.parts.some(
-      (part) =>
-        (part.kind === 'provider' && !!presentation.providerParts) ||
-        (part.kind === 'tool' && !!presentation.renderTool)
-    )
+    previous.disclosures.onOpenChange === next.disclosures.onOpenChange &&
+    previous.layout.onBeforeLayoutChange === next.layout.onBeforeLayoutChange &&
+    previous.layout.onAfterLayoutChange === next.layout.onAfterLayoutChange &&
+    previous.layout.onAnchorElement === next.layout.onAnchorElement &&
+    previous.layout.onFocusChange === next.layout.onFocusChange
   );
 }
 
@@ -589,6 +646,7 @@ const MemoSessionRow = memo(
   (previous, next) => {
     if (
       previous.row !== next.row ||
+      !sameContextCallbacks(previous.context, next.context) ||
       previous.providerParts !== next.providerParts ||
       previous.providerRows !== next.providerRows ||
       previous.renderTool !== next.renderTool ||
@@ -596,12 +654,7 @@ const MemoSessionRow = memo(
       previous.renderInsertion !== next.renderInsertion
     )
       return false;
-    if (previous.open === next.open) return true;
-    // Custom provider presentation may own nested disclosure keys not present in shared parts.
-    if (hasCustomDisclosures(next.row, next) || next.insertions.length > 0) return false;
-    return [next.row.id, ...next.row.parts.map((part) => part.id)].every(
-      (id) => previous.open.get(id) === next.open.get(id)
-    );
+    return sameRowDisclosures(next.row, next, previous.open, next.open);
   }
 );
 
@@ -642,6 +695,7 @@ const MemoSessionBatch = memo(
   (previous, next) => {
     if (
       previous.rows.length !== next.rows.length ||
+      !sameContextCallbacks(previous.context, next.context) ||
       previous.rows.some((row, index) => row !== next.rows[index]) ||
       previous.providerParts !== next.providerParts ||
       previous.providerRows !== next.providerRows ||
@@ -650,10 +704,6 @@ const MemoSessionBatch = memo(
       previous.renderInsertion !== next.renderInsertion
     )
       return false;
-    if (previous.open === next.open) return true;
-    if (next.rows.some((row) => hasCustomDisclosures(row, next)) || next.insertions.length > 0) return false;
-    return next.rows.every((row) =>
-      [row.id, ...row.parts.map((part) => part.id)].every((id) => previous.open.get(id) === next.open.get(id))
-    );
+    return next.rows.every((row) => sameRowDisclosures(row, next, previous.open, next.open));
   }
 );

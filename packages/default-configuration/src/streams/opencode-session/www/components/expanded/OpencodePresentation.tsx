@@ -270,13 +270,13 @@ function NativeDetails({ data, leaf, ...context }: ProviderPresentationProps<Ope
 
 /** Shared typed renderers work for native rows or parts; absent kinds are never guessed. */
 export const OPENCODE_PRESENTATION: SessionProviderRegistry<OpencodePayloads> = {
-  session: (props) => <SessionDetails {...props} />,
-  messageDetails: (props) => <MessageDetails {...props} />,
-  attachment: (props) => <Attachment {...props} />,
-  editedFiles: (props) => <EditedFiles {...props} />,
-  step: (props) => <Step {...props} />,
-  event: (props) => <Event {...props} />,
-  nativeDetails: (props) => <NativeDetails {...props} />
+  session: { render: (props) => <SessionDetails {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  messageDetails: { render: (props) => <MessageDetails {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  attachment: { render: (props) => <Attachment {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  editedFiles: { render: (props) => <EditedFiles {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  step: { render: (props) => <Step {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  event: { render: (props) => <Event {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  nativeDetails: { render: (props) => <NativeDetails {...props} />, disclosureKeys: (leaf) => [leaf.id] }
 };
 
 /** Collects row and part ids so controlled disclosures survive source appends.

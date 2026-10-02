@@ -119,14 +119,16 @@ describe('session content', () => {
   it('dispatches typed provider rows and parts through ordinary React renderers', () => {
     const html = render({
       rows: [{ ...row, kind: 'provider', providerKind: 'hook', data: { label: 'Hook row' }, parts: [] }],
-      providerRows: { hook: ({ data }) => String((data as { label: string }).label) }
+      providerRows: {
+        hook: { render: ({ data }) => String((data as { label: string }).label), disclosureKeys: () => [] }
+      }
     });
     expect(html).toContain('Hook row');
   });
   it('preserves shared parts alongside a provider-specific row presentation', () => {
     const html = render({
       rows: [{ ...row, kind: 'provider', providerKind: 'hook', data: 'Hook' }],
-      providerRows: { hook: () => 'Provider heading' }
+      providerRows: { hook: { render: () => 'Provider heading', disclosureKeys: () => [] } }
     });
     expect(html).toContain('Provider heading');
     expect(html).toContain('<strong>reader</strong>');
@@ -245,14 +247,40 @@ describe('mounted session interaction', () => {
     await writeFile(
       join(directory, 'main.jsx'),
       `
-      import React, { useState, useRef } from 'react';
+      import React, { useState, useRef, useCallback, Suspense, startTransition } from 'react';
       import { createRoot } from 'react-dom/client';
       import { SessionViewport } from ${viewportPath};
-      import { SessionContent } from ${contentPath};
+      import { SessionContent, SessionDisclosure } from ${contentPath};
       import { ClaudeSourceView } from ${claudePath};
       import { CodexSourceView } from ${providerViews[0]};
       import { OpencodeSourceView } from ${providerViews[1]};
       import { AntigravitySourceView } from ${providerViews[2]};
+      const customRows = ['one', 'two', 'event', 'observer'].map(id => ({id, kind:'provider', providerKind:'custom', data:id, provenance:[{sourceKey:'custom',generation:'one',lineNumber:1,selector:'record'}], parts:[]}));
+      const customRegistry = {custom: {
+        disclosureKeys: (leaf, data) => data === 'observer' ? undefined : [data === 'event' ? 'nested-one' : 'nested-' + data],
+        render: ({data, disclosures, layout}) => {
+          window.customRenders[data] = (window.customRenders[data] ?? 0) + 1;
+          if (data === 'observer') return <output>{[...disclosures.open.values()].filter(Boolean).length}</output>;
+          if (data === 'event') return <button data-read="event" onClick={() => { window.eventRead = {value:disclosures.open.get('nested-one'),present:disclosures.open.has('nested-one')}; }}>Read latest</button>;
+          return <SessionDisclosure id={'nested-' + data} label={data} context={{disclosures,layout}}><p>{data} body</p></SessionDisclosure>;
+        }
+      }};
+      const customInsertions = [{placementId:'custom-child',childSourceKey:'child',label:'Custom child',placement:{kind:'witnessed',parentSourceKey:'custom',rowId:'one',position:'after'}}];
+      const renderCustomInsertion = (entry, context) => <span data-child-value>{String(context.disclosures.open.get('nested-one'))}</span>;
+      const never = new Promise(() => {});
+      function Pending({active}) { if(active) throw never; return null; }
+      function CustomApp() {
+        const [open, setOpen] = useState(new Map());
+        const [pending, setPending] = useState(false);
+        const onOpenChange = useCallback((id,value)=>setOpen(previous=>new Map(previous).set(id,value)), []);
+        window.customHarness = {
+          false: () => setOpen(new Map([['nested-one',false]])),
+          absent: () => setOpen(new Map()),
+          speculative: () => startTransition(() => { setOpen(new Map([['nested-one',true]])); setPending(true); })
+        };
+        return <><SessionContent rows={customRows} providerRows={customRegistry} insertions={location.search === '?custom-insertion' ? customInsertions : undefined} renderInsertion={renderCustomInsertion} disclosures={{open,onOpenChange}} /><Pending active={pending} /></>;
+      }
+      window.customRenders = {};
       function ProviderApp() {
         const [sourceKey, setSourceKey] = useState('first');
         const [generation, setGeneration] = useState('one');
@@ -274,6 +302,12 @@ describe('mounted session interaction', () => {
         ].map(value => JSON.stringify(value)));
         window.claudeHarness = {
           append: () => setLines(previous => [...previous, JSON.stringify({type:'user',uuid:'result-event',message:{content:[{type:'tool_result',tool_use_id:'call',content:'done'}]}})]),
+          group: () => setLines([
+            {type:'assistant',uuid:'start',message:{content:'start'}},
+            {type:'attachment',uuid:'team-one',attachment:{type:'team_context',agentName:'one',teamName:'test-team'}},
+            {type:'attachment',uuid:'team-two',attachment:{type:'team_context',agentName:'two',teamName:'test-team'}}
+          ].map(value => JSON.stringify(value))),
+          appendText: () => setLines(previous => [...previous,JSON.stringify({type:'assistant',uuid:'next',message:{content:'appended'}})]),
           malformed: () => setLines([
             {type:'assistant', message:{content:'start'}},
             ...[{type:'skill_listing',names:'oops'}, {type:'invoked_skills',skills:'oops'}, {type:'command_permissions',allowedTools:'oops'}].map(attachment => ({type:'attachment',attachment}))
@@ -306,7 +340,7 @@ describe('mounted session interaction', () => {
       }
       window.sessionErrors = [];
       addEventListener('error', event => window.sessionErrors.push(event.message));
-      createRoot(document.getElementById('root')).render(location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
+      createRoot(document.getElementById('root')).render(location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
     `
     );
     await writeFile(
@@ -354,6 +388,103 @@ describe('mounted session interaction', () => {
       await new Promise<void>((resolveClosed) => (server ? server.close(() => resolveClosed()) : resolveClosed()));
       if (directory) await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it('updates arbitrary nested disclosure owners and map observers without redrawing unrelated custom rows', async () => {
+    await browser('open', `${origin}/?custom`);
+    await browser('wait', '--text', 'two');
+    const result = await evaluate<{
+      eventRead: { value: boolean; present: boolean };
+      before: Record<string, number>;
+      after: Record<string, number>;
+      expanded: string | null;
+      count: string | null;
+      body: boolean;
+    }>(`(async () => {
+      const before = {...window.customRenders};
+      document.querySelector('[aria-expanded]').click();
+      await new Promise(resolve => setTimeout(resolve, 250));
+      document.querySelector('[data-read=event]').click();
+      return {eventRead:window.eventRead,before,after:{...window.customRenders},expanded:document.querySelector('[aria-expanded]').getAttribute('aria-expanded'),count:document.querySelector('output').textContent,body:document.body.textContent.includes('one body')};
+    })()`);
+    expect(result.eventRead).toEqual({ value: true, present: true });
+    expect(result.expanded).toBe('true');
+    expect(result.body).toBe(true);
+    expect(result.count).toBe('1');
+    expect(result.after.one).toBeGreaterThan(result.before.one!);
+    expect(result.after.event).toBeGreaterThan(result.before.event!);
+    expect(result.after.observer).toBeGreaterThan(result.before.observer!);
+    expect(result.after.two).toBe(result.before.two);
+  });
+
+  it('keeps absent, false, and interrupted-render event snapshots coherent in StrictMode', async () => {
+    await browser('open', `${origin}/?custom`);
+    await browser('wait', '--text', 'Read latest');
+    const result = await evaluate<{
+      falseRead: { value: boolean; present: boolean };
+      absentRead: { present: boolean };
+      speculativeRead: { present: boolean };
+      counts: number[];
+    }>(`(async () => {
+      const settle = () => new Promise(resolve => setTimeout(resolve, 250));
+      const read = () => { document.querySelector('[data-read=event]').click(); return {...window.eventRead}; };
+      const counts = [window.customRenders.event];
+      window.customHarness.false(); await settle(); const falseRead = read(); counts.push(window.customRenders.event);
+      window.customHarness.absent(); await settle(); const absentRead = read(); counts.push(window.customRenders.event);
+      window.customHarness.speculative(); await settle(); const speculativeRead = read(); counts.push(window.customRenders.event);
+      return {falseRead,absentRead,speculativeRead,counts};
+    })()`);
+    expect(result.falseRead).toEqual({ value: false, present: true });
+    expect(result.absentRead).toEqual({ present: false });
+    expect(result.speculativeRead).toEqual({ present: false });
+    expect(result.counts[1]).toBeGreaterThan(result.counts[0]!);
+    expect(result.counts[2]).toBeGreaterThan(result.counts[1]!);
+    expect(result.counts[3]).toBeGreaterThan(result.counts[2]!);
+  });
+
+  it('refreshes arbitrary witnessed child content while unrelated custom owners skip', async () => {
+    await browser('open', `${origin}/?custom-insertion`);
+    await browser('wait', '--text', 'Custom child');
+    const result = await evaluate<{
+      before: number;
+      after: number;
+      child: string | null;
+      expanded: string | null;
+    }>(`(async () => {
+      const settle = () => new Promise(resolve => setTimeout(resolve,250));
+      const before = window.customRenders.two;
+      document.querySelector('[data-session-disclosure="custom-child"] button').click(); await settle();
+      document.querySelector('[data-session-disclosure="nested-one"] button').click(); await settle();
+      return {before,after:window.customRenders.two,child:document.querySelector('[data-child-value]').textContent,expanded:document.querySelector('[data-session-disclosure="custom-child"] button').getAttribute('aria-expanded')};
+    })()`);
+    expect(result.expanded).toBe('true');
+    expect(result.child).toBe('true');
+    expect(result.after).toBe(result.before);
+  });
+
+  it('updates nested Claude group attachment details and retains them through collapse and append', async () => {
+    await browser('open', `${origin}/?claude`);
+    const result = await evaluate<{
+      rawOpen: string | null;
+      retained: string | null;
+      text: string;
+      errors: string[];
+    }>(`(async () => {
+      const settle = () => new Promise(resolve => setTimeout(resolve,250));
+      claudeHarness.group(); await settle();
+      const group = [...document.querySelectorAll('.session-disclosure')].find(node => node.querySelector('button').textContent.includes('Context ·'));
+      const button = group.querySelector('button'); button.click(); await settle();
+      const attachment = [...group.querySelectorAll('button')].find(node => node !== button); attachment.click(); await settle();
+      const raw = [...group.querySelectorAll('button')].find(node => node.textContent.includes('Raw attachment details')); raw.click(); await settle();
+      const rawOpen = raw.getAttribute('aria-expanded');
+      button.click(); await settle(); button.click(); await settle(); claudeHarness.appendText(); await settle();
+      const retained = [...group.querySelectorAll('button')].find(node => node.textContent.includes('Raw attachment details'));
+      return {rawOpen,retained:retained.getAttribute('aria-expanded'),text:group.textContent,errors:sessionErrors};
+    })()`);
+    expect(result.rawOpen).toBe('true');
+    expect(result.retained).toBe('true');
+    expect(result.text).toContain('test-team');
+    expect(result.errors).toEqual([]);
   });
 
   it.each([

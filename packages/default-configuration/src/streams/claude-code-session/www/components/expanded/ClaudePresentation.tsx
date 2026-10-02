@@ -253,19 +253,44 @@ function ToolBody({
 }
 /** Provider registries use plain typed props; all disclosure state remains owned by the caller. */
 export const CLAUDE_PARTS: SessionProviderRegistry<ClaudePayloads> = {
-  attachment: (props) => <Attachment {...props} />,
-  tool: (props) => <Tool {...props} />,
-  prose: ({ data, leaf, ...context }) => (
-    <SessionDisclosure id={leaf.id} label={data.label} context={context}>
-      <Body text={data.text} leaf={leaf} context={context} />
-    </SessionDisclosure>
-  ),
-  group: ({ data, leaf, ...context }) => (
-    <SessionDisclosure id={leaf.id} label={data.label} context={context}>
-      <SessionContent rows={data.rows} {...context} providerParts={CLAUDE_PARTS} providerRows={CLAUDE_PARTS} />
-    </SessionDisclosure>
-  )
+  attachment: { render: (props) => <Attachment {...props} />, disclosureKeys: (leaf) => [leaf.id, `${leaf.id}/raw`] },
+  tool: {
+    render: (props) => <Tool {...props} />,
+    disclosureKeys: (leaf, data) => [leaf.id, ...nestedPartDisclosureIds([...data.hooks, ...data.details])]
+  },
+  prose: {
+    render: ({ data, leaf, ...context }) => (
+      <SessionDisclosure id={leaf.id} label={data.label} context={context}>
+        <Body text={data.text} leaf={leaf} context={context} />
+      </SessionDisclosure>
+    ),
+    disclosureKeys: (leaf) => [leaf.id]
+  },
+  group: {
+    render: ({ data, leaf, ...context }) => (
+      <SessionDisclosure id={leaf.id} label={data.label} context={context}>
+        <SessionContent rows={data.rows} {...context} providerParts={CLAUDE_PARTS} providerRows={CLAUDE_PARTS} />
+      </SessionDisclosure>
+    ),
+    disclosureKeys: (leaf, data) => [leaf.id, ...claudeDisclosureIds(data.rows)]
+  }
 };
+/**
+ * Collects nested tool and attachment dependencies for presentation and pruning.
+ * @param parts - Native parts retained inside a provider tool.
+ * @returns Every controlled child identity, including raw attachment detail.
+ */
+function nestedPartDisclosureIds(parts: readonly ClaudePart[]): Set<string> {
+  const result = new Set<string>();
+  const visit = (part: ClaudePart): void => {
+    result.add(part.id);
+    result.add(`${part.id}/raw`);
+    if (part.kind === 'provider' && part.providerKind === 'tool')
+      for (const child of [...part.data.hooks, ...part.data.details]) visit(child);
+  };
+  parts.forEach(visit);
+  return result;
+}
 /**
  * Collects nested provider identities so caller state pruning keeps surviving child choices.
  * @param rows - Projected rows including provider-owned nested groups.
@@ -273,15 +298,9 @@ export const CLAUDE_PARTS: SessionProviderRegistry<ClaudePayloads> = {
  */
 export function claudeDisclosureIds(rows: readonly ClaudeRow[]): Set<string> {
   const result = new Set<string>();
-  const visitPart = (part: ClaudePart): void => {
-    result.add(part.id);
-    result.add(`${part.id}/raw`);
-    if (part.kind === 'provider' && part.providerKind === 'tool')
-      for (const child of [...part.data.hooks, ...part.data.details]) visitPart(child);
-  };
   const visit = (row: ClaudeRow): void => {
     result.add(row.id);
-    row.parts.forEach(visitPart);
+    for (const id of nestedPartDisclosureIds(row.parts)) result.add(id);
     if (row.kind === 'provider' && row.providerKind === 'group') row.data.rows.forEach(visit);
   };
   rows.forEach(visit);

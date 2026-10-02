@@ -129,12 +129,12 @@ function safeJson(value: unknown): string {
 }
 
 const ANTIGRAVITY_PARTS: SessionProviderRegistry<AntigravityPayloads> = {
-  anomaly: AntigravityAnomalyPart,
-  toolCall: AntigravityToolCallRow
+  anomaly: { render: AntigravityAnomalyPart, disclosureKeys: () => [] },
+  toolCall: { render: AntigravityToolCallRow, disclosureKeys: (leaf) => [leaf.id] }
 };
 const ANTIGRAVITY_ROWS: SessionProviderRegistry<AntigravityPayloads> = {
-  anomaly: AntigravityAnomalyPart,
-  toolCall: AntigravityToolCallRow
+  anomaly: { render: AntigravityAnomalyPart, disclosureKeys: () => [] },
+  toolCall: { render: AntigravityToolCallRow, disclosureKeys: (leaf) => [leaf.id] }
 };
 
 /**
