@@ -135,6 +135,25 @@ describe('native transcript projection', () => {
     expect(() => controller.update(source([]))).toThrow(/disposed/i);
   });
 
+  it('can omit invalidated identity bookkeeping without changing reset or replay semantics', () => {
+    const normal = createTranscriptProjection(fixture().projector, 'card/source');
+    const optimized = createTranscriptProjection(fixture().projector, 'card/source', { includeInvalidatedIds: false });
+    for (const snapshot of [
+      source(['a', 'b']),
+      source(['a', 'b', 'c']),
+      source(['new']),
+      source(['reset'], { generation: 'two' })
+    ]) {
+      const expected = normal.update(snapshot);
+      const actual = optimized.update(snapshot);
+      expect(actual.kind).toBe(expected.kind);
+      expect(actual.projection).toEqual(expected.projection);
+      expect(actual.invalidatedIds).toEqual([]);
+    }
+    normal.dispose();
+    optimized.dispose();
+  });
+
   it('rejects another source or invalid absolute coordinates before processing', () => {
     const { projector, counts } = fixture();
     const controller = createTranscriptProjection(projector, 'card/source');

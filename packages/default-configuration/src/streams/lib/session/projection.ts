@@ -50,16 +50,24 @@ export interface TranscriptProjectionController<Payloads extends object> {
   dispose(): void;
 }
 
+/** Controls optional identity-diff bookkeeping for callers that reconcile their own view state. */
+export interface TranscriptProjectionOptions {
+  /** Compute removed row/leaf IDs after replacements; defaults to true. */
+  readonly includeInvalidatedIds?: boolean;
+}
+
 /**
  * Creates a source-local cache. A changed caller generation discards all prior state;
  * same-generation incompatible ranges rebuild through the same reducer using cached parsing.
  * @param projector - Provider-specific parser and semantic reducer.
  * @param sourceKey - Immutable qualified source identity for this controller.
+ * @param options - Optional invalidated-identity bookkeeping; projection semantics remain identical.
  * @returns Disposable projection lifecycle.
  */
 export function createTranscriptProjection<State, Parsed, Payloads extends object>(
   projector: NativeTranscriptProjector<State, Parsed, Payloads>,
-  sourceKey: string
+  sourceKey: string,
+  options: TranscriptProjectionOptions = {}
 ): TranscriptProjectionController<Payloads> {
   let previous: NativeTranscriptSource | undefined;
   let state: State | undefined;
@@ -124,8 +132,11 @@ export function createTranscriptProjection<State, Parsed, Payloads extends objec
       }
       projection = projector.project(current, source);
       previous = source;
-      const survivors = projectionIds(projection);
-      const invalidatedIds = oldProjection ? [...projectionIds(oldProjection)].filter((id) => !survivors.has(id)) : [];
+      let invalidatedIds: SessionIdentity[] = [];
+      if (options.includeInvalidatedIds !== false && oldProjection) {
+        const survivors = projectionIds(projection);
+        invalidatedIds = [...projectionIds(oldProjection)].filter((id) => !survivors.has(id));
+      }
       return { projection, kind, invalidatedIds };
     },
     dispose() {

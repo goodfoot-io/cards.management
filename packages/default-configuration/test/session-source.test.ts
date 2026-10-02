@@ -46,7 +46,7 @@ function file(extra: Partial<StreamFile> = {}): StreamFile {
 const binding = { sourceKey: 'card/main', generation: 'caller-generation', filename: 'main' };
 
 describe('native source subscription', () => {
-  it('reads missing, historical, and metadata-only snapshots coherently', () => {
+  it('reads missing, historical, and metadata-only snapshots coherently', async () => {
     const store = nativeStore();
     const adapter = createNativeTranscriptSubscription(store, binding);
     expect(adapter.getSnapshot().lines).toEqual([]);
@@ -55,13 +55,66 @@ describe('native source subscription', () => {
       notifications++;
     });
     store.update(file());
+    await new Promise((resolve) => setTimeout(resolve, 25));
     const first = adapter.getSnapshot();
     expect(first.headLineNumber).toBe(7);
     expect(adapter.getSnapshot()).toBe(first);
     store.update(file({ meta: { lineCount: 7, isActive: false, agentId: 'child', role: 'subagent' } }));
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(adapter.getSnapshot().meta?.agentId).toBe('child');
     expect(notifications).toBe(2);
     cleanup();
+    expect(store.listeners.size).toBe(0);
+  });
+
+  it('coalesces a burst of appends and notifies subscribers with the latest snapshot', async () => {
+    const store = nativeStore();
+    const adapter = createNativeTranscriptSubscription(store, binding);
+    let notifications = 0;
+    adapter.subscribe(() => {
+      notifications++;
+    });
+
+    store.update(file({ lines: ['one', 'two'], meta: { lineCount: 8, isActive: true } }));
+    store.update(file({ lines: ['one', 'two', 'three'], meta: { lineCount: 9, isActive: true } }));
+    store.update(file({ lines: ['one', 'two', 'three', 'four'], meta: { lineCount: 10, isActive: true } }));
+
+    expect(notifications).toBe(0);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(notifications).toBe(1);
+    expect(adapter.getSnapshot().lines).toEqual(['one', 'two', 'three', 'four']);
+    adapter.dispose();
+  });
+
+  it('cancels a pending notification on cleanup and isolates the replacement binding', async () => {
+    const store = nativeStore();
+    const adapter = createNativeTranscriptSubscription(store, binding);
+    let stale = 0;
+    const cleanup = adapter.subscribe(() => {
+      stale++;
+    });
+    store.update(file());
+    cleanup();
+    const replacement = createNativeTranscriptSubscription(store, {
+      ...binding,
+      sourceKey: 'replacement',
+      generation: 'two'
+    });
+    let fresh = 0;
+    replacement.subscribe(() => {
+      fresh++;
+    });
+    store.update(file({ lines: ['replacement'] }));
+    adapter.dispose();
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(stale).toBe(0);
+    expect(fresh).toBe(1);
+    expect(replacement.getSnapshot()).toMatchObject({
+      sourceKey: 'replacement',
+      generation: 'two',
+      lines: ['replacement']
+    });
+    replacement.dispose();
     expect(store.listeners.size).toBe(0);
   });
 
@@ -107,7 +160,7 @@ describe('native source subscription', () => {
     expect(adapter.getSnapshot().lines).toEqual([]);
     adapter.dispose();
   });
-  it('notifies every subscriber and makes already queued callbacks inert after cleanup', () => {
+  it('notifies every subscriber once and makes already queued callbacks inert after cleanup', async () => {
     const store = nativeStore();
     const adapter = createNativeTranscriptSubscription(store, binding);
     const notifications = [0, 0];
@@ -119,11 +172,14 @@ describe('native source subscription', () => {
     });
     const queued = [...store.listeners];
     store.update(file());
+    expect(notifications).toEqual([0, 0]);
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(notifications).toEqual([1, 1]);
     first();
     adapter.dispose();
     store.update(file({ lines: ['changed'] }));
     for (const callback of queued) callback();
+    await new Promise((resolve) => setTimeout(resolve, 25));
     expect(notifications).toEqual([1, 1]);
     expect(store.listeners.size).toBe(0);
   });

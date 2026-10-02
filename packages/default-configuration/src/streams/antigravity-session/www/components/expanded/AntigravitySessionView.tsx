@@ -159,6 +159,14 @@ export function AntigravitySessionView({
   const header = current?.header;
   const status = header?.status === 'done' ? 'success' : (header?.status ?? 'running');
   const rows = current?.rows ?? [];
+  const emptyContent = useMemo(
+    () => (
+      <p className="session-muted">
+        {source.isLoading ? 'Loading transcript…' : 'No Antigravity session activity yet.'}
+      </p>
+    ),
+    [source.isLoading]
+  );
 
   return (
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
@@ -175,11 +183,7 @@ export function AntigravitySessionView({
           providerParts={ANTIGRAVITY_PARTS}
           providerRows={ANTIGRAVITY_ROWS}
           disclosures={disclosures}
-          emptyContent={
-            <p className="session-muted">
-              {source.isLoading ? 'Loading transcript…' : 'No Antigravity session activity yet.'}
-            </p>
-          }
+          emptyContent={emptyContent}
         />
       </div>
     </div>

@@ -8,6 +8,7 @@
 import { MessageScroller, useMessageScroller } from '@shadcn/react/message-scroller';
 import {
   type ComponentProps,
+  memo,
   type ReactElement,
   type Ref,
   useCallback,
@@ -54,7 +55,7 @@ export interface SessionViewportProps<Payloads extends object = Record<string, u
  * @param props - Content plus expanded viewport navigation hooks.
  * @returns Expanded transcript viewport.
  */
-export function SessionViewport<Payloads extends object>(props: SessionViewportProps<Payloads>): ReactElement {
+function SessionViewportImplementation<Payloads extends object>(props: SessionViewportProps<Payloads>): ReactElement {
   const [intent, setIntent] = useState<SessionFollowIntent>('hold');
   const intentRef = useRef(intent);
   const updateIntent = useCallback(
@@ -72,6 +73,9 @@ export function SessionViewport<Payloads extends object>(props: SessionViewportP
     </MessageScroller.Provider>
   );
 }
+
+/** Parent source updates can project asynchronously; skip stale-content passes until rows change. */
+export const SessionViewport = memo(SessionViewportImplementation) as typeof SessionViewportImplementation;
 
 /** Direct child frames preserve the primitive's geometry contract without coupling content to it.
  * @param props - Render-only content container attributes.

@@ -7,7 +7,7 @@
 
 import { streamStore } from '@cards.management/sdk/stream-store';
 import type React from 'react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import { SessionViewport } from '../../../../lib/session/SessionViewport';
@@ -34,6 +34,8 @@ function disclosureIds(rows: readonly CodexRow[]): Set<string> {
   return ids;
 }
 
+const EMPTY_ROWS = [] as const;
+
 /**
  * Renders one caller-supplied Codex native snapshot without discovering another source.
  * @param root0 - Source props.
@@ -45,7 +47,7 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
   const [projection, setProjection] = useState<SessionProjection<CodexPayloads> | null>(null);
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
   useEffect(() => {
-    const next = createTranscriptProjection(codexSessionProjector, source.sourceKey);
+    const next = createTranscriptProjection(codexSessionProjector, source.sourceKey, { includeInvalidatedIds: false });
     controller.current = next;
     return () => {
       next.dispose();
@@ -53,14 +55,28 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
     };
   }, [source.sourceKey]);
   useEffect(() => {
-    const next = controller.current!.update(source).projection;
-    setProjection(next);
-    const ids = disclosureIds(next.rows as CodexRow[]);
+    const update = controller.current!.update(source);
+    setProjection(update.projection);
+    if (update.kind === 'metadata' || update.kind === 'unchanged') return;
     setOpen((previous) => {
+      if (previous.size === 0) return previous;
+      if (update.kind === 'initial' || update.kind === 'reset') return new Map();
+      const ids = disclosureIds(update.projection.rows as CodexRow[]);
       if ([...previous.keys()].every((id) => ids.has(id))) return previous;
       return new Map([...previous].filter(([id]) => ids.has(id)));
     });
   }, [source]);
+
+  const onOpenChange = useCallback((id: string, value: boolean) => {
+    setOpen((previous) => new Map(previous).set(id, value));
+  }, []);
+  const disclosures = useMemo(() => ({ open, onOpenChange }), [open, onOpenChange]);
+  const emptyContent = useMemo(
+    () => (
+      <p className="session-muted">{source.isLoading ? 'Loading transcript…' : 'No Codex session activity yet.'}</p>
+    ),
+    [source.isLoading]
+  );
 
   const current =
     projection?.sourceKey === source.sourceKey && projection.generation === source.generation ? projection : null;
@@ -82,15 +98,11 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
       ) : null}
       <div className="flex-1 min-h-0">
         <SessionViewport
-          rows={current?.rows ?? []}
+          rows={current?.rows ?? EMPTY_ROWS}
           providerParts={CODEX_PARTS}
           providerRows={CODEX_ROWS}
-          disclosures={{ open, onOpenChange: (id, value) => setOpen((previous) => new Map(previous).set(id, value)) }}
-          emptyContent={
-            <p className="session-muted">
-              {source.isLoading ? 'Loading transcript…' : 'No Codex session activity yet.'}
-            </p>
-          }
+          disclosures={disclosures}
+          emptyContent={emptyContent}
           ariaLabel="Codex session transcript"
         />
       </div>

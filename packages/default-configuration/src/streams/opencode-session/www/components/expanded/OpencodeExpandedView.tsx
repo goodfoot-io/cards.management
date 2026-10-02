@@ -5,9 +5,10 @@
  */
 
 import { streamStore } from '@cards.management/sdk/stream-store';
-import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
+import type { SessionContentProps } from '../../../../lib/session/SessionContent';
 import { SessionViewport } from '../../../../lib/session/SessionViewport';
 import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
 import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
@@ -20,6 +21,11 @@ import {
   opencodeHeaderDisplay
 } from './OpencodePresentation';
 
+const EMPTY_ROWS = [] as const;
+const renderOpenCodeTool: NonNullable<SessionContentProps<OpencodePayloads>['renderTool']> = (part, context) => (
+  <OpenCodeTool part={part} leaf={part} context={context} />
+);
+
 /** Renders one supplied OpenCode native snapshot without owning transport or reset detection.
  * @param root0 - Native snapshot supplied by the active source binding.
  * @param root0.source - Caller-qualified source, explicit generation, and complete current line range.
@@ -31,7 +37,9 @@ export function OpencodeSourceView({ source }: { source: NativeTranscriptSource 
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
 
   useEffect(() => {
-    const next = createTranscriptProjection(opencodeSessionProjector, source.sourceKey);
+    const next = createTranscriptProjection(opencodeSessionProjector, source.sourceKey, {
+      includeInvalidatedIds: false
+    });
     controller.current = next;
     return () => {
       next.dispose();
@@ -40,18 +48,30 @@ export function OpencodeSourceView({ source }: { source: NativeTranscriptSource 
   }, [source.sourceKey]);
 
   useEffect(() => {
-    const next = controller.current!.update(source).projection;
-    setProjection(next);
-    const ids = opencodeDisclosureIds(next.rows);
+    const update = controller.current!.update(source);
+    setProjection(update.projection);
+    if (update.kind === 'metadata' || update.kind === 'unchanged') return;
     setOpen((previous) => {
+      if (previous.size === 0) return previous;
+      if (update.kind === 'initial' || update.kind === 'reset') return new Map();
+      const ids = opencodeDisclosureIds(update.projection.rows);
       if ([...previous.keys()].every((id) => ids.has(id))) return previous;
       return new Map([...previous].filter(([id]) => ids.has(id)));
     });
   }, [source]);
 
+  const onOpenChange = useCallback((id: string, value: boolean) => {
+    setOpen((previous) => new Map(previous).set(id, value));
+  }, []);
+  const disclosures = useMemo(() => ({ open, onOpenChange }), [open, onOpenChange]);
+  const emptyContent = useMemo(
+    () => <p className="session-muted">{source.isLoading ? 'Loading transcript…' : 'No output yet.'}</p>,
+    [source.isLoading]
+  );
+
   const current =
     projection?.sourceKey === source.sourceKey && projection.generation === source.generation ? projection : null;
-  const rows = current?.rows ?? [];
+  const rows = current?.rows ?? EMPTY_ROWS;
   const header = current?.header;
   const identity = opencodeHeaderDisplay(rows);
 
@@ -74,9 +94,9 @@ export function OpencodeSourceView({ source }: { source: NativeTranscriptSource 
           rows={rows}
           providerParts={OPENCODE_PRESENTATION}
           providerRows={OPENCODE_PRESENTATION}
-          renderTool={(part, context) => <OpenCodeTool part={part} leaf={part} context={context} />}
-          disclosures={{ open, onOpenChange: (id, value) => setOpen((previous) => new Map(previous).set(id, value)) }}
-          emptyContent={<p className="session-muted">{source.isLoading ? 'Loading transcript…' : 'No output yet.'}</p>}
+          renderTool={renderOpenCodeTool}
+          disclosures={disclosures}
+          emptyContent={emptyContent}
         />
       </div>
     </div>

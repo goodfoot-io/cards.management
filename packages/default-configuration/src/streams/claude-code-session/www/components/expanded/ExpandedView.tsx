@@ -5,7 +5,7 @@
  * @module components/expanded/ExpandedView
  */
 import { streamStore } from '@cards.management/sdk/stream-store';
-import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import { SessionViewport } from '../../../../lib/session/SessionViewport';
@@ -14,6 +14,8 @@ import { useTranscriptSource } from '../../../../lib/session/use-transcript-sour
 import { useStreamStore } from '../../hooks/useStreamStore';
 import { type ClaudePayloads, type ClaudeRow, claudeSessionProjector } from '../../lib/project-session';
 import { CLAUDE_PARTS, claudeDisclosureIds } from './ClaudePresentation';
+
+const EMPTY_ROWS = [] as const;
 
 /**
  * Records hook adoption independently of mutable disclosure choices.
@@ -45,7 +47,7 @@ export function ClaudeSourceView({ source }: { source: NativeTranscriptSource })
   const hookOwners = useRef(new Map<string, string>());
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
   useEffect(() => {
-    const next = createTranscriptProjection(claudeSessionProjector, source.sourceKey);
+    const next = createTranscriptProjection(claudeSessionProjector, source.sourceKey, { includeInvalidatedIds: false });
     controller.current = next;
     hookOwners.current = new Map();
     return () => {
@@ -69,6 +71,14 @@ export function ClaudeSourceView({ source }: { source: NativeTranscriptSource })
       return retained;
     });
   }, [source]);
+  const onOpenChange = useCallback((id: string, value: boolean) => {
+    setOpen((previous) => new Map(previous).set(id, value));
+  }, []);
+  const disclosures = useMemo(() => ({ open, onOpenChange }), [open, onOpenChange]);
+  const emptyContent = useMemo(
+    () => <p className="session-muted">{source.isLoading ? 'Loading transcript…' : 'No output yet.'}</p>,
+    [source.isLoading]
+  );
   const current =
     projection?.sourceKey === source.sourceKey && projection.generation === source.generation ? projection : null;
   const header = current?.header;
@@ -87,11 +97,11 @@ export function ClaudeSourceView({ source }: { source: NativeTranscriptSource })
       ) : null}
       <div className="flex-1 min-h-0">
         <SessionViewport
-          rows={current?.rows ?? []}
+          rows={current?.rows ?? EMPTY_ROWS}
           providerParts={CLAUDE_PARTS}
           providerRows={CLAUDE_PARTS}
-          disclosures={{ open, onOpenChange: (id, value) => setOpen((previous) => new Map(previous).set(id, value)) }}
-          emptyContent={<p className="session-muted">{source.isLoading ? 'Loading transcript…' : 'No output yet.'}</p>}
+          disclosures={disclosures}
+          emptyContent={emptyContent}
         />
       </div>
     </div>

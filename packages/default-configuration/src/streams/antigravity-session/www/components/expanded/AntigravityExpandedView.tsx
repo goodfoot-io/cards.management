@@ -6,7 +6,7 @@
  */
 
 import { streamStore } from '@cards.management/sdk/stream-store';
-import { type ReactElement, useEffect, useId, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import type { NativeTranscriptSource, SessionDisclosureState, SessionProjection } from '../../../../lib/session/types';
 import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
@@ -35,7 +35,9 @@ export function AntigravitySourceView({ source }: { source: NativeTranscriptSour
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
 
   useEffect(() => {
-    const next = createTranscriptProjection(antigravitySessionProjector, source.sourceKey);
+    const next = createTranscriptProjection(antigravitySessionProjector, source.sourceKey, {
+      includeInvalidatedIds: false
+    });
     controller.current = next;
     return () => {
       next.dispose();
@@ -44,19 +46,22 @@ export function AntigravitySourceView({ source }: { source: NativeTranscriptSour
   }, [source.sourceKey]);
 
   useEffect(() => {
-    const next = controller.current!.update(source).projection;
-    setProjection(next);
-    const ids = disclosureIds(next.rows);
+    const update = controller.current!.update(source);
+    setProjection(update.projection);
+    if (update.kind === 'metadata' || update.kind === 'unchanged') return;
     setOpen((previous) => {
+      if (previous.size === 0) return previous;
+      if (update.kind === 'initial' || update.kind === 'reset') return new Map();
+      const ids = disclosureIds(update.projection.rows);
       if ([...previous.keys()].every((id) => ids.has(id))) return previous;
       return new Map([...previous].filter(([id]) => ids.has(id)));
     });
   }, [source]);
 
-  const disclosures: SessionDisclosureState = {
-    open,
-    onOpenChange: (id, value) => setOpen((previous) => new Map(previous).set(id, value))
-  };
+  const onOpenChange = useCallback((id: string, value: boolean) => {
+    setOpen((previous) => new Map(previous).set(id, value));
+  }, []);
+  const disclosures = useMemo<SessionDisclosureState>(() => ({ open, onOpenChange }), [open, onOpenChange]);
 
   return <AntigravitySessionView source={source} projection={projection} disclosures={disclosures} />;
 }

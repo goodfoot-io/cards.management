@@ -12,6 +12,9 @@ import type { StreamStoreState } from '@cards.management/sdk/stream-store';
 import { useMemo, useSyncExternalStore } from 'react';
 import type { NativeTranscriptSource, TranscriptGeneration, TranscriptSourceKey } from './types';
 
+/** Coalesce a burst of native line updates before notifying React. */
+const NOTIFICATION_BATCH_MS = 16;
+
 /** Structural subset implemented by the SDK store and real in-memory test stores. */
 export interface NativeTranscriptStore {
   getState(): StreamStoreState;
@@ -72,6 +75,7 @@ export function createNativeTranscriptSubscription(
       if (disposed) throw new Error('Native transcript subscription is disposed');
       let active = true;
       let seen = getSnapshot();
+      let scheduled: ReturnType<typeof setTimeout> | undefined;
       const notify = (): void => {
         if (!active || disposed) return;
         const next = getSnapshot();
@@ -79,9 +83,17 @@ export function createNativeTranscriptSubscription(
         seen = next;
         listener();
       };
-      const unsubscribe = store.subscribe(notify);
+      const scheduleNotify = (): void => {
+        if (!active || disposed || scheduled !== undefined) return;
+        scheduled = setTimeout(() => {
+          scheduled = undefined;
+          notify();
+        }, NOTIFICATION_BATCH_MS);
+      };
+      const unsubscribe = store.subscribe(scheduleNotify);
       const cleanup = (): void => {
         active = false;
+        if (scheduled !== undefined) clearTimeout(scheduled);
         unsubscribe();
         cleanups.delete(cleanup);
       };

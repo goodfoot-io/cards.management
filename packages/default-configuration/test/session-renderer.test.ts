@@ -237,6 +237,11 @@ describe('mounted session interaction', () => {
     const claudePath = JSON.stringify(
       join(packageDirectory, 'src/streams/claude-code-session/www/components/expanded/ExpandedView.tsx')
     );
+    const providerViews = [
+      'codex-session/www/components/expanded/CodexExpandedView.tsx',
+      'opencode-session/www/components/expanded/OpencodeExpandedView.tsx',
+      'antigravity-session/www/components/expanded/AntigravityExpandedView.tsx'
+    ].map((path) => JSON.stringify(join(packageDirectory, 'src/streams', path)));
     await writeFile(
       join(directory, 'main.jsx'),
       `
@@ -245,6 +250,22 @@ describe('mounted session interaction', () => {
       import { SessionViewport } from ${viewportPath};
       import { SessionContent } from ${contentPath};
       import { ClaudeSourceView } from ${claudePath};
+      import { CodexSourceView } from ${providerViews[0]};
+      import { OpencodeSourceView } from ${providerViews[1]};
+      import { AntigravitySourceView } from ${providerViews[2]};
+      function ProviderApp() {
+        const [sourceKey, setSourceKey] = useState('first');
+        const [generation, setGeneration] = useState('one');
+        const [lines, setLines] = useState([JSON.stringify({type:'future_record',value:'initial raw'})]);
+        const [meta, setMeta] = useState(null);
+        window.providerHarness = {
+          switch: key => setSourceKey(key), reset: value => setGeneration(value),
+          metadata: () => setMeta({lineCount:lines.length,isActive:false}),
+          append: () => setLines(previous => [...previous, JSON.stringify({type:'future_record',value:'appended raw'})])
+        };
+        const View = location.search === '?codex' ? CodexSourceView : location.search === '?opencode' ? OpencodeSourceView : AntigravitySourceView;
+        return <View source={{sourceKey,generation,filename:'fixture',lines,headLineNumber:1,meta,isLoading:false,error:null}} />;
+      }
       function ClaudeApp() {
         const [lines, setLines] = useState(() => [
           {type:'assistant',uuid:'call-event',message:{content:[{type:'tool_use',id:'call',name:'Bash',input:{command:'pwd'}}]}},
@@ -284,7 +305,7 @@ describe('mounted session interaction', () => {
       }
       window.sessionErrors = [];
       addEventListener('error', event => window.sessionErrors.push(event.message));
-      createRoot(document.getElementById('root')).render(location.search === '?claude' ? <ClaudeApp /> : <App />);
+      createRoot(document.getElementById('root')).render(location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
     `
     );
     await writeFile(
@@ -332,6 +353,38 @@ describe('mounted session interaction', () => {
       await new Promise<void>((resolveClosed) => (server ? server.close(() => resolveClosed()) : resolveClosed()));
       if (directory) await rm(directory, { recursive: true, force: true });
     }
+  });
+
+  it.each([
+    'codex',
+    'opencode',
+    'antigravity'
+  ])('retains %s disclosures on append and metadata but clears source and generation state', async (provider) => {
+    await browser('open', `${origin}/?${provider}`);
+    const result = await evaluate<{
+      appended: string;
+      metadata: string;
+      switchedBack: string;
+      resetBack: string;
+      errors: string[];
+    }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      const button = () => document.querySelector('[data-session-disclosure] button');
+      await frame(); button().click(); await frame();
+      providerHarness.append(); await frame(); const appended = button().getAttribute('aria-expanded');
+      providerHarness.metadata(); await frame(); const metadata = button().getAttribute('aria-expanded');
+      providerHarness.switch('second'); await frame(); providerHarness.switch('first'); await frame();
+      const switchedBack = button().getAttribute('aria-expanded');
+      button().click(); await frame(); providerHarness.reset('two'); await frame(); providerHarness.reset('one'); await frame();
+      return {appended, metadata, switchedBack, resetBack:button().getAttribute('aria-expanded'), errors:sessionErrors};
+    })()`);
+    expect(result).toEqual({
+      appended: 'true',
+      metadata: 'true',
+      switchedBack: 'false',
+      resetBack: 'false',
+      errors: []
+    });
   });
 
   it('keeps the parent scroller registered while child content opens, appends and closes', async () => {
