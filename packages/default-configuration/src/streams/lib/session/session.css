@@ -81,3 +81,5 @@
 :root[data-vscode-theme-kind="high-contrast"] .session-content button:hover, :root[data-vscode-theme-kind="high-contrast"] .session-controls button:hover { background: transparent; outline: 1px dashed var(--vscode-contrastActiveBorder); }
 /* Keep native DOM and accessibility content while letting Chromium skip offscreen layout. */
 .session-row { content-visibility: auto; contain-intrinsic-block-size: auto 92px; }
+/* Expanded history avoids native activation scans while retaining each row's margin, positioning and paint ownership. */
+.session-viewport > .session-content > .session-batch > .session-row { content-visibility: visible; contain: layout paint style; contain-intrinsic-block-size: none; }

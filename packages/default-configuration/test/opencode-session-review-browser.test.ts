@@ -323,15 +323,38 @@ describe('OpenCode composed revision controls', () => {
 
   it('yields pending regroup restoration to explicit reader navigation', async () => {
     await browser('open', `${origin}/?row-bookmarks`);
-    const result = await evaluate<{ start: boolean; visible: boolean; id: string }>(`(async()=>{
+    const result = await evaluate<{
+      priorOffset: number;
+      requestedOffset: number;
+      settledOffset: number;
+      requestedScroll: number;
+      settledScroll: number;
+      registered: number;
+      visible: boolean;
+      id: string;
+      intent: string;
+      errors: string[];
+    }>(`(async()=>{
       const wait=()=>new Promise(r=>setTimeout(r,250));await wait();
-      rowHarness.navigate('fallback');await wait();rowHarness.regroup();rowHarness.navigate('first');
-      const target=document.querySelector('[data-session-id="first"]');
+      rowHarness.navigate('fallback');await wait();
       const root=document.querySelector('.session-viewport');
-      await wait();const settled=target.getBoundingClientRect().top-root.getBoundingClientRect().top;
-      return {start:root.scrollTop===0,visible:settled>=0&&settled<root.clientHeight,id:target.dataset.sessionId};
+      const offset=element=>element.getBoundingClientRect().top-root.getBoundingClientRect().top;
+      const priorOffset=offset(document.querySelector('[data-session-id="first"]'));
+      rowHarness.regroup();rowHarness.navigate('first');
+      const target=document.querySelector('[data-session-id="first"]');
+      const requestedOffset=offset(target),requestedScroll=root.scrollTop;
+      await wait();const settledOffset=offset(target);
+      return {priorOffset,requestedOffset,settledOffset,requestedScroll,settledScroll:root.scrollTop,
+        registered:root.querySelectorAll('[data-session-id="first"]').length,
+        visible:settledOffset>=0&&settledOffset<root.clientHeight,id:target.dataset.sessionId,
+        intent:document.querySelector('[role="status"]').textContent,errors:sessionErrors};
     })()`);
-    expect(result).toEqual({ start: true, visible: true, id: 'first' });
+    expect(Math.abs(result.priorOffset)).toBeGreaterThan(1);
+    expect(Math.abs(result.requestedOffset)).toBeLessThan(1);
+    expect(Math.abs(result.settledOffset)).toBeLessThan(1);
+    expect(Math.abs(result.settledOffset - result.requestedOffset)).toBeLessThan(1);
+    expect(Math.abs(result.settledScroll - result.requestedScroll)).toBeLessThan(1);
+    expect(result).toMatchObject({ registered: 1, visible: true, id: 'first', intent: 'Reading history', errors: [] });
   });
 
   it('fully inspects five MiB native input and result with one bounded revision mounted', async () => {

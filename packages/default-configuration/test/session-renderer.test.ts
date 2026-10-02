@@ -359,6 +359,50 @@ describe('mounted session interaction', () => {
         };
         return <ClaudeSourceView source={{sourceKey:'test/claude',generation:'one',filename:'fixture',lines,headLineNumber:1,meta:null,isLoading:false,error:null}} />;
       }
+      const readerChildRows = [{id:'child',kind:'message',role:'user',provenance:[],
+        parts:[{id:'child-text',kind:'text',text:'nested content',provenance:[]}]}];
+      const readerRows = ['first','last'].map((id,index) => ({
+        id,anchor:id === 'last' ? 'turn' : undefined,kind:'provider',providerKind:'probe',data:id,parts:[],
+        provenance:[{sourceKey:'fixture',generation:'one',lineNumber:index+1,selector:'record'}]
+      }));
+      const native = id => ({id,kind:'notice',label:'Native '+id,tone:'info',
+        parts:[{id:id+'-raw',kind:'raw',label:'Native detail '+id,text:'native bounded code',reason:'unknown',provenance:[]}],
+        provenance:[{sourceKey:'fixture',generation:'one',lineNumber:id === 'native-first' ? 0 : 4,selector:'record'}]
+      });
+      readerRows.unshift(native('native-first')); readerRows.push(native('native-last'));
+      const readerRegistry = {probe:{
+        disclosureKeys:(leaf,data) => ['detail-'+data],
+        render:({data,disclosures,layout}) => <div style={{marginBlock:data === 'first' ? '6px' : '18px'}}>
+          <button id={'focus-'+data}>Focus {data}</button>
+          <div className="session-markdown"><pre id={'code-'+data}>START {'unbroken'.repeat(100)} END</pre></div>
+          <span data-fixed={data} style={{position:'fixed',insetBlockStart:0,insetInlineEnd:0}}>custom positioned</span>
+          <SessionDisclosure id={'detail-'+data} label={'Detail '+data} context={{disclosures,layout}}>
+            <SessionContent rows={readerChildRows.map(row => ({...row,id:row.id+'-'+data,
+              parts:row.parts.map(part => ({...part,id:part.id+'-'+data}))}))} disclosures={disclosures} />
+          </SessionDisclosure>
+        </div>
+      }};
+      function ReaderApp() {
+        const [currentRows,setRows] = useState(readerRows);
+        const [open,setOpen] = useState(new Map([
+          ['detail-first',true],['detail-last',true],['native-first-raw',true],['native-last-raw',true]
+        ]));
+        const onOpenChange = useCallback((id,value) => setOpen(previous => new Map(previous).set(id,value)),[]);
+        const handle = useRef(null);
+        window.readerHarness = {
+          hold:() => handle.current.hold(),navigate:id => handle.current.navigateTo(id),
+          capture:() => handle.current.captureAnchor(),follow:() => handle.current.followLatest(),
+          append:() => setRows(previous => [...previous,native('appended-'+previous.length)]),
+          // The repeated native bucket moves the existing held row to a different batch owner.
+          prepend:() => setRows(previous => [native('prepended'),...previous]),
+          toggle:() => setOpen(previous => new Map(previous).set('native-first-raw',!previous.get('native-first-raw')))
+        };
+        return <>
+          <SessionViewport rows={currentRows} disclosures={{open,onOpenChange}} providerRows={readerRegistry} viewportRef={handle} />
+          <aside id="reader-caller"><SessionContent rows={readerChildRows} disclosures={{open,onOpenChange}} /></aside>
+        </>;
+      }
+
       const makeRow = n => ({ id: 'row-' + n, kind: 'message', role: 'user', anchor: 'turn',
         provenance: [{ sourceKey: 'main', generation: 'one', lineNumber: n, selector: 'record' }],
         parts: [{ id: 'text-' + n, kind: 'text', text: 'Message ' + n, provenance: [] },
@@ -386,7 +430,7 @@ describe('mounted session interaction', () => {
       }
       window.sessionErrors = [];
       addEventListener('error', event => window.sessionErrors.push(event.message));
-      createRoot(document.getElementById('root')).render(location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?viewport-cache' ? <App large /> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
+      createRoot(document.getElementById('root')).render(location.search === '?reader-native' ? <ReaderApp /> : location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?viewport-cache' ? <App large /> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
     `
     );
     await writeFile(
@@ -433,6 +477,134 @@ describe('mounted session interaction', () => {
     } finally {
       await new Promise<void>((resolveClosed) => (server ? server.close(() => resolveClosed()) : resolveClosed()));
       if (directory) await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it.each([900, 320])('preserves the reader through native prepend and regroup at %ipx', async (width) => {
+    await browser('set', 'viewport', String(width), '700');
+    try {
+      await browser('open', `${origin}/?reader-native`);
+      await browser('wait', '--text', 'Native native-last');
+      const result = await evaluate<{
+        opening: { focus: string; intent: string; top: number; settledTop: number };
+        before: { top: number; focus: string; selection: string };
+        steps: { action: string; top: number; focus: string; selection: string }[];
+        followed: boolean;
+        followedAppend: boolean;
+        yielded: boolean;
+        uniqueRows: boolean;
+        errors: string[];
+      }>(`(async () => {
+        const settle = async () => { for(let i=0;i<6;i++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+        const root = document.querySelector('.session-viewport');
+        const leaf = id => [...root.querySelectorAll('[data-session-id]')].find(element => element.dataset.sessionId === id);
+        const top = element => element.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        const status = () => document.querySelector('.session-controls [role=status]').textContent;
+        const opening = {focus:document.activeElement.tagName,intent:status(),top:top(leaf('last'))};
+        await settle(); opening.settledTop = top(leaf('last'));
+        readerHarness.navigate('last'); await settle();
+        document.querySelector('#focus-last').focus();
+        const range = document.createRange(); range.selectNodeContents(document.querySelector('#code-last'));
+        getSelection().removeAllRanges(); getSelection().addRange(range); await settle(); readerHarness.hold();
+        const saved = readerHarness.capture();
+        const state = () => ({top:top(leaf(saved.id)),focus:document.activeElement.id,selection:getSelection().toString()});
+        const before = state(), steps = [];
+        for(const action of ['toggle','append','prepend']) { readerHarness[action](); await settle(); steps.push({action,...state()}); }
+        getSelection().removeAllRanges(); document.activeElement.blur(); await settle();
+        readerHarness.follow(); await settle();
+        const followed = root.scrollHeight - root.scrollTop - root.clientHeight < 1 && status() === 'Following latest';
+        readerHarness.append(); await settle();
+        const followedAppend = root.scrollHeight - root.scrollTop - root.clientHeight < 1 && status() === 'Following latest';
+        root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-1})); root.scrollTop -= 40; await settle();
+        const ids = [...root.querySelectorAll('.session-row[data-session-id]')].map(element => element.dataset.sessionId);
+        return {opening,before,steps,followed,followedAppend,yielded:status() === 'Reading history',uniqueRows:new Set(ids).size === ids.length,errors:sessionErrors};
+      })()`);
+      expect(result.before.selection).toBe(`START ${'unbroken'.repeat(100)} END`);
+      expect(result.before.focus).toBe('focus-last');
+      for (const step of result.steps) {
+        expect(Math.abs(step.top - result.before.top), step.action).toBeLessThan(1);
+        expect(step.focus, step.action).toBe(result.before.focus);
+        expect(step.selection, step.action).toBe(result.before.selection);
+      }
+      expect(result.opening.focus).toBe('BODY');
+      expect(result.opening.intent).toBe('Reading history');
+      expect(result.opening.top).toBeGreaterThan(-1);
+      expect(result.opening.top).toBeLessThan(26);
+      expect(Math.abs(result.opening.settledTop - result.opening.top)).toBeLessThan(1);
+      expect(result.followed).toBe(true);
+      expect(result.followedAppend).toBe(true);
+      expect(result.yielded).toBe(true);
+      expect(result.uniqueRows).toBe(true);
+      expect(result.errors).toEqual([]);
+    } finally {
+      await browser('set', 'viewport', '1280', '720');
+    }
+  });
+
+  it.each([900, 320])('preserves fully realized row painting and caller-owned composition at %ipx', async (width) => {
+    await browser('set', 'viewport', String(width), '2200');
+    try {
+      await browser('open', `${origin}/?reader-native`);
+      await browser('wait', '--text', 'Native native-last');
+      await browser('press', 'Tab');
+      const snapshots: {
+        fixed: { delta: number; rightDelta: number }[];
+        code: { length: number; overflow: number }[];
+        focus: { visible: boolean; width: string; offset: string };
+        selection: string;
+        nested: { visibility: string; contain: string; intrinsic: string }[];
+        caller: { visibility: string; contain: string; intrinsic: string };
+      }[] = [];
+      const screenshots: Buffer[] = [];
+      for (const reference of [true, false]) {
+        const snapshot = await evaluate<(typeof snapshots)[number]>(`(async () => {
+          const root = document.querySelector('.session-viewport');
+          document.documentElement.style.setProperty('--vscode-focusBorder','Highlight');
+          const rows = [...root.querySelectorAll(':scope > .session-content > .session-batch > .session-row')];
+          // Compare the old row's used containment with fully realized content, not its offscreen estimate.
+          for(const row of rows) {
+            for(const property of ['content-visibility','contain','contain-intrinsic-block-size']) row.style.removeProperty(property);
+            if(${reference}) { row.style.contentVisibility = 'auto'; row.style.contain = 'none'; row.style.containIntrinsicBlockSize = 'auto 92px'; }
+          }
+          const settle = async () => { for(let i=0;i<6;i++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+          root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:1})); root.scrollTop = 0;
+          for(const element of root.querySelectorAll('.session-row > *, .session-part')) element.getBoundingClientRect();
+          await settle(); readerHarness.navigate('native-last'); await settle();
+          root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:1})); root.scrollTop = 0;
+          document.querySelector('#focus-last').focus();
+          const range = document.createRange(); range.selectNodeContents(document.querySelector('#code-last'));
+          getSelection().removeAllRanges(); getSelection().addRange(range); await settle();
+          const style = element => { const css = getComputedStyle(element); return {visibility:css.contentVisibility,contain:css.contain,intrinsic:css.containIntrinsicBlockSize}; };
+          const button = document.querySelector('#focus-last'), css = getComputedStyle(button);
+          return {
+            fixed:[...root.querySelectorAll('[data-fixed]')].map(element => {const child=element.getBoundingClientRect(),row=element.closest('.session-row').getBoundingClientRect();return {delta:child.top-row.top,rightDelta:child.right-row.right};}),
+            code:[...root.querySelectorAll('.session-markdown pre')].map(element => ({length:element.textContent.length,overflow:element.scrollWidth-element.clientWidth})),
+            focus:{visible:button.matches(':focus-visible'),width:css.outlineWidth,offset:css.outlineOffset},selection:getSelection().toString(),
+            nested:[...root.querySelectorAll('.session-content .session-content .session-row')].map(style),caller:style(document.querySelector('#reader-caller .session-row'))
+          };
+        })()`);
+        snapshots.push(snapshot);
+        const screenshot = join(directory, `reader-paint-${width}-${reference}.png`);
+        await browser('screenshot', screenshot);
+        screenshots.push(await readFile(screenshot));
+      }
+      expect(snapshots[1]).toEqual(snapshots[0]);
+      expect(screenshots[1]!.equals(screenshots[0]!)).toBe(true);
+      expect(snapshots[1]!.fixed).toEqual([
+        { delta: 0, rightDelta: 0 },
+        { delta: 0, rightDelta: 0 }
+      ]);
+      expect(snapshots[1]!.code).toEqual([
+        { length: 810, overflow: 0 },
+        { length: 810, overflow: 0 }
+      ]);
+      expect(snapshots[1]!.focus).toEqual({ visible: true, width: '1px', offset: '2px' });
+      expect(snapshots[1]!.selection).toBe(`START ${'unbroken'.repeat(100)} END`);
+      expect(snapshots[1]!.nested).toHaveLength(2);
+      for (const style of [...snapshots[1]!.nested, snapshots[1]!.caller])
+        expect(style).toEqual({ visibility: 'auto', contain: 'none', intrinsic: 'auto 92px' });
+    } finally {
+      await browser('set', 'viewport', '1280', '720');
     }
   });
 
