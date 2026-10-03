@@ -64,7 +64,7 @@ function resolveBash(): string {
  */
 function makeFakeClient(): CardsClient {
   return {
-    addBranch: async () => ({ outcome: 'created', revision: 'test-revision' }),
+    addBranch: async () => ({ outcome: 'upserted' }),
     removeBranch: async () => undefined
   } as unknown as CardsClient;
 }
@@ -169,7 +169,12 @@ describe('createWorktree per-worktree hook provisioning', () => {
   });
 
   it('writes .cards/CARD_ID and .cards/CARD_ORIGINAL_HOOK_PATH before settle resolves (A2)', async () => {
-    const { path: wPath, settle } = await createAndOutfit('cards/main-1/1', 'main-1', repoDir, compiledScriptPaths);
+    const { path: wPath, settle } = await createAndOutfit(
+      'feature/main-1/work',
+      'main-1',
+      repoDir,
+      compiledScriptPaths
+    );
 
     // Inspect immediately — do NOT await settle. The agent could commit here.
     const cardId = await fs.readFile(path.join(wPath, '.cards', 'CARD_ID'), 'utf8');
@@ -181,7 +186,12 @@ describe('createWorktree per-worktree hook provisioning', () => {
   });
 
   it('sets per-worktree core.hooksPath, with extensions.worktreeConfig set first (D9), before settle resolves', async () => {
-    const { path: wPath, settle } = await createAndOutfit('cards/main-2/1', 'main-2', repoDir, compiledScriptPaths);
+    const { path: wPath, settle } = await createAndOutfit(
+      'feature/main-2/work',
+      'main-2',
+      repoDir,
+      compiledScriptPaths
+    );
 
     // Both git-config invariants must hold before settle is awaited.
     const worktreeConfigEnabled = execFileSync('git', ['-C', repoDir, 'config', 'extensions.worktreeConfig'], {
@@ -195,7 +205,7 @@ describe('createWorktree per-worktree hook provisioning', () => {
   });
 
   it('writes a dispatcher script for every client-side hook type plus the three Cards .mjs', async () => {
-    const { settle } = await createAndOutfit('cards/main-3/1', 'main-3', repoDir, compiledScriptPaths);
+    const { settle } = await createAndOutfit('feature/main-3/work', 'main-3', repoDir, compiledScriptPaths);
     await settle;
 
     const entries = (await fs.readdir(sharedHooksDir)).sort();
@@ -231,7 +241,7 @@ describe('createWorktree per-worktree hook provisioning', () => {
   // ELECTRON_RUN_AS_NODE=1, so without the export every commit pops a focus-
   // stealing Electron GUI window (very visible on a macOS host).
   it('exports ELECTRON_RUN_AS_NODE in the Cards-hook dispatchers', async () => {
-    const { settle } = await createAndOutfit('cards/main-6/1', 'main-6', repoDir, compiledScriptPaths);
+    const { settle } = await createAndOutfit('feature/main-6/work', 'main-6', repoDir, compiledScriptPaths);
     await settle;
 
     for (const hook of ['post-commit', 'pre-commit', 'post-rewrite']) {
@@ -251,7 +261,7 @@ describe('createWorktree per-worktree hook provisioning', () => {
   });
 
   it('throws the D10a guard when outfit is given an empty compiledScriptPaths map', async () => {
-    const { path: wPath, settle } = await createWorktree('cards/main-4/1', { cwd: repoDir });
+    const { path: wPath, settle } = await createWorktree('feature/main-4/work', { cwd: repoDir });
     await settle;
     await expect(
       outfitWorktreeForCard(makeFakeClient(), wPath, {
@@ -263,7 +273,7 @@ describe('createWorktree per-worktree hook provisioning', () => {
   });
 
   it('rejects an empty cardId', async () => {
-    const { path: wPath, settle } = await createWorktree('cards/main-5/1', { cwd: repoDir });
+    const { path: wPath, settle } = await createWorktree('feature/main-5/work', { cwd: repoDir });
     await settle;
     await expect(
       outfitWorktreeForCard(makeFakeClient(), wPath, {
@@ -360,7 +370,7 @@ describe('generated dispatcher scripts', () => {
     const homeDir = path.join(tmpBase, 'home');
     await fs.mkdir(homeDir);
     process.env = { ...originalEnv, [CARDS_WORKTREES_DIR_KEY]: worktreesDir, HOME: homeDir };
-    const { path: wPath, settle } = await createAndOutfit('cards/main-9/1', 'main-9', repoDir, {
+    const { path: wPath, settle } = await createAndOutfit('feature/main-9/work', 'main-9', repoDir, {
       'pre-commit': path.join(mjsDir, 'pre-commit.mjs'),
       'post-commit': path.join(mjsDir, 'post-commit.mjs'),
       'post-rewrite': path.join(mjsDir, 'post-rewrite.mjs')

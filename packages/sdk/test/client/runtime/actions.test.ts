@@ -71,7 +71,9 @@ describe('runtime action HTTP client', () => {
 
     await client?.launch('main-672', REQUEST);
 
-    expect(requests).toEqual([{ method: 'POST', url: '/cards/main-672/runtime/actions', body: REQUEST }]);
+    expect(requests).toEqual([
+      { method: 'POST', url: '/cards/main-672/runtime/actions', body: { ...REQUEST, worktreeProtocol: 2 } }
+    ]);
   });
 
   it('rejects a public launch response that leaks protected runtime credentials', async () => {
@@ -251,7 +253,10 @@ describe('runtime action HTTP client', () => {
 
     await reconstructed.launch('main-672', REQUEST);
 
-    expect(requests.map(({ body }) => body)).toEqual([REQUEST, REQUEST]);
+    expect(requests.map(({ body }) => body)).toEqual([
+      { ...REQUEST, worktreeProtocol: 2 },
+      { ...REQUEST, worktreeProtocol: 2 }
+    ]);
   });
 
   it('scopes the same retry and retrieval IDs to separately encoded card routes', async () => {
@@ -275,6 +280,9 @@ describe('runtime action HTTP client', () => {
       '/cards/main%2F672/runtime/actions/request-1',
       '/cards/other%20card/runtime/actions/request-1'
     ]);
-    expect(requests.slice(0, 2).map(({ body }) => body)).toEqual([REQUEST, REQUEST]);
+    expect(requests.slice(0, 2).map(({ body }) => body)).toEqual([
+      { ...REQUEST, worktreeProtocol: 2 },
+      { ...REQUEST, worktreeProtocol: 2 }
+    ]);
   });
 });

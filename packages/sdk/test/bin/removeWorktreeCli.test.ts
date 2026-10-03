@@ -33,33 +33,23 @@ async function startStubApi(discoveryPath: string): Promise<{
 }> {
   const removeBranchCalls: Array<{ cardId: string; name: string }> = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    // The claim phase reads the branch registry, takes the cleanup owner
-    // token, and only then deletes — mirror those routes faithfully, because
-    // removeWorktreeForCard refuses deletion when the authority cannot answer
-    // them. Query strings (expectedRevision/expectedCleanupOwner) are stripped
-    // before matching, and the branch name arrives percent-encoded.
+    // Ordinary registrations are static projections. Capture the unregister
+    // request after local teardown; branch names arrive percent-encoded.
     const url = new URL(req.url ?? '/', 'http://localhost');
     const branchMatch = /^\/cards\/([^/]+)\/branches\/([^/]+)$/.exec(url.pathname);
-    const ownerMatch = /^\/cards\/([^/]+)\/branches\/([^/]+)\/owner$/.exec(url.pathname);
     if (req.method === 'GET' && /^\/cards\/([^/]+)\/branches$/.exec(url.pathname)) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({
           branches: [
             {
-              name: 'cards/main-88/1',
-              revision: 'stub-revision-1',
+              name: 'feature/main-88/work',
               parentBranch: 'master',
               addedAt: new Date().toISOString()
             }
           ]
         })
       );
-      return;
-    }
-    if (req.method === 'PATCH' && ownerMatch) {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ outcome: 'applied', revision: 'stub-revision-2' }));
       return;
     }
     if (req.method === 'DELETE' && branchMatch) {
@@ -298,7 +288,7 @@ describe('remove-worktree CLI', () => {
     const stub = await startStubApi(discoveryPath);
     stubStop = stub.stop;
 
-    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'cards/main-88/1'], repoDir, {
+    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'feature/main-88/work'], repoDir, {
       CARDS_WORKTREES_DIR: worktreesDir,
       EXTENSION_PATH: extDir,
       CARDS_DISCOVERY_PATH: discoveryPath
@@ -340,7 +330,7 @@ describe('remove-worktree CLI', () => {
     const stub = await startStubApi(discoveryPath);
 
     // Create while the stub is up (async to avoid the in-process deadlock).
-    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'cards/main-88/1'], repoDir, {
+    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'feature/main-88/work'], repoDir, {
       CARDS_WORKTREES_DIR: worktreesDir,
       EXTENSION_PATH: extDir,
       CARDS_DISCOVERY_PATH: discoveryPath
@@ -360,7 +350,7 @@ describe('remove-worktree CLI', () => {
     await expect(fs.access(worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
   }, 30000);
 
-  it('exits 2 fail-closed and keeps the worktree when the discovery server is unreachable for a bound worktree', async () => {
+  it('bounds an unreachable API unregister and removes an ordinary bound worktree with a warning', async () => {
     tmpBase = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'rwt-cli-')));
     const repoDir = path.join(tmpBase, 'repo');
     const worktreesDir = path.join(tmpBase, 'worktrees');
@@ -378,20 +368,16 @@ describe('remove-worktree CLI', () => {
     const discoveryPath = path.join(tmpBase, 'cards-api.json');
     const stub = await startStubApi(discoveryPath);
 
-    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'cards/main-88/1'], repoDir, {
+    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'feature/main-88/work'], repoDir, {
       CARDS_WORKTREES_DIR: worktreesDir,
       EXTENSION_PATH: extDir,
       CARDS_DISCOVERY_PATH: discoveryPath
     });
     const worktreePath = (JSON.parse(createOut.trim()) as { worktree: string }).worktree;
 
-    // Take the real server down but leave a WELL-FORMED discovery file pointing
-    // at a dead port: createCardsClient returns a client (discovery succeeds),
-    // and the cleanup-ownership claim hits a network error. retryOnNetworkError
-    // is disabled, so the command must fail fast instead of hanging forever.
-    // A claim that cannot be proven refuses deletion (fail-closed): the
-    // worktree stays on disk and the branch record stays registered, recoverable
-    // once the server returns.
+    // Keep discovery valid but make unregister unreachable. Ordinary worktrees
+    // are removed locally first; a failed static-registration removal is a
+    // bounded warning and does not resurrect the checkout.
     await stub.stop();
     await fs.writeFile(
       discoveryPath,
@@ -411,14 +397,9 @@ describe('remove-worktree CLI', () => {
     });
     const elapsedMs = Date.now() - startedAt;
 
-    expect(result.exitCode).toBe(2);
-    expect(
-      await fs.access(worktreePath).then(
-        () => true,
-        () => false
-      )
-    ).toBe(true);
-    expect(result.stderr).not.toContain('branch unregister failed');
+    expect(result.exitCode).toBe(0);
+    await expect(fs.access(worktreePath)).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(result.stderr).toContain('branch unregister failed');
     // Bounded: must not hang on the forever-retry path (cap is 30s/backoff).
     expect(elapsedMs).toBeLessThan(20000);
   }, 30000);
@@ -442,15 +423,14 @@ describe('remove-worktree CLI', () => {
     const stub = await startStubApi(discoveryPath);
     stubStop = stub.stop;
 
-    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'cards/main-88/1'], repoDir, {
+    const createOut = await runCreateWorktreeAsync(['--card-id', 'main-88', 'feature/main-88/work'], repoDir, {
       CARDS_WORKTREES_DIR: worktreesDir,
       EXTENSION_PATH: extDir,
       CARDS_DISCOVERY_PATH: discoveryPath
     });
     const worktreePath = (JSON.parse(createOut.trim()) as { worktree: string }).worktree;
 
-    // Replace the stub with one that serves the claim phase (branch registry,
-    // cleanup-owner token) but returns 500 for the DELETE, so removeBranch
+    // Replace the stub with one that returns 500 for DELETE, so removeBranch
     // throws an ApiError (not a network error) — the unregister phase fails but
     // disk teardown already succeeded. The CLI classifies this as a
     // BranchUnregisterError and exits 0 (fail-open), not as a teardown failure.
@@ -469,19 +449,13 @@ describe('remove-worktree CLI', () => {
           JSON.stringify({
             branches: [
               {
-                name: 'cards/main-88/1',
-                revision: 'stub-revision-1',
+                name: 'feature/main-88/work',
                 parentBranch: 'master',
                 addedAt: new Date().toISOString()
               }
             ]
           })
         );
-        return;
-      }
-      if (req.method === 'PATCH' && /^\/cards\/([^/]+)\/branches\/([^/]+)\/owner$/.exec(url.pathname)) {
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ outcome: 'applied', revision: 'stub-revision-2' }));
         return;
       }
       res.writeHead(200, { 'content-type': 'application/json' });

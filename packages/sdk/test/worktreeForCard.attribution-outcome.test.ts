@@ -88,12 +88,12 @@ import { findAgentPid } from '../src/process-tree.js';
  */
 function makeClient(): CardsClient {
   return {
-    addBranch: async () => ({ outcome: 'upserted', revision: 'test-revision' }),
+    addBranch: async () => ({ outcome: 'upserted' }),
     removeBranch: async () => undefined
   } as unknown as CardsClient;
 }
 
-const WORKTREE_PATH = '/worktrees/cards/main-196/1';
+const WORKTREE_PATH = '/worktrees/feature/main-196/work';
 const BASE_OPTIONS = {
   cardId: 'main-196',
   parentBranch: 'main',
@@ -116,7 +116,7 @@ describe('outfitWorktreeForCard attribution outcome', () => {
       const argv = callArgs[1] as string[];
       const cb = callArgs[callArgs.length - 1] as (err: null, result: { stdout: string; stderr: string }) => void;
       const isRevParse = argv.includes('rev-parse');
-      cb(null, { stdout: isRevParse ? 'cards/main-196/1\n' : '', stderr: '' });
+      cb(null, { stdout: isRevParse ? 'feature/main-196/work\n' : '', stderr: '' });
       return {} as ReturnType<typeof execFile>;
     });
   });

@@ -90,11 +90,11 @@ describe('createWorktreeForCard parent-branch durability', () => {
     const client = {
       addBranch: async (...args: unknown[]) => {
         addBranchCalls.push(args);
-        return { outcome: 'created', revision: 'test-revision' };
+        return { outcome: 'upserted' };
       }
     } as unknown as CardsClient;
 
-    const newBranch = 'cards/test-1/1';
+    const newBranch = 'feature/test-1/work';
     const result = await createWorktreeForCard(client, newBranch, {
       cwd: repoDir,
       cardId: 'test-1',
