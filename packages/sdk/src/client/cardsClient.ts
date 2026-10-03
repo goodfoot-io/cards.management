@@ -788,12 +788,12 @@ export class CardsClient {
    *
    * @param cardId - Unique identifier of the card whose branches to retrieve.
    * @param options - Optional query parameters.
-   * @param options.workspacePath - Workspace path for computing isMerged and commit containment.
+   * @param options.workspacePath - Overrides the configured workspace for merge and commit containment.
    * @returns Promise resolving to branches response.
    */
   async getBranches(cardId: string, options?: { workspacePath?: string }): Promise<BranchesResponse> {
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/branches`, {
-      workspacePath: options?.workspacePath
+      workspacePath: options?.workspacePath ?? this.options.workspacePath
     });
     return this.request(() => this.getHttpClient().get<BranchesResponse>(url));
   }
