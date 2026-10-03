@@ -114,8 +114,8 @@ beforeEach(async () => {
 
   // Default: no existing branches → createWorktree is called
   globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-    if (opts?.method === 'PATCH')
-      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
+    if (opts?.method === 'PATCH' && typeof url === 'string' && url.includes('/branches'))
+      throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
         new Response(
@@ -369,8 +369,8 @@ describe('Default Actions', () => {
       });
 
       globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-        if (opts?.method === 'PATCH')
-          return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
+        if (opts?.method === 'PATCH' && typeof url === 'string' && url.includes('/branches'))
+          throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
         if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
           return Promise.resolve(
             new Response(

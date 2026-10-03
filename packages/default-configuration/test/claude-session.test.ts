@@ -125,8 +125,8 @@ async function setupDefaultMocks(): Promise<void> {
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
       return Promise.resolve(new Response(JSON.stringify({}), { status: 201 }));
     }
-    if (opts?.method === 'PATCH')
-      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
+    if (opts?.method === 'PATCH' && typeof url === 'string' && url.includes('/branches'))
+      throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
     return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
   });
 
@@ -160,7 +160,7 @@ async function setupDefaultMocks(): Promise<void> {
       cardId: opts.cardId,
       compiledScriptPaths: opts.compiledScriptPaths
     };
-    return createWorktree(ref, forwardedOptions).then((result) => ({ ...result, registrationRevision: 'revision-a' }));
+    return createWorktree(ref, forwardedOptions);
   });
 }
 
@@ -283,8 +283,6 @@ function _configureBranchesResponse(
     worktree?: string;
     parentBranch: string;
     addedAt: string;
-    revision?: string;
-    activeExecutionOwner?: string;
     exists?: boolean;
   }>
 ): void {
@@ -301,7 +299,7 @@ function _configureBranchesResponse(
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'PATCH') {
-      return Promise.resolve(new Response(JSON.stringify({ outcome: 'idempotent', revision: 'revision-b' })));
+      throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
     }
     return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
   });

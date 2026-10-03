@@ -171,8 +171,8 @@ beforeEach(async () => {
   });
 
   globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-    if (opts?.method === 'PATCH')
-      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
+    if (opts?.method === 'PATCH' && typeof url === 'string' && url.includes('/branches'))
+      throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
         new Response(
@@ -526,6 +526,7 @@ describe('launch action — antigravity branch', () => {
       return realFsp.readFile(path, encoding);
     }) as never);
 
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       const action = (await import('../src/actions/launch.js')).default;
       const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
@@ -572,6 +573,10 @@ describe('launch action — antigravity branch', () => {
           deps
         )
       ).rejects.toBeInstanceOf(HandlerFailure);
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledWith(
+        '[antigravity-cards-hooks] failure at action-env: [action-env] the Cards action environment is missing or malformed\n'
+      );
 
       // The reason carries the bracketed stage because the transport persists
       // the HandlerFailure's own message — the same shape the committed spike
@@ -590,6 +595,7 @@ describe('launch action — antigravity branch', () => {
         /runtime hook failure \(action-env: \[action-env\] the Cards action environment is missing or malformed\)/
       );
     } finally {
+      stderr.mockRestore();
       delete process.env['CARDS_HOME'];
       delete process.env['CARD_ID'];
       delete process.env['ANTIGRAVITY_SESSION_ID'];
@@ -712,6 +718,7 @@ describe('launch action — antigravity branch', () => {
       return realFsp.readFile(path, encoding);
     }) as never);
 
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     try {
       const action = (await import('../src/actions/launch.js')).default;
       const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
@@ -754,6 +761,10 @@ describe('launch action — antigravity branch', () => {
           deps
         )
       ).rejects.toBeInstanceOf(HandlerFailure);
+      expect(stderr).toHaveBeenCalledOnce();
+      expect(stderr).toHaveBeenCalledWith(
+        '[antigravity-cards-hooks] failure at input: [input] Antigravity hook input field "conversationId" must be a non-empty string\n'
+      );
 
       const retryPath = join(
         cardsHome,
@@ -773,6 +784,7 @@ describe('launch action — antigravity branch', () => {
       child.emit('close', 0);
       await expect(promise).rejects.toThrow(/runtime hook failure \(input: \[input\]/);
     } finally {
+      stderr.mockRestore();
       delete process.env['CARDS_HOME'];
       delete process.env['CARD_ID'];
       delete process.env['ANTIGRAVITY_SESSION_ID'];

@@ -5,12 +5,10 @@
  * The fixtures are byte-identical copies of the captures committed with the
  * `spike/agy-stream-json-shape/` harness and are re-captured by its `run.sh`,
  * never hand-authored: a hand-written transcript is precisely the drift this
- * suite exists to catch. The launcher requests `--output-format stream-json`
- * (see {@link buildAntigravityArgs}), whose result record nests
- * `conversation_id`/`status` under `result`; the field set the retired parser
- * demanded at the top level belongs to `--output-format json`, the mode the
- * authentication probe uses. Driving the real capture through the real handler
- * is what keeps a minimal result adapter honest about which shape it reads.
+ * suite exists to catch. The launcher ignores stdout records; its successful
+ * outcome requires the admitted assignment before agent spawn, a healthy root
+ * exit and completed transcript finalization. Replaying captured stdout keeps
+ * that host channel present without treating its record shape as success proof.
  *
  * A clean exit is not sufficient, and the committed truncation captures are the
  * evidence: a `--print-timeout` run exits 0 with a record whose `status` is
@@ -194,8 +192,8 @@ beforeEach(async () => {
   });
 
   globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-    if (opts?.method === 'PATCH')
-      return Promise.resolve(new Response(JSON.stringify({ outcome: 'applied', revision: 'revision-claimed' })));
+    if (opts?.method === 'PATCH' && typeof url === 'string' && url.includes('/branches'))
+      throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
     if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
       return Promise.resolve(
         new Response(
@@ -269,10 +267,10 @@ afterEach(() => {
  */
 function createMockContext(): ActionContext {
   return {
-    assignWorktree: async () => ({
+    assignWorktree: vi.fn(async () => ({
       branch: 'cards/card-123/1',
-      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
-    }),
+      worktreePath: WORKTREE_PATH
+    })),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -400,7 +398,26 @@ describe('background launch outcome — real agy captures', () => {
     child.emit('close', 0);
     await expect(promise).resolves.toBeUndefined();
 
-    expect(context.reportBranchCleanupRegistration).not.toHaveBeenCalled();
+    const assignment = vi.mocked(context.assignWorktree);
+    expect(assignment).toHaveBeenCalledOnce();
+    const agentLaunch = vi.mocked(spawn).mock.calls.findIndex(([command]) => command === 'agy');
+    expect(agentLaunch).toBeGreaterThanOrEqual(0);
+    expect(assignment.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(spawn).mock.invocationCallOrder[agentLaunch]!
+    );
+    expect(vi.mocked(spawn).mock.calls[agentLaunch]).toEqual([
+      'agy',
+      expect.any(Array),
+      expect.objectContaining({
+        cwd: WORKTREE_PATH,
+        env: expect.objectContaining({ WORKSPACE_PATH: WORKTREE_PATH, WORKSPACE_BRANCH: 'cards/card-123/1' })
+      })
+    ]);
+    const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
+    expect(finalizePersistedSqlitePollSession).toHaveBeenCalledOnce();
+    expect(finalizePersistedSqlitePollSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cardRepoPath: '/test/repo', sessionId: expect.any(String) })
+    );
   });
 
   it('settles as a named failure when driven with the committed print-timeout capture', async () => {
