@@ -114,6 +114,8 @@ export function useOwnedLeafViewState(rows: readonly SessionRow[], disclosures: 
   }, []);
   useLayoutEffect(restore);
   useEffect(() => {
+    // With no inspection bookmarks there is nothing to prune from native history.
+    if (pages.current.size === 0 && focus.current === null && selection.current === null) return;
     const retained = new Set([
       ...rows.flatMap((row) => [row.id, ...row.parts.map((part) => part.id)]),
       ...disclosures.open.keys(),
