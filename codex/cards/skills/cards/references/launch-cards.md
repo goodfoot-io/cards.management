@@ -69,7 +69,8 @@ done
   --jsonpath '$.status'` reaching `active` (or beyond) before deciding the
   launch actually failed.
 - **Never retry a launch call.** A duplicate dispatch spawns a second agent on
-  the same card, and the two will fight over its worktree.
+  the same card. It gets its own worktree slot, so the two agents duplicate
+  the work on separate branches.
 - Only start the next card's launch once the current one reaches `needs_review`
   (or `done`/`archived`) — that transition is set automatically when the
   action handler exits, and is the serialization point the whole loop depends on.

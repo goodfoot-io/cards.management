@@ -66,12 +66,13 @@ export default defineCardsAssistant(
 
 ## Configuration File Structure
 
-Define environments, actions, streams, and the optional cards assistant in `settings.config.ts`:
+Define environments, actions, streams, the optional cards assistant and the optional worktree maintenance command in `settings.config.ts`:
 
 ```typescript
 import { defineConfig } from '@cards.management/sdk/config';
 import launchClaude from './src/actions/launch-claude.js';
 import cardsAssistant from './src/cards-assistant.js';
+import worktreeMaintenance from './src/worktree-maintenance.js';
 
 export default defineConfig({
   environments: {
@@ -88,7 +89,8 @@ export default defineConfig({
       }
     }
   },
-  cardsAssistant
+  cardsAssistant,
+  worktreeMaintenance
 });
 ```
 
@@ -98,6 +100,23 @@ export default defineConfig({
 |---------|---------|---------------|
 | `defineAction` | Per-card action handler | `actionName`, `id?`, `description?`, `icon?`, `supportsBackgroundMode?`, `timeout?` |
 | `defineCardsAssistant` | Workspace-scoped assistant handler | _(none — pass an empty `{}` config)_ |
+| `defineWorktreeMaintenance` | Card-scoped `worktreeMaintenance` root command | _(none — pass an empty `{}` config)_ |
+
+## Worktree Maintenance
+
+`worktreeMaintenance` compiles to `settings.json` `worktreeMaintenance.command`. The server keeps no worktree state; callers run this command through [runRootCommand](reference/api-client.md#root-commands) to preview a card's worktree slots, clean them up, or check before deleting the card. The server launches it as a card-scoped execution that sets no card status and writes no note. Its handler receives a `mode` and must call `report()` with a `WorktreeCleanupPreview` (`{ cardId, canDeleteCard, decisions }`); see [input-types.md](reference/input-types.md#worktreemaintenanceinput).
+
+```typescript
+// src/worktree-maintenance.ts
+import { defineWorktreeMaintenance } from '@cards.management/sdk/config';
+
+export default defineWorktreeMaintenance({}, async (input, { report }) => {
+  // input.mode: 'preview' | 'cleanup' | 'prepare-delete'
+  report({ cardId: input.cardId, canDeleteCard: false, decisions: [] });
+});
+```
+
+Without the entry, `runRootCommand` fails with cause `unconfigured`. The default configuration's command takes each slot's lock, removes only merged, clean, unused slots, and sets `canDeleteCard` only when nothing remains.
 
 ## Development Checklist
 
@@ -110,8 +129,8 @@ Before debugging issues, verify:
 
 ## Additional Resources
 
-- **[reference/input-types.md](reference/input-types.md)**: ActionInput, CardsAssistantInput, and context types
+- **[reference/input-types.md](reference/input-types.md)**: ActionInput, CardsAssistantInput, WorktreeMaintenanceInput, and context types
 - **[reference/environment.md](reference/environment.md)**: CARDS_ENV_VARS, getters, and exit codes
-- **[reference/api-client.md](reference/api-client.md)**: Cards API access — `createCardsClient` and the `CardsClient` methods
+- **[reference/api-client.md](reference/api-client.md)**: Cards API access — `createCardsClient`, the `CardsClient` methods, root commands and card deletion
 - **[reference/logging.md](reference/logging.md)**: Logger API and configuration
 - **[reference/streams.md](reference/streams.md)**: Stream renderers — `www/` layout, `wwwRoot` and stream config fields, the stream-store SDK, and the renderer template

@@ -8,6 +8,7 @@ Input payload for action handlers. Extracted from environment variables by the r
 
 ```typescript
 interface ActionInput {
+  executionId: string;                    // Server-minted identity of this admitted execution
   cardId: string;                         // Unique card identifier
   actionName: string;                     // Action button display name (e.g., "Launch Claude")
   environment: string;                    // Environment name (e.g., "default")
@@ -31,6 +32,7 @@ Runtime context injected for **action** handlers.
 interface ActionContext {
   logger: ILogger;  // Structured, context-aware logging
   cwd: string;      // Working directory, set from the card's project directory
+  onShutdown(hook: ShutdownHook): () => void;  // Runs once before exit, under a 3 s best-effort budget
   onCancel(callback: () => void | Promise<void>): void;
   onSwitchToInteractive(callback: () => unknown | Promise<unknown>): void;
 }
@@ -61,13 +63,47 @@ interface CardsAssistantContext {
 }
 ```
 
+## WorktreeMaintenanceInput
+
+Input of the `worktreeMaintenance` root command. `mode` comes from `CARDS_ROOT_COMMAND_INPUT`.
+
+```typescript
+interface WorktreeMaintenanceInput {
+  executionId: string;   // The command's own execution
+  cardId: string;        // Card whose worktree slots are maintained
+  mode: 'preview' | 'cleanup' | 'prepare-delete';
+  repoRoot: string;      // Workspace path the command was launched for; may be a linked worktree
+  cardRepoPath: string;  // Card repository path
+  extensionPath: string; // VS Code extension installation directory
+}
+```
+
+## WorktreeMaintenanceContext
+
+```typescript
+interface WorktreeMaintenanceContext {
+  logger: ILogger;
+  cwd: string;
+  client: CardsClient;   // Authenticated, for branch registrations and execution status
+  report(report: Record<string, unknown>): void;  // Last call wins; at most 256 KiB serialized
+  onShutdown(hook: ShutdownHook): () => void;
+}
+```
+
+A root command succeeds only by reporting. The runtime sends the last `report()` as `execution.commandReport` before exit; a handler that returns without reporting, throws, or whose report the server does not accept exits 1, and the caller's `runRootCommand` gets no report.
+
 ## Typed Input Extraction
 
 ```typescript
-import { extractActionInput, extractCardsAssistantInput } from '@cards.management/sdk/config';
+import {
+  extractActionInput,
+  extractCardsAssistantInput,
+  extractWorktreeMaintenanceInput
+} from '@cards.management/sdk/config';
 
-const actionInput = extractActionInput();            // ActionInput
-const assistantInput = extractCardsAssistantInput(); // CardsAssistantInput
+const actionInput = extractActionInput();                   // ActionInput
+const assistantInput = extractCardsAssistantInput();        // CardsAssistantInput
+const maintenanceInput = extractWorktreeMaintenanceInput(); // WorktreeMaintenanceInput
 ```
 
 ## Switch to Interactive Flow
