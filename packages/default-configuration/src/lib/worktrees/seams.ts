@@ -13,17 +13,17 @@
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '@cards.management/sdk/cards-config';
 import { compiledHookScriptPaths } from '@cards.management/sdk/git-hooks';
+import type { SlotLock } from '@cards.management/sdk/slot-lock';
 import type { WorktreeGitRunner } from '@cards.management/sdk/worktree';
 import { provisionWorktreeCheckout } from '@cards.management/sdk/worktree';
 import { provisionCardWorktree } from '@cards.management/sdk/worktree-for-card';
 
-/** Inputs of S3 `provisionSlotCheckout`. */
+/** Inputs of S3 `provisionSlotCheckout` (`@cards.management/sdk/slot-checkout`). */
 export interface ProvisionSlotCheckoutOptions {
   /** Main repository root. */
   readonly repoRoot: string;
   /** Workspace the ignored-path policy is read from. */
   readonly sourceRoot: string;
-  readonly cardRepoPath: string;
   readonly cardId: string;
   readonly parentBranch: string;
   readonly branch: string;
@@ -31,12 +31,18 @@ export interface ProvisionSlotCheckoutOptions {
   readonly extensionPath: string;
   readonly sharedHooksDir: string;
   readonly runGit: WorktreeGitRunner;
-  /** Called before each write; throws once the shutdown fence has closed. */
+  /** Runs before each git call and each write wave; throws once the shutdown fence has closed. */
   readonly checkpoint: () => void;
 }
 
+/** What S3 provisioning reports. */
+export interface ProvisionedSlotCheckout {
+  readonly checkout: string;
+  readonly branchName: string;
+}
+
 /** S3: materializes and binds a fresh slot checkout. */
-export type ProvisionSlotCheckout = (options: ProvisionSlotCheckoutOptions) => Promise<void>;
+export type ProvisionSlotCheckout = (options: ProvisionSlotCheckoutOptions) => Promise<ProvisionedSlotCheckout>;
 
 /** A process found inside a slot checkout. */
 export interface SlotOccupant {
@@ -44,56 +50,78 @@ export interface SlotOccupant {
   readonly command: string;
 }
 
-/** Outcome of moving a quarantined checkout's content away entry by entry. */
+/** Options every S2 operation accepts; the slot layer passes the holder's fence check. */
+export interface SlotRemovalOptions {
+  readonly timeoutMs?: number;
+  /** Throws once the shutdown fence has closed; run before each step. */
+  readonly checkpoint?: () => void;
+}
+
+/** Outcome of `removeQuarantinedSlot`. */
 export type QuarantinedRemoval =
-  | { readonly outcome: 'removed' }
+  | { readonly status: 'removed' }
   | {
-      readonly outcome: 'preserved';
-      readonly reason: 'removal_restored' | 'removal_blocked' | 'containment_unproven' | 'quarantine_stranded';
+      readonly status: 'refused';
+      readonly reason: 'uncommitted_changes' | 'removal_blocked' | 'removal_restored';
       readonly detail: string;
+      /** Where the checkout now is: restored to the slot path, or left in quarantine. */
+      readonly checkoutPath: string;
     };
 
-/** Outcome of recovering one slot's quarantine residue. */
-export type SlotResidueRecovery =
-  | { readonly status: 'recovered'; readonly detail: string }
-  | { readonly status: 'stranded'; readonly detail: string };
+/** One slot's quarantine residue, found without a lock. */
+export interface SlotResidue {
+  readonly ordinal: number;
+  readonly slotPath: string;
+  readonly quarantines: readonly string[];
+  readonly holdings: readonly string[];
+}
 
-/** S2: verified removal, residue recovery and the occupant probe. */
+/** What recovering one piece of residue did. */
+export interface SlotResidueReport {
+  readonly kind:
+    | 'removal_finished'
+    | 'moved_back'
+    | 'removal_restored'
+    | 'quarantine_stranded'
+    | 'pruned'
+    | 'recovery_failed';
+  readonly detail: string;
+}
+
+/**
+ * S2: verified removal, residue recovery and the occupant probe, as
+ * `@cards.management/sdk/worktree-removal` exports them. Declared with method
+ * syntax so the SDK's own quarantine type binds without a cast.
+ */
 export interface SlotRemoval {
-  /**
-   * Moves a slot checkout to `<slot>.deleting-<uuid>` with `git worktree move`.
-   * @returns The quarantine path.
-   */
-  quarantineSlot(options: {
-    readonly repoRoot: string;
-    readonly slotPath: string;
-    readonly runGit: WorktreeGitRunner;
-  }): Promise<string>;
-  /** Proves the quarantine clean and removes it, or restores it when the slot path is absent. */
-  removeQuarantinedSlot(options: {
-    readonly repoRoot: string;
-    readonly slotPath: string;
-    readonly quarantinePath: string;
-    readonly runGit: WorktreeGitRunner;
-    /** Throws once this holder's lock generation is no longer current, or the fence has closed. */
-    readonly requireCurrent: () => void;
-  }): Promise<QuarantinedRemoval>;
-  /** Finishes or restores one slot's `.deleting-*`/`.held` residue under its already held lock. */
-  recoverSlotResidue(options: {
-    readonly repoRoot: string;
-    readonly slotRoot: string;
-    readonly ordinal: number;
-    readonly runGit: WorktreeGitRunner;
-    readonly checkpoint: () => void;
-  }): Promise<SlotResidueRecovery>;
+  /** Moves a slot checkout into quarantine with `git worktree move`, returning the quarantine. */
+  quarantineSlot(repoRoot: string, slotPath: string, options?: SlotRemovalOptions): Promise<unknown>;
+  /** Proves the quarantine clean and removes it, or restores it; `requireCurrent` is wired from `lock`. */
+  removeQuarantinedSlot(
+    target: {
+      readonly repoRoot: string;
+      readonly slotPath: string;
+      readonly quarantine: unknown;
+      readonly lock: SlotLock;
+    },
+    options?: SlotRemovalOptions
+  ): Promise<QuarantinedRemoval>;
+  /** Lists every slot's residue without a lock, for the pre-check. */
+  findSlotResidue(slotRoot: string): Promise<readonly SlotResidue[]>;
+  /** Finishes or restores one slot's residue under its already held lock. */
+  recoverSlotResidueLocked(
+    target: { readonly repoRoot: string; readonly slotPath: string; readonly lock: SlotLock },
+    options?: SlotRemovalOptions
+  ): Promise<readonly SlotResidueReport[]>;
   /** Stops git's fsmonitor daemon for a checkout; not running or unsupported is success. */
-  stopSlotFsmonitor(options: { readonly slotPath: string; readonly runGit: WorktreeGitRunner }): Promise<void>;
+  stopSlotFsmonitor(slotPath: string, options?: SlotRemovalOptions): Promise<void>;
   /**
    * Finds processes whose cwd or open files are inside the checkout.
-   * @throws When the probe itself fails.
+   * @throws When the probe itself fails (`OccupantProbeError`).
    */
   findSlotOccupants(
-    slotPath: string
+    slotPath: string,
+    options?: SlotRemovalOptions
   ): Promise<{ readonly occupants: readonly SlotOccupant[]; readonly unprobed: number }>;
 }
 
@@ -116,6 +144,7 @@ export function slotSharedHooksDir(): string {
  * with the fence checked before each.
  * TODO(S3): replace with `provisionSlotCheckout` from the SDK once it merges.
  * @param options - Provisioning inputs.
+ * @returns The checkout path and its branch.
  */
 export const interimProvisionSlotCheckout: ProvisionSlotCheckout = async (options) => {
   options.checkpoint();
@@ -134,6 +163,7 @@ export const interimProvisionSlotCheckout: ProvisionSlotCheckout = async (option
     sharedHooksDir: options.sharedHooksDir,
     runGit: options.runGit
   });
+  return { checkout: options.worktreePath, branchName: options.branch };
 };
 
 /** Thrown by every interim S2 operation. */
@@ -152,7 +182,8 @@ export class RemovalUnavailableError extends Error {
 export const interimSlotRemoval: SlotRemoval = {
   quarantineSlot: () => Promise.reject(new RemovalUnavailableError()),
   removeQuarantinedSlot: () => Promise.reject(new RemovalUnavailableError()),
-  recoverSlotResidue: () => Promise.reject(new RemovalUnavailableError()),
+  findSlotResidue: () => Promise.reject(new RemovalUnavailableError()),
+  recoverSlotResidueLocked: () => Promise.reject(new RemovalUnavailableError()),
   stopSlotFsmonitor: () => Promise.reject(new RemovalUnavailableError()),
   findSlotOccupants: () => Promise.reject(new RemovalUnavailableError())
 };

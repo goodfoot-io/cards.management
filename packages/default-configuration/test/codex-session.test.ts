@@ -657,5 +657,49 @@ describe('codex-session library', () => {
       child.emit('close', 0);
       await promise;
     });
+
+    it('starts the slot cleanup pass after the spawn and runs the end pass only once codex closes', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnCodexSession } = await import('../src/lib/codex-session.js');
+      const { slotSessionEvents } = await import('./helpers/slot-session-stub.js');
+      slotSessionEvents.length = 0;
+
+      const handlers = new Map<string, (...args: unknown[]) => void>();
+      const child = {
+        pid: 12345,
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          handlers.set(event, cb);
+        }),
+        kill: vi.fn(),
+        stdout: null,
+        stderr: null
+      } as unknown as ChildProcess;
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const promise = spawnCodexSession(
+        {
+          executionId: 'execution-test',
+          cardId: 'card-123',
+          actionName: 'Chat',
+          environment: 'default',
+          executionMode: 'background',
+          repoRoot: '/test/workspace',
+          cardRepoPath: '/test/repo',
+          configPath: '/test/config',
+          extensionPath: '/test/extension',
+          exitWhenDone: true
+        },
+        createMockContext(),
+        { prompt: 'Do the work' }
+      );
+      await flushMicrotasks();
+
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup']);
+
+      handlers.get('close')?.(0);
+      await promise;
+
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup', 'finish']);
+    });
   });
 });

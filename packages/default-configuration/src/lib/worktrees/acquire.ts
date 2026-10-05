@@ -28,8 +28,9 @@ import { rankWorktreeSlots } from '@cards.management/sdk/worktree-path-policy';
 import { z } from 'zod';
 import { judgeUsability, listWorktreeEntries, pathExists, refOid, samePath } from './checkout.js';
 import { type DiscoveredSlot, discoverSlots, type SlotPlace, slotBranch, slotOrdinal } from './discovery.js';
-import { type CreationContext, recoverCreationIntent, rollbackCreation } from './intent.js';
+import { type CreationContext, rollbackCreation } from './intent.js';
 import { defaultSlotLayer, type SlotLayer } from './layer.js';
+import { recoverSlot } from './recovery.js';
 import { type RegistrationClient, registerSlot } from './registration.js';
 import { SLOT_GIT_CHECKOUT_TIMEOUT_MS } from './slot-git.js';
 
@@ -39,7 +40,7 @@ export type SlotClient = RegistrationClient & Pick<CardsClient, 'getCard' | 'get
 /** The action input fields acquisition reads. */
 export type SlotActionInput = Pick<
   ActionInput,
-  'executionId' | 'cardId' | 'repoRoot' | 'cardRepoPath' | 'extensionPath' | 'switchToInteractiveData'
+  'executionId' | 'cardId' | 'repoRoot' | 'extensionPath' | 'switchToInteractiveData'
 >;
 
 /** The slot a switched session hands to its interactive successor. */
@@ -185,27 +186,28 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
    * Recovers what the previous holder of this ordinal left: an interrupted creation, then quarantine residue.
    * @param lock - The ordinal's freshly acquired lock.
    * @param previous - The generation judged before GC.
+   * @param slotPath - The slot checkout path.
    * @param residue - Quarantine paths beside the slot.
+   * @throws When the slot is left unsettled, so it is neither used nor written into.
    */
-  const recoverPrevious = async (lock: SlotLock, previous: SlotLockPrevious, residue: readonly string[]) => {
-    if (previous.creating !== null)
-      await recoverCreationIntent(lock, previous.creating, previous.owner?.executionId ?? null, creation);
-    if (residue.length > 0) {
-      lock.checkpoint();
-      const recovered = await layer.seams.removal.recoverSlotResidue({
-        repoRoot,
-        slotRoot,
-        ordinal: lock.ordinal,
-        runGit: git.provisioningRunner({ record: (event) => lock.recordGit(event) }),
-        checkpoint: () => lock.checkpoint()
-      });
-      if (recovered.status === 'stranded') throw new Error(recovered.detail);
-    }
+  const recoverPrevious = async (
+    lock: SlotLock,
+    previous: SlotLockPrevious,
+    slotPath: string,
+    residue: readonly string[]
+  ): Promise<void> => {
+    const recovery = await recoverSlot(lock, previous, slotPath, residue.length > 0, {
+      creation,
+      removal: layer.seams.removal
+    });
+    if (recovery.unsettled !== null)
+      throw new Error(`${slotPath} is unsettled (${recovery.unsettled.reason}): ${recovery.unsettled.detail}`);
   };
 
   /**
    * Runs `check` under a fresh `work` lock of the ordinal, after recovery, as one slot operation.
    * @param ordinal - Slot to lock.
+   * @param slotPath - Its checkout path.
    * @param residue - Its quarantine paths.
    * @param judge - Shared judgement context of this call.
    * @param check - Returns a value to keep the lock, or null to decline.
@@ -213,6 +215,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
    */
   const underLock = async <T>(
     ordinal: number,
+    slotPath: string,
     residue: readonly string[],
     judge: SlotJudgeContext | undefined,
     check: (lock: SlotLock) => Promise<T | null>
@@ -228,7 +231,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
     const { lock, previous } = result;
     try {
       const value = await lock.operation(`acquire check of slot ${ordinal}`, async () => {
-        await recoverPrevious(lock, previous, residue);
+        await recoverPrevious(lock, previous, slotPath, residue);
         lock.checkpoint();
         return check(lock);
       });
@@ -293,7 +296,6 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
       await layer.seams.provisionSlotCheckout({
         repoRoot,
         sourceRoot: input.repoRoot,
-        cardRepoPath: input.cardRepoPath,
         cardId,
         parentBranch,
         branch: intent.branch,
@@ -372,6 +374,8 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
 
   // 2. Discover.
   const inventory = await discoverSlots(git, client, place);
+  if (inventory.registrationError !== null)
+    throw new Error(`Registrations of card ${cardId} could not be read: ${inventory.registrationError}`);
   const registered = inventory.slots.filter(
     (slot): slot is DiscoveredSlot & { registration: BranchInfo } => slot.registration !== null
   );
@@ -427,8 +431,14 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
   const ranked = rankWorktreeSlots(cardId, ranking).map((entry) => free.get(entry.branch)!);
 
   // 3. Reuse the most recently used free checkout that is still registered and usable.
+  const vacated = new Set<number>();
   for (const slot of ranked.filter((candidate) => candidate.directoryExists)) {
-    const held = await underLock(slot.ordinal, slot.residue, judge, async () => {
+    const held = await underLock(slot.ordinal, slot.path, slot.residue, judge, async () => {
+      // Recovery may have rolled back the checkout of an interrupted creation: reattach it below.
+      if (!(await pathExists(slot.path))) {
+        vacated.add(slot.ordinal);
+        return null;
+      }
       const registration = await registrationOf(slot.branch);
       if (registration === null || (registration.worktree ?? slot.path) !== slot.path) return null;
       const usability = await judgeUsability(git, repoRoot, slot.path, slot.branch);
@@ -451,8 +461,8 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
 
   // 4. Reattach a free slot whose checkout is gone and whose ref remains; failing that, recreate one whose ref is gone.
   for (const op of ['reattach', 'recreate'] as const) {
-    for (const slot of ranked.filter((candidate) => !candidate.directoryExists)) {
-      const held = await underLock(slot.ordinal, slot.residue, judge, async (lock) => {
+    for (const slot of ranked.filter((candidate) => !candidate.directoryExists || vacated.has(candidate.ordinal))) {
+      const held = await underLock(slot.ordinal, slot.path, slot.residue, judge, async (lock) => {
         const registration = await registrationOf(slot.branch);
         if (registration === null || (registration.worktree ?? slot.path) !== slot.path) return null;
         if (await pathExists(slot.path)) return null;
@@ -515,7 +525,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
     const { lock, previous } = result;
     try {
       const created = await lock.operation(`create of slot ${ordinal}`, async () => {
-        await recoverPrevious(lock, previous, []);
+        await recoverPrevious(lock, previous, path, []);
         if ((await pathExists(path)) || (await registrationOf(branch)) !== null) return false;
         const parentOid = await refOid(git, repoRoot, parentBranch);
         if (parentOid === null) throw new Error(`Parent branch ${parentBranch} of card ${cardId} does not exist`);
@@ -529,7 +539,12 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
       });
       if (created) return settle(lock, { ordinal, branch, worktreePath: path, parentBranch }, 'created');
     } catch (error) {
-      if (!(error instanceof RefRefusedError)) throw error;
+      if (error instanceof ShutdownError) throw error;
+      if (!(error instanceof RefRefusedError)) {
+        // Rolled back in process, or its intent stays for the next holder: either way the ordinal is free again.
+        await lock.release();
+        throw error;
+      }
       logger.info('Slot ref already exists; reserving its ordinal', { cardId, ordinal, detail: error.message });
     }
     await lock.release();

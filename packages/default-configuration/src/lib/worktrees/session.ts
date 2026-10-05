@@ -17,6 +17,7 @@ import {
   type SlotClient,
   type SlotHandoffData
 } from './acquire.js';
+import { cleanupCardSlots, type SlotCleanupContext, type SlotCleanupResult } from './cleanup.js';
 import type { SlotLayer } from './layer.js';
 
 /** What the switch callback returns to the runtime for the successor. */
@@ -45,6 +46,18 @@ export interface SlotSession {
   offerHandoff(sessionId: string): Promise<SwitchToInteractiveData>;
   /** Whether the session was switched to interactive. */
   readonly switched: boolean;
+  /**
+   * Starts the start pass over the card's other slots, concurrently with the
+   * agent's start, with its failure handling attached at once. Its decisions
+   * are logged and never change the action's outcome.
+   */
+  beginCleanup(): void;
+  /**
+   * Awaits the start pass, then runs the end pass sparing this slot unless
+   * the session was switched. Never rejects, and never releases the lock.
+   * @returns The end pass's result, or null when the switch latch skipped it.
+   */
+  finish(): Promise<SlotCleanupResult | null>;
 }
 
 /** Options of {@link openSlotSession}. */
@@ -65,6 +78,31 @@ export async function openSlotSession(input: SlotActionInput, options: OpenSlotS
   const { lock } = slot;
   const { logger } = options;
   let switched = false;
+  let startPass: Promise<SlotCleanupResult | null> | null = null;
+  const context: SlotCleanupContext = {
+    client: options.client,
+    logger,
+    cardId: input.cardId,
+    executionId: input.executionId,
+    workspacePath: input.repoRoot,
+    ...(options.layer === undefined ? {} : { layer: options.layer })
+  };
+  /**
+   * Runs one pass sparing this session's slot; a pass never rejects, and anything else thrown is logged here.
+   * @param stage - Which pass, for the log.
+   * @returns The pass result, or null when the pass threw anyway.
+   */
+  const runPass = async (stage: 'start' | 'end'): Promise<SlotCleanupResult | null> => {
+    try {
+      return await cleanupCardSlots(context, { requester: input.executionId, mode: 'cleanup' });
+    } catch (error) {
+      logger.warn(`Slot ${stage} pass failed`, {
+        cardId: input.cardId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+  };
   return {
     slot,
     get switched() {
@@ -88,6 +126,14 @@ export async function openSlotSession(input: SlotActionInput, options: OpenSlotS
         sessionId,
         slot: { ordinal: slot.ordinal, branch: slot.branch, worktreePath: slot.worktreePath, generation, token }
       };
+    },
+    beginCleanup() {
+      startPass ??= runPass('start');
+    },
+    async finish() {
+      if (startPass !== null) await startPass;
+      if (switched) return null;
+      return runPass('end');
     }
   };
 }

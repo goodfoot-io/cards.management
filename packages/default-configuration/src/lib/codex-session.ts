@@ -958,6 +958,9 @@ export async function spawnCodexSession(
     })
   );
 
+  // The start pass runs alongside the agent's start; it never rejects and never changes the outcome.
+  session.beginCleanup();
+
   const termination = createCodexTerminationController(child, {
     gracefulTimeoutMs: 5_000,
     forceTimeoutMs: 5_000
@@ -989,6 +992,9 @@ export async function spawnCodexSession(
     });
     child.on('close', resolve);
   });
+
+  // The end pass spares this slot and is skipped after a switch; it never rejects.
+  await session.finish();
 
   context.logger.info(`${input.actionName} action completed`, { exitCode });
 }
