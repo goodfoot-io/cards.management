@@ -82,16 +82,17 @@ find ~/.config/Code/logs ~/Library/Application\ Support/Code/logs -name "Cards.l
 | **Source** | `public/packages/sdk/src/config/logger.ts` |
 | **Resolution order** | 1. `config.logFilePath` (explicit) — 2. `$CARDS_HOOKS_LOG_FILE` env var — 3. `$CARDS_LOG_DIR/{subsystem}.log` — 4. `{main-repo-root}/.cards/logs/{subsystem}.log` (computed via `git rev-parse --path-format=absolute --git-common-dir`) — 5. `null` (file output disabled) |
 
-### Owner Worktree Authority
+### Worktree Slots
 
 | Field | Value |
 |-------|-------|
-| **Decisions** | Cards extension output, with structured `worktree-import`, assignment, cleanup and refusal records |
-| **Deletion audit** | `{runtime-root}/worktree-deletions.log`, JSON Lines retained for 30 days |
-| **Runtime root** | `runtime/` beside the API discovery file; production normally `~/.cards/runtime/` and EDH uses its isolated runtime root |
-| **Source** | [Owner authority](./packages/cards/server/src/runtime/worktrees/authority.ts#L341) and [runtime composition](./packages/extension/src/runtime/createExtensionRuntimeAuthority.ts#L231) |
+| **Decisions** | The handler log above (by default `{main-repo-root}/.cards/logs/cards-default-configuration-hooks.log`): `Slot acquired`, `Slot candidate refused`, skipped-slot warnings, `Slot cleanup decision` per slot and `Slot cleanup pass finished` |
+| **Maintenance reports** | The `worktreeMaintenance` command's report, returned to its caller by `runRootCommand`; the extension shows it in the delete and Clean Up Worktrees flows |
+| **Slot locks** | `{slot-root}/.locks/{n}/{generation}/` — `owner.json` names the holder; `released.json` marks a clean release |
+| **Slot root** | `{worktrees-root}/{repo-id}/cards/{card-id}/`, where `{worktrees-root}` is `$CARDS_WORKTREES_DIR` or the Cards home's `worktrees/` |
+| **Source** | [Slot locks](./public/packages/sdk/src/slot-lock.ts#L1) and [slot cleanup](./public/packages/default-configuration/src/lib/worktrees/cleanup.ts#L1) |
 
-The startup summary reports current projected cards, invalid entries, imported legacy assignments and refused cards. Cleanup runs in the API owner process; providers no longer launch a branch cleanup watcher.
+The server keeps no worktree state and writes no worktree log. Slot acquisition, cleanup and the maintenance command all run in default-configuration handlers.
 
 ### Detached Child Output
 
