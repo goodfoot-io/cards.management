@@ -192,6 +192,17 @@ describe('cleanupCardSlots preservation', () => {
     expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'invalid_entry', outcome: 'preserved' });
   });
 
+  it('skips a directory at a slot path that is not a checkout, keeping its content', async () => {
+    const path = join(fx.slotRoot, '5');
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, 'notes.txt'), 'not a checkout');
+
+    const result = await pass();
+
+    expect(decisionOf(result, 'cards/card-1/5')).toMatchObject({ reason: 'unusable_checkout', outcome: 'preserved' });
+    expect(await readFile(join(path, 'notes.txt'), 'utf8')).toBe('not a checkout');
+  });
+
   it('preserves every unregistered slot when registrations cannot be read', async () => {
     const slot = await finishedSlot('exec-1');
     fx.client.failGetBranches = true;
