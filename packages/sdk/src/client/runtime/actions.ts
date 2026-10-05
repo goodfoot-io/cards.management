@@ -49,6 +49,18 @@ function isTransportUncertainty(value: unknown): value is RuntimeActionTransport
   return typeof value === 'string' && TRANSPORT_UNCERTAINTIES.has(value as RuntimeActionTransportUncertaintyReason);
 }
 
+/**
+ * Whether a 409 body is the server's refusal of a card that is being deleted:
+ * `{ code: 'card_deleting' }`, or `reason` on a body that is not a launch record.
+ * @param body - The parsed 409 body.
+ * @returns True for the card-deleting refusal.
+ */
+function isCardDeletingRefusal(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  const { code, reason, disposition } = body as { code?: unknown; reason?: unknown; disposition?: unknown };
+  return code === 'card_deleting' || (disposition === undefined && reason === 'card_deleting');
+}
+
 const rejectionReasonSchema = z.enum([
   'parameter-mismatch',
   'scope-mismatch',
@@ -357,6 +369,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
       if (response.status === 503 && typeof body === 'object' && body !== null && 'error' in body) {
         return 'server-unavailable';
       }
+      if (response.status === 409 && isCardDeletingRefusal(body)) return 'card-deleting';
       if ((response.status < 200 || response.status >= 300) && ![404, 409, 503].includes(response.status)) {
         return 'invalid-response';
       }

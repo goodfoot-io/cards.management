@@ -216,6 +216,12 @@ describe('runRootCommand', () => {
     expect(error.cause).toBe('unconfigured');
   });
 
+  it('fails with rejected when the card is being deleted', async () => {
+    const client = await serve(() => [409, { error: 'card is being deleted', code: 'card_deleting' }]);
+    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    expect(error.cause).toBe('rejected');
+  });
+
   it('cancels the command and fails with timeout when the deadline passes [R9]', async () => {
     const client = await serve((request) => {
       if (isLaunch(request))

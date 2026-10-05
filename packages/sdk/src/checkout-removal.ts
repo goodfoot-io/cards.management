@@ -148,6 +148,14 @@ export interface CheckoutWitnessProbe {
 /**
  * Chooses the witness for a checkout: `hash` on Windows and on Linux volumes
  * without a real change time (FAT, exFAT, NFS, SMB/CIFS), `ctime` elsewhere.
+ * A Linux volume whose type cannot be read is treated as `hash`.
+ *
+ * Known limitation: macOS always gets `ctime`. Node exposes no
+ * `f_fstypename`, and Darwin's numeric `f_type` is not a stable identifier,
+ * so an msdos, exFAT, SMB or NFS volume mounted on macOS is not detected; a
+ * checkout there relies on that volume's change time, which such volumes may
+ * synthesize. Slot roots live under the user's home volume (APFS), where
+ * change time is real.
  * @param root - Any path on the checkout's volume.
  * @param probe - Platform and volume-type overrides.
  * @returns The witness removal and recovery must use.

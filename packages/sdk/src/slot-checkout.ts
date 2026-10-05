@@ -14,8 +14,6 @@ export interface ProvisionSlotCheckoutOptions {
   readonly repoRoot: string;
   /** Checkout whose ignored paths and `.cards` directory are mirrored. */
   readonly sourceRoot: string;
-  /** The card's repository; accepted for the slot contract, not read here. */
-  readonly cardRepoPath: string;
   readonly cardId: string;
   /** Recorded as `branch.<branch>.cardsParent`. */
   readonly parentBranch: string;
