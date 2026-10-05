@@ -96,7 +96,7 @@ async function rootCommandFailure(promise: Promise<unknown>): Promise<RootComman
 }
 
 describe('runRootCommand', () => {
-  it.skip('launches with caller-owned IDs, polls past pending, and resolves with the report', async () => {
+  it('launches with caller-owned IDs, polls past pending, and resolves with the report', async () => {
     let polls = 0;
     const client = await serve((request) => {
       if (isLaunch(request)) {
@@ -141,7 +141,7 @@ describe('runRootCommand', () => {
     });
   });
 
-  it.skip('fails with no_report when the command completed without one', async () => {
+  it('fails with no_report when the command completed without one', async () => {
     const client = await serve((request) => {
       if (isLaunch(request))
         return [202, { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }];
@@ -159,13 +159,45 @@ describe('runRootCommand', () => {
     expect(error.cause).toBe('no_report');
   });
 
-  it.skip('fails with rejected when admission refuses the launch', async () => {
+  it('fails with rejected when admission refuses the launch', async () => {
     const client = await serve(() => [409, { disposition: 'rejected', reason: 'scope-mismatch', execution: null }]);
     const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
     expect(error.cause).toBe('rejected');
   });
 
-  it.skip('fails with uncertain when the durable record is uncertain', async () => {
+  it('fails with rejected when the server has no runtime admission', async () => {
+    const client = await serve(() => [503, { error: 'runtime admission unavailable' }]);
+    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    expect(error.cause).toBe('rejected');
+    expect(requests).toHaveLength(1);
+  });
+
+  it('replays the same launch IDs after a server error, then follows the admission', async () => {
+    let launches = 0;
+    const client = await serve((request) => {
+      if (isLaunch(request)) {
+        launches++;
+        if (launches === 1) return [500, { error: 'transient' }];
+        return [202, { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }];
+      }
+      return [
+        200,
+        {
+          status: 'completed',
+          execution: { ...EXECUTION, launchRequestId: launchedRequestId() },
+          retrievedOutcome: SPAWNED,
+          terminalOutcome: TERMINAL,
+          commandReport: {}
+        }
+      ];
+    });
+    await client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'preview' });
+    const launchBodies = requests.filter(isLaunch).map((request) => request.body);
+    expect(launchBodies).toHaveLength(2);
+    expect(launchBodies[1]).toEqual(launchBodies[0]);
+  });
+
+  it('fails with uncertain when the durable record is uncertain', async () => {
     const client = await serve((request) => {
       if (isLaunch(request))
         return [202, { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }];
@@ -175,13 +207,16 @@ describe('runRootCommand', () => {
     expect(error.cause).toBe('uncertain');
   });
 
-  it.skip('fails with unconfigured when the settings lack the command', async () => {
-    const client = await serve(() => [409, { reason: 'command_unconfigured' }]);
+  it('fails with unconfigured when the settings lack the command', async () => {
+    const client = await serve(() => [
+      409,
+      { error: 'worktreeMaintenance is not configured', code: 'command_unconfigured' }
+    ]);
     const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
     expect(error.cause).toBe('unconfigured');
   });
 
-  it.skip('cancels the command and fails with timeout when the deadline passes [R9]', async () => {
+  it('cancels the command and fails with timeout when the deadline passes [R9]', async () => {
     const client = await serve((request) => {
       if (isLaunch(request))
         return [202, { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }];
@@ -201,7 +236,7 @@ describe('runRootCommand', () => {
     expect(cancel?.path).toBe(`/cards/main-1/runtime/commands/${launchedRequestId()}/cancel`);
   });
 
-  it.skip('cancels the command and fails with cancelled when the signal aborts [R9]', async () => {
+  it('cancels the command and fails with cancelled when the signal aborts [R9]', async () => {
     const controller = new AbortController();
     const client = await serve((request) => {
       if (isLaunch(request))
@@ -220,7 +255,7 @@ describe('runRootCommand', () => {
     expect(requests.some(isCancel)).toBe(true);
   });
 
-  it.skip('does not launch when the signal has already aborted', async () => {
+  it('does not launch when the signal has already aborted', async () => {
     const controller = new AbortController();
     controller.abort();
     const client = await serve(() => [500, {}]);
@@ -233,13 +268,13 @@ describe('runRootCommand', () => {
 });
 
 describe('getExecutionStatus', () => {
-  it.skip.each(['running', 'terminal', 'unknown'] as const)('reads %s from the status route', async (status) => {
+  it.each(['running', 'terminal', 'unknown'] as const)('reads %s from the status route', async (status) => {
     const client = await serve(() => [200, { status }]);
     await expect(client.getExecutionStatus('execution/1')).resolves.toBe(status);
     expect(requests[0]?.path).toBe('/runtime/executions/execution%2F1/status');
   });
 
-  it.skip('rejects a response outside the three states', async () => {
+  it('rejects a response outside the three states', async () => {
     const client = await serve(() => [200, { status: 'maybe' }]);
     await expect(client.getExecutionStatus('execution-1')).rejects.toThrow();
   });

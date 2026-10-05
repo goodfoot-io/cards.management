@@ -30,7 +30,7 @@ const TERMINAL = {
 };
 
 describe('launch union', () => {
-  it.skip('accepts the action variant and every root-command mode, on launch and execute alike', () => {
+  it('accepts the action variant and every root-command mode, on launch and execute alike', () => {
     for (const schema of [launchRequestPayloadSchema, executeRequestPayloadSchema]) {
       expect(schema.safeParse(ACTION).success).toBe(true);
       for (const mode of ['preview', 'cleanup', 'prepare-delete']) {
@@ -39,7 +39,7 @@ describe('launch union', () => {
     }
   });
 
-  it.skip('rejects a payload mixing both variants, an unknown command, an unknown mode and extra input', () => {
+  it('rejects a payload mixing both variants, an unknown command, an unknown mode and extra input', () => {
     for (const payload of [
       { ...ACTION, ...ROOT },
       { rootCommand: 'somethingElse', input: { mode: 'cleanup' } },
@@ -53,7 +53,7 @@ describe('launch union', () => {
 });
 
 describe('execution.commandReport', () => {
-  it.skip('is an agent-handler durable result', () => {
+  it('is an agent-handler durable result', () => {
     expect(RUNTIME_MESSAGE_CONTRACTS['execution.commandReport']).toMatchObject({
       direction: 'client-to-server',
       deliveryClass: 'durable-result',
@@ -62,7 +62,7 @@ describe('execution.commandReport', () => {
     expect(RUNTIME_MESSAGE_PAYLOADS['execution.commandReport']).toBe(commandReportPayloadSchema);
   });
 
-  it.skip('accepts an opaque object up to the bound and rejects a larger one or a non-object', () => {
+  it('accepts an opaque object up to the bound and rejects a larger one or a non-object', () => {
     expect(commandReportPayloadSchema.safeParse({ decisions: [], nested: { any: ['shape'] } }).success).toBe(true);
     const fits = { blob: 'x'.repeat(MAX_COMMAND_REPORT_BYTES - 20) };
     expect(commandReportPayloadSchema.safeParse(fits).success).toBe(true);
@@ -73,7 +73,7 @@ describe('execution.commandReport', () => {
 });
 
 describe('launchProtocol', () => {
-  it.skip('replaces worktreeProtocol on the interactive handoff', () => {
+  it('replaces worktreeProtocol on the interactive handoff', () => {
     const continuation = { kind: 'inline', value: '{"sessionId":"s"}' };
     expect(interactiveHandoffPayloadSchema.safeParse({ continuation, launchProtocol: 2 }).success).toBe(true);
     expect(interactiveHandoffPayloadSchema.safeParse({ continuation }).success).toBe(true);
@@ -89,14 +89,14 @@ describe('completed retrieval', () => {
     terminalOutcome: TERMINAL
   };
 
-  it.skip('accepts a completed record with or without a commandReport', () => {
+  it('accepts a completed record with or without a commandReport', () => {
     expect(publicActionRetrievalResponseSchema.safeParse(completed).success).toBe(true);
     expect(
       publicActionRetrievalResponseSchema.safeParse({ ...completed, commandReport: { decisions: [] } }).success
     ).toBe(true);
   });
 
-  it.skip('rejects a null commandReport and one over the bound', () => {
+  it('rejects a null commandReport and one over the bound', () => {
     expect(publicActionRetrievalResponseSchema.safeParse({ ...completed, commandReport: null }).success).toBe(false);
     expect(
       publicActionRetrievalResponseSchema.safeParse({
@@ -106,7 +106,7 @@ describe('completed retrieval', () => {
     ).toBe(false);
   });
 
-  it.skip('carries no commandReport on any other status', () => {
+  it('carries no commandReport on any other status', () => {
     expect(
       publicActionRetrievalResponseSchema.safeParse({
         status: 'pending',

@@ -72,7 +72,7 @@ describe('runtime action HTTP client', () => {
     await client?.launch('main-672', REQUEST);
 
     expect(requests).toEqual([
-      { method: 'POST', url: '/cards/main-672/runtime/actions', body: { ...REQUEST, worktreeProtocol: 2 } }
+      { method: 'POST', url: '/cards/main-672/runtime/actions', body: { ...REQUEST, launchProtocol: 2 } }
     ]);
   });
 
@@ -174,6 +174,28 @@ describe('runtime action HTTP client', () => {
     expect(requests[0]?.url).toBe('/cards/main%2Fcard/runtime/actions/request%2Fone');
   });
 
+  it('copies a root command report into the completed result and omits it on action records', async () => {
+    const report = { decisions: [{ branch: 'cards/main-672/2', outcome: 'removed' }] };
+    const reports = [report, undefined];
+    await listen((_request, response) => {
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(
+        JSON.stringify({
+          status: 'completed',
+          execution: EXECUTION,
+          retrievedOutcome: { disposition: 'failed' },
+          commandReport: reports.shift()
+        })
+      );
+    });
+
+    await expect(client?.retrieve('main-672', 'request-1')).resolves.toMatchObject({
+      status: 'completed',
+      commandReport: report
+    });
+    expect(await client?.retrieve('main-672', 'request-1')).not.toHaveProperty('commandReport');
+  });
+
   it('refuses to infer terminal completion from a spawned launch without cleanup proof', async () => {
     await listen((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
@@ -254,8 +276,8 @@ describe('runtime action HTTP client', () => {
     await reconstructed.launch('main-672', REQUEST);
 
     expect(requests.map(({ body }) => body)).toEqual([
-      { ...REQUEST, worktreeProtocol: 2 },
-      { ...REQUEST, worktreeProtocol: 2 }
+      { ...REQUEST, launchProtocol: 2 },
+      { ...REQUEST, launchProtocol: 2 }
     ]);
   });
 
@@ -281,8 +303,8 @@ describe('runtime action HTTP client', () => {
       '/cards/other%20card/runtime/actions/request-1'
     ]);
     expect(requests.slice(0, 2).map(({ body }) => body)).toEqual([
-      { ...REQUEST, worktreeProtocol: 2 },
-      { ...REQUEST, worktreeProtocol: 2 }
+      { ...REQUEST, launchProtocol: 2 },
+      { ...REQUEST, launchProtocol: 2 }
     ]);
   });
 });

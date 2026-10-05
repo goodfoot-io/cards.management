@@ -662,7 +662,7 @@ describe('card binary', () => {
     const actionIdentity = { requestId: 'request-1', messageId: 'message-1' };
     const launchBody = (params: Record<string, unknown> = {}) => ({
       ...actionIdentity,
-      worktreeProtocol: 2,
+      launchProtocol: 2,
       params: {
         actionId: 'launch',
         environmentName: 'default',

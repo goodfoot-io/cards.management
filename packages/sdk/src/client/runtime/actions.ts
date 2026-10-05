@@ -16,11 +16,17 @@ import type {
   RetrievedAdmission,
   RuntimePayload
 } from '../../protocol/types/index.js';
-import { executionIdentitySchema, producerRoleSchema, RUNTIME_MESSAGE_PAYLOADS } from '../../protocol/types/index.js';
+import {
+  executionIdentitySchema,
+  MAX_COMMAND_REPORT_BYTES,
+  producerRoleSchema,
+  RUNTIME_MESSAGE_PAYLOADS
+} from '../../protocol/types/index.js';
 import type { RuntimeDiscovery } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
-const MAX_RESPONSE_BYTES = 64 * 1024;
+/** A completed root-command retrieval carries a report of up to 256 KiB beside its execution records. */
+const MAX_RESPONSE_BYTES = MAX_COMMAND_REPORT_BYTES + 64 * 1024;
 const HTTP_REJECTIONS = new Set<RuntimeActionHttpRejectionReason>([
   'authentication-failed',
   'invalid-request',
@@ -120,7 +126,8 @@ const retrievalResponseSchema = z
         status: z.literal('completed'),
         execution: executionIdentitySchema,
         retrievedOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.launchOutcome'],
-        terminalOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.cleanupResult'].optional()
+        terminalOutcome: RUNTIME_MESSAGE_PAYLOADS['execution.cleanupResult'].optional(),
+        commandReport: RUNTIME_MESSAGE_PAYLOADS['execution.commandReport'].optional()
       })
       .strict(),
     z
@@ -361,7 +368,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
     async launch(cardId, request): Promise<PublicActionLaunchResult> {
       const value = await transport(`/cards/${encodeURIComponent(cardId)}/runtime/actions`, {
         method: 'POST',
-        body: JSON.stringify({ ...request, worktreeProtocol: 2 })
+        body: JSON.stringify({ ...request, launchProtocol: 2 })
       });
       if (isHttpRejection(value)) {
         return { status: 'rejected', requestId: request.requestId, messageId: request.messageId, reason: value };
@@ -401,7 +408,8 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
           requestId,
           execution: response.execution,
           outcome: response.retrievedOutcome,
-          ...(response.terminalOutcome === undefined ? {} : { terminalOutcome: response.terminalOutcome })
+          ...(response.terminalOutcome === undefined ? {} : { terminalOutcome: response.terminalOutcome }),
+          ...(response.commandReport === undefined ? {} : { commandReport: response.commandReport })
         };
       }
       return { status: 'accepted', requestId, admission: response };

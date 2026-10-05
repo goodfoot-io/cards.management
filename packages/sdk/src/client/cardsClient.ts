@@ -19,6 +19,11 @@ import type {
   VariableGroupsResponse,
   WorktreeMaintenanceMode
 } from '../protocol/index.js';
+import {
+  normalizeActionLaunchResponse,
+  publicActionLaunchResponseSchema,
+  publicActionRetrievalResponseSchema
+} from './runtime/actions.js';
 import type {
   AddBranchRequest,
   AttachmentResponse,
@@ -30,7 +35,14 @@ import type {
   ListCardsOptions,
   TimelineOptions
 } from './types/client.js';
-import { ApiError, NetworkError, RequestCancelledError, RetryExhaustedError } from './types/errors.js';
+import {
+  ApiError,
+  NetworkError,
+  RequestCancelledError,
+  RetryExhaustedError,
+  RootCommandError,
+  type RootCommandFailureCause
+} from './types/errors.js';
 
 /** Input of each root configuration command, keyed by command name. */
 export interface RootCommandInputs {
@@ -57,6 +69,21 @@ export interface RootCommandCompletion {
 
 /** Process state of one execution: `unknown` means no record, which for a spawned execution means long settled. */
 export type ExecutionProcessStatus = 'running' | 'terminal' | 'unknown';
+
+/** Default deadline of {@link CardsClient.runRootCommand}, from launch to report. */
+const ROOT_COMMAND_TIMEOUT_MS = 300_000;
+
+/** Interval between retrievals while a root command runs. */
+const ROOT_COMMAND_POLL_MS = 250;
+
+/** Ceiling on each launch, retrieval or cancel request a root command makes. */
+const ROOT_COMMAND_REQUEST_MS = 10_000;
+
+/** HTTP statuses that end a root command call as `rejected` rather than being retried. */
+const ROOT_COMMAND_REJECTIONS = new Set([400, 401, 403, 503]);
+
+/** One root-command HTTP exchange: a status and parsed body, or no response at all. */
+type RootCommandExchange = { readonly status: number; readonly body: unknown } | null;
 
 /** Default initial fetch timeout in milliseconds for each individual request attempt. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -881,13 +908,150 @@ export class CardsClient {
     cardId: string,
     command: TCommand,
     input: RootCommandInputs[TCommand],
-    options?: RunRootCommandOptions
+    options: RunRootCommandOptions = {}
   ): Promise<RootCommandCompletion> {
-    void cardId;
-    void command;
-    void input;
-    void options;
-    throw new Error('Not Implemented');
+    const requestId = globalThis.crypto.randomUUID();
+    const messageId = globalThis.crypto.randomUUID();
+    const deadline = Date.now() + (options.timeoutMs ?? ROOT_COMMAND_TIMEOUT_MS);
+    const { signal } = options;
+    const fail = (cause: RootCommandFailureCause, detail: string): RootCommandError =>
+      new RootCommandError(`Root command ${command} on ${cardId} ended without a report: ${detail}`, cause, requestId);
+    if (signal?.aborted) throw fail('cancelled', 'cancelled before launch');
+
+    const commandsPath = `/cards/${encodeURIComponent(cardId)}/runtime/commands`;
+    const retrievePath = `/cards/${encodeURIComponent(cardId)}/runtime/actions/${encodeURIComponent(requestId)}`;
+    // Every launch attempt carries the same caller-owned IDs, so a retry after an
+    // unanswered POST replays the one admission rather than starting another.
+    let launched = false;
+    while (true) {
+      const ended = rootCommandEnded(deadline, signal);
+      if (ended !== null) {
+        await this.cancelRootCommand(`${commandsPath}/${encodeURIComponent(requestId)}/cancel`);
+        throw ended === 'timeout' ? fail('timeout', 'deadline passed') : fail('cancelled', 'cancelled by the caller');
+      }
+
+      if (!launched) {
+        const exchange = await this.rootCommandExchange('post', commandsPath, deadline, signal, {
+          requestId,
+          messageId,
+          command,
+          input
+        });
+        if (exchange === null) continue;
+        if (exchange.status === 409 && rootCommandErrorCode(exchange.body) === 'command_unconfigured') {
+          throw fail('unconfigured', `the configuration has no ${command} command`);
+        }
+        if (ROOT_COMMAND_REJECTIONS.has(exchange.status))
+          throw fail('rejected', `launch refused with ${exchange.status}`);
+        const parsed = publicActionLaunchResponseSchema.safeParse(exchange.body);
+        if (!parsed.success) {
+          if (exchange.status >= 500) continue;
+          throw fail('uncertain', `unrecognized launch response ${exchange.status}`);
+        }
+        const launch = normalizeActionLaunchResponse(parsed.data, { requestId, messageId });
+        if (launch.status === 'rejected') throw fail('rejected', `launch rejected: ${launch.reason}`);
+        if (launch.status === 'uncertain') throw fail('uncertain', `launch uncertain: ${launch.reason}`);
+        launched = true;
+      }
+
+      const exchange = await this.rootCommandExchange('get', retrievePath, deadline, signal);
+      if (exchange !== null) {
+        if (exchange.status === 401 || exchange.status === 403)
+          throw fail('rejected', `retrieval refused with ${exchange.status}`);
+        const parsed = publicActionRetrievalResponseSchema.safeParse(exchange.body);
+        if (parsed.success) {
+          const record = parsed.data;
+          if (record.status === 'completed') {
+            if (record.commandReport === undefined) throw fail('no_report', 'completed without a report');
+            return { requestId, executionId: record.execution.executionId, report: record.commandReport };
+          }
+          if (record.status === 'rejected') throw fail('rejected', `admission rejected: ${record.reason}`);
+          if (record.status === 'uncertain') throw fail('uncertain', `admission uncertain: ${record.reason}`);
+          if (record.status === 'not-found') throw fail('uncertain', 'the admitted launch has no durable record');
+        }
+      }
+      await this.rootCommandPause(deadline, signal);
+    }
+  }
+
+  /**
+   * Waits one poll interval, returning early when the caller aborts or the deadline passes.
+   *
+   * @param deadline - Epoch milliseconds of the overall deadline.
+   * @param signal - The caller's abort signal.
+   */
+  private async rootCommandPause(deadline: number, signal?: AbortSignal): Promise<void> {
+    const ms = Math.max(0, Math.min(ROOT_COMMAND_POLL_MS, deadline - Date.now()));
+    await new Promise<void>((resolve) => {
+      const done = (): void => {
+        clearTimeout(timer);
+        signal?.removeEventListener('abort', done);
+        resolve();
+      };
+      const timer = setTimeout(done, ms);
+      signal?.addEventListener('abort', done, { once: true });
+    });
+  }
+
+  /**
+   * Makes one root-command request through this client's HTTP client, bounded by
+   * the deadline and the caller's signal, and returns the status with its body
+   * whether or not the status is a success.
+   *
+   * @param method - `post` for the launch, `get` for a retrieval.
+   * @param path - Route below the base URL.
+   * @param deadline - Epoch milliseconds of the overall deadline.
+   * @param signal - The caller's abort signal.
+   * @param body - Launch body for `post`.
+   * @returns The exchange, or null when no response arrived.
+   */
+  private async rootCommandExchange(
+    method: 'get' | 'post',
+    path: string,
+    deadline: number,
+    signal: AbortSignal | undefined,
+    body?: unknown
+  ): Promise<RootCommandExchange> {
+    const bound = AbortSignal.timeout(Math.max(1, Math.min(ROOT_COMMAND_REQUEST_MS, deadline - Date.now())));
+    const requestSignal = signal === undefined ? bound : AbortSignal.any([bound, signal]);
+    const url = this.buildUrl(path);
+    try {
+      const value =
+        method === 'post'
+          ? await this.getHttpClient().post<unknown>(url, body, { signal: requestSignal })
+          : await this.getHttpClient().get<unknown>(url, { signal: requestSignal });
+      return { status: 200, body: value };
+    } catch (error) {
+      const response = httpLikeResponse(error);
+      if (response === null) return null;
+      let parsed: unknown = null;
+      try {
+        parsed = await response.json();
+      } catch {
+        // A body that is not JSON leaves the status alone to decide the outcome.
+      }
+      return { status: response.status, body: parsed };
+    }
+  }
+
+  /**
+   * Asks the server to cancel an abandoned root command. Best effort: the
+   * caller is already failing, and the command's own deadline still bounds it.
+   *
+   * @param path - The cancel route of the command's request ID.
+   */
+  private async cancelRootCommand(path: string): Promise<void> {
+    try {
+      await this.getHttpClient().post<unknown>(
+        this.buildUrl(path),
+        {},
+        {
+          signal: AbortSignal.timeout(ROOT_COMMAND_REQUEST_MS)
+        }
+      );
+    } catch {
+      // An unreachable server cannot run the command either; the failure the caller sees is unchanged.
+    }
   }
 
   /**
@@ -895,10 +1059,17 @@ export class CardsClient {
    *
    * @param executionId - Execution to query.
    * @returns `running`, `terminal`, or `unknown` when the server holds no record.
+   * @throws ApiError when the server responds with an error.
+   * @throws {Error} When the response names no known state.
    */
   async getExecutionStatus(executionId: string): Promise<ExecutionProcessStatus> {
-    void executionId;
-    throw new Error('Not Implemented');
+    const url = this.buildUrl(`/runtime/executions/${encodeURIComponent(executionId)}/status`);
+    const response = await this.request(() => this.getHttpClient().get<{ status?: unknown }>(url));
+    const status = response?.status;
+    if (status !== 'running' && status !== 'terminal' && status !== 'unknown') {
+      throw new Error(`Invalid execution status for ${executionId}: ${JSON.stringify(status)}`);
+    }
+    return status;
   }
 
   // --- Tag Operations ---
@@ -1043,4 +1214,48 @@ export class CardsClient {
     const url = this.buildUrl('/compare');
     return this.request(() => this.getHttpClient().delete(url));
   }
+}
+
+/**
+ * Recognizes a non-ok HTTP response thrown by an {@link HttpClient}.
+ *
+ * @param error - What the HTTP client threw.
+ * @returns The response, or null for a network or abort failure.
+ */
+function httpLikeResponse(error: unknown): { readonly status: number; json(): Promise<unknown> } | null {
+  if (error instanceof Response) return error;
+  if (
+    error !== null &&
+    typeof error === 'object' &&
+    typeof (error as { status?: unknown }).status === 'number' &&
+    typeof (error as { json?: unknown }).json === 'function'
+  ) {
+    return error as { readonly status: number; json(): Promise<unknown> };
+  }
+  return null;
+}
+
+/**
+ * Reads the machine code of a JSON error body.
+ *
+ * @param body - Parsed response body.
+ * @returns Its `code`, else its `reason`, else undefined.
+ */
+function rootCommandErrorCode(body: unknown): string | undefined {
+  if (body === null || typeof body !== 'object') return undefined;
+  const { code, reason } = body as { code?: unknown; reason?: unknown };
+  if (typeof code === 'string') return code;
+  return typeof reason === 'string' ? reason : undefined;
+}
+
+/**
+ * Reports whether a root command wait must stop.
+ *
+ * @param deadline - Epoch milliseconds of the overall deadline.
+ * @param signal - The caller's abort signal.
+ * @returns `cancelled` once the signal aborted, `timeout` once the deadline passed, otherwise null.
+ */
+function rootCommandEnded(deadline: number, signal?: AbortSignal): 'cancelled' | 'timeout' | null {
+  if (signal?.aborted) return 'cancelled';
+  return Date.now() >= deadline ? 'timeout' : null;
 }
