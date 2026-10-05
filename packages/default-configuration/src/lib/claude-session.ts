@@ -370,6 +370,9 @@ export async function spawnClaudeSession(
     })
   );
 
+  // The start pass runs alongside the agent's start; it never rejects and never changes the outcome.
+  session.beginCleanup();
+
   const termination = createClaudeTerminationController(child, {
     gracefulTimeoutMs: 5_000,
     forceTimeoutMs: 5_000
@@ -424,6 +427,9 @@ export async function spawnClaudeSession(
   const exitCode = await new Promise<number | null>((resolve) => {
     child.on('close', resolve);
   });
+
+  // The end pass spares this slot and is skipped after a switch; it never rejects.
+  await session.finish();
 
   // Claude's print-mode wait ceiling terminated the session before Cards
   // decided the work was done — the child still exits 0, but this is not a

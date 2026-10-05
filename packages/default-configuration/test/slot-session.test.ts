@@ -65,7 +65,7 @@ async function snapshotOf(session: SlotSession) {
 }
 
 describe('openSlotSession', () => {
-  it.skip('spawns the agent and records it as a companion in one operation', async () => {
+  it('spawns the agent and records it as a companion in one operation', async () => {
     const session = await open('exec-1');
 
     const child = await session.spawnAgent(agent);
@@ -73,7 +73,7 @@ describe('openSlotSession', () => {
     expect((await snapshotOf(session)).companions.map((companion) => companion.pid)).toContain(child.pid);
   });
 
-  it.skip('spawns nothing once the shutdown fence has closed', async () => {
+  it('spawns nothing once the shutdown fence has closed', async () => {
     const session = await open('exec-1');
     let spawned = false;
     void fx.shutdown.shutdownAndExit(0, 'cancel');
@@ -87,7 +87,7 @@ describe('openSlotSession', () => {
     expect(spawned).toBe(false);
   });
 
-  it.skip('offers a handoff that sets the switch latch and names the slot', async () => {
+  it('offers a handoff that sets the switch latch and names the slot', async () => {
     const session = await open('exec-1');
 
     const handoff = await session.offerHandoff('session-1');
@@ -105,7 +105,7 @@ describe('openSlotSession', () => {
     expect((await snapshotOf(session)).handoff?.token).toBe(handoff.slot.token);
   });
 
-  it.skip('never writes released.json after a switch, from provider code or the shutdown hook', async () => {
+  it('never writes released.json after a switch, from provider code or the shutdown hook', async () => {
     const session = await open('exec-1');
     await session.offerHandoff('session-1');
 
@@ -115,7 +115,7 @@ describe('openSlotSession', () => {
     expect((await snapshotOf(session)).released).toBeNull();
   });
 
-  it.skip('releases through the shutdown hook when no operation is in flight and no switch happened', async () => {
+  it('releases through the shutdown hook when no operation is in flight and no switch happened', async () => {
     const session = await open('exec-1');
 
     await fx.shutdown.shutdownAndExit(0, 'completed');
@@ -123,7 +123,7 @@ describe('openSlotSession', () => {
     expect((await snapshotOf(session)).released).not.toBeNull();
   });
 
-  it.skip('skips the end pass when the session was switched', async () => {
+  it('skips the end pass when the session was switched', async () => {
     const session = await open('exec-1');
     session.beginCleanup();
     await session.offerHandoff('session-1');
@@ -131,7 +131,7 @@ describe('openSlotSession', () => {
     expect(await session.finish()).toBeNull();
   });
 
-  it.skip('runs the end pass sparing its own slot', async () => {
+  it('runs the end pass sparing its own slot', async () => {
     const session = await open('exec-1');
     session.beginCleanup();
 
@@ -143,7 +143,7 @@ describe('openSlotSession', () => {
     });
   });
 
-  it.skip('never rejects from the start or end pass when discovery fails', async () => {
+  it('never rejects from the start or end pass when discovery fails', async () => {
     const session = await open('exec-1');
     fx.beforeGit = async (args) => {
       if (args[0] === 'worktree' && args[1] === 'list') throw new Error('injected discovery failure');

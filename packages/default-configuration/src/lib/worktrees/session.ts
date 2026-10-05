@@ -17,7 +17,7 @@ import {
   type SlotClient,
   type SlotHandoffData
 } from './acquire.js';
-import type { SlotCleanupResult } from './cleanup.js';
+import { cleanupCardSlots, type SlotCleanupContext, type SlotCleanupResult } from './cleanup.js';
 import type { SlotLayer } from './layer.js';
 
 /** What the switch callback returns to the runtime for the successor. */
@@ -78,6 +78,31 @@ export async function openSlotSession(input: SlotActionInput, options: OpenSlotS
   const { lock } = slot;
   const { logger } = options;
   let switched = false;
+  let startPass: Promise<SlotCleanupResult | null> | null = null;
+  const context: SlotCleanupContext = {
+    client: options.client,
+    logger,
+    cardId: input.cardId,
+    executionId: input.executionId,
+    workspacePath: input.repoRoot,
+    ...(options.layer === undefined ? {} : { layer: options.layer })
+  };
+  /**
+   * Runs one pass sparing this session's slot; a pass never rejects, and anything else thrown is logged here.
+   * @param stage - Which pass, for the log.
+   * @returns The pass result, or null when the pass threw anyway.
+   */
+  const runPass = async (stage: 'start' | 'end'): Promise<SlotCleanupResult | null> => {
+    try {
+      return await cleanupCardSlots(context, { requester: input.executionId, mode: 'cleanup' });
+    } catch (error) {
+      logger.warn(`Slot ${stage} pass failed`, {
+        cardId: input.cardId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return null;
+    }
+  };
   return {
     slot,
     get switched() {
@@ -103,10 +128,12 @@ export async function openSlotSession(input: SlotActionInput, options: OpenSlotS
       };
     },
     beginCleanup() {
-      throw new Error('Not Implemented');
+      startPass ??= runPass('start');
     },
     async finish() {
-      throw new Error('Not Implemented');
+      if (startPass !== null) await startPass;
+      if (switched) return null;
+      return runPass('end');
     }
   };
 }

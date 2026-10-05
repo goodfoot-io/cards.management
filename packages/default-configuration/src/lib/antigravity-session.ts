@@ -375,6 +375,9 @@ export async function spawnAntigravitySession(
     })
   );
 
+  // The start pass runs alongside the agent's start; it never rejects and never changes the outcome.
+  session.beginCleanup();
+
   const termination = createAntigravityTerminationController(child, {
     gracefulTimeoutMs: 5_000,
     forceTimeoutMs: 5_000
@@ -536,6 +539,9 @@ export async function spawnAntigravitySession(
     primaryFailure = error;
     hasPrimaryFailure = true;
   }
+
+  // The end pass runs once the tree drain is done, spares this slot, is skipped after a switch, and never rejects.
+  await session.finish();
 
   let finalization: SqlitePollFinalizationOutcome;
   try {

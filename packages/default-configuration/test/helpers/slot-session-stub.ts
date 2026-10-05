@@ -32,6 +32,9 @@ export function useStubSlot(overrides: Partial<typeof slot>): void {
 /** Handoffs offered by stubbed sessions, newest last. */
 export const offeredHandoffs: SwitchToInteractiveData[] = [];
 
+/** Spawn and cleanup-pass calls of stubbed sessions, in order. */
+export const slotSessionEvents: Array<'spawn' | 'beginCleanup' | 'finish'> = [];
+
 /** `openSlotSession` stub: holds {@link STUB_SLOT}, spawns directly, and records handoffs. */
 export const openSlotSessionStub = vi.fn(async (): Promise<SlotSession> => {
   let switched = false;
@@ -41,7 +44,10 @@ export const openSlotSessionStub = vi.fn(async (): Promise<SlotSession> => {
     get switched() {
       return switched;
     },
-    spawnAgent: async (spawn: () => ChildProcess) => spawn(),
+    spawnAgent: async (spawn: () => ChildProcess) => {
+      slotSessionEvents.push('spawn');
+      return spawn();
+    },
     offerHandoff: async (sessionId: string) => {
       switched = true;
       const handoff: SwitchToInteractiveData = {
@@ -57,7 +63,12 @@ export const openSlotSessionStub = vi.fn(async (): Promise<SlotSession> => {
       offeredHandoffs.push(handoff);
       return handoff;
     },
-    beginCleanup: () => {},
-    finish: async () => null
+    beginCleanup: () => {
+      slotSessionEvents.push('beginCleanup');
+    },
+    finish: async () => {
+      slotSessionEvents.push('finish');
+      return null;
+    }
   };
 });
