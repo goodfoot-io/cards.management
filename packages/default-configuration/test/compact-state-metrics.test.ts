@@ -63,12 +63,12 @@ function assistantLine(opts: {
     content.push({ type: 'tool_use', id: nextUuid(), name: tool.name, input: tool.input ?? {} });
   }
   const usage: Record<string, number> = {};
-  if (opts.outputTokens != null) usage.output_tokens = opts.outputTokens;
-  if (opts.inputTokens != null) usage.input_tokens = opts.inputTokens;
+  if (opts.outputTokens != null) usage['output_tokens'] = opts.outputTokens;
+  if (opts.inputTokens != null) usage['input_tokens'] = opts.inputTokens;
   const message: Record<string, unknown> = { content };
-  if (opts.messageId != null) message.id = opts.messageId;
-  if (opts.model != null) message.model = opts.model;
-  if (Object.keys(usage).length > 0) message.usage = usage;
+  if (opts.messageId != null) message['id'] = opts.messageId;
+  if (opts.model != null) message['model'] = opts.model;
+  if (Object.keys(usage).length > 0) message['usage'] = usage;
   return JSON.stringify({
     type: 'assistant',
     uuid: opts.uuid ?? nextUuid(),

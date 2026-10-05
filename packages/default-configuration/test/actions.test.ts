@@ -1,6 +1,5 @@
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
-import path from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
@@ -96,18 +95,6 @@ vi.mock('@cards.management/sdk/worktree-for-card', () => ({
 
 const originalFetch = globalThis.fetch;
 
-/**
- * Compiled-hook .mjs paths createWorktree() must be called with, derived from
- * the test ActionInput's extensionPath (`/test/extension`). Built with
- * path.join so the expectation matches production's `\`-separated paths on
- * Windows.
- */
-const _EXPECTED_COMPILED_SCRIPT_PATHS = {
-  'pre-commit': path.join('/test/extension', 'dist', 'git-hooks', 'pre-commit.mjs'),
-  'post-commit': path.join('/test/extension', 'dist', 'git-hooks', 'post-commit.mjs'),
-  'post-rewrite': path.join('/test/extension', 'dist', 'git-hooks', 'post-rewrite.mjs')
-};
-
 beforeEach(async () => {
   vi.clearAllMocks();
 
@@ -181,7 +168,9 @@ beforeEach(async () => {
     settle: Promise.resolve({
       branch: 'cards/card-123/1',
       worktree: '/test/workspace/.worktrees/cards/card-123/1',
-      baseSha: 'abc123'
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
     })
   });
 
@@ -189,13 +178,7 @@ beforeEach(async () => {
   // outfit-bearing options, so per-case createWorktree overrides and assertions
   // keep working against the pure-primitive call shape.
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, {
-      cwd: opts.cwd,
-      cardId: opts.cardId,
-      compiledScriptPaths: opts.compiledScriptPaths
-    })
-  );
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => createWorktree(ref, { cwd: opts.cwd }));
 });
 
 afterEach(() => {
@@ -207,6 +190,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
@@ -244,50 +228,15 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
     actionName: 'Launch',
     environment: 'default',
     executionMode: 'interactive',
+    exitWhenDone: false,
     repoRoot: '/test/workspace',
     cardRepoPath: '/test/repo',
     configPath: '/test/config',
     extensionPath: '/test/extension',
+    marketplacePath: '/test/extension/dist/marketplace',
     codingAgent: 'claude-code-cli',
     ...overrides
   };
-}
-
-/**
- * Configures the fs/promises mock to serve per-branch entry files from the
- * card repo's `branches/` directory. `readdir` returns the encoded entry
- * filenames; `readFile` returns each entry's `{ name, ... }` JSON. Other
- * `readFile` paths fall back to ENOENT.
- *
- * @param branches - Branch data keyed by authoritative branch name.
- */
-async function _configureBranchEntries(
-  branches: Record<string, { worktree?: string; parentBranch: string; addedAt: string }>
-): Promise<void> {
-  const { readdir, readFile } = await import('node:fs/promises');
-  const entryFiles = Object.keys(branches).map((name) => `${encodeURIComponent(name)}.json`);
-
-  vi.mocked(readdir).mockImplementation(((dirPath: unknown) => {
-    if (String(dirPath).endsWith('branches')) {
-      return Promise.resolve(entryFiles);
-    }
-    return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-  }) as unknown as typeof readdir);
-
-  vi.mocked(readFile).mockImplementation((filePath: unknown) => {
-    const p = String(filePath);
-    // A readable, non-active status lets cleanupMergedBranches proceed past the
-    // fail-closed status guard so these lifecycle tests exercise the branch loop.
-    if (p.endsWith('CARD.meta.json')) {
-      return Promise.resolve(JSON.stringify({ status: 'needs_review' }));
-    }
-    for (const [name, data] of Object.entries(branches)) {
-      if (p.endsWith(`${encodeURIComponent(name)}.json`)) {
-        return Promise.resolve(JSON.stringify({ name, ...data }, null, 2));
-      }
-    }
-    return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-  });
 }
 
 describe('Default Actions', () => {
@@ -314,7 +263,7 @@ describe('Default Actions', () => {
       );
 
       // Should not include --print in interactive mode
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       expect(args).not.toContain('--print');
 
       // Should include --settings with inline plugin settings for the extension marketplace
@@ -336,12 +285,12 @@ describe('Default Actions', () => {
       const promise = action(baseInput({ executionMode: 'background' }), createMockContext());
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       expect(args).toContain('--print');
       expect(args).not.toContain('--output-format');
       expect(args).not.toContain('stream-json');
 
-      const spawnOpts = vi.mocked(spawn).mock.calls[0][2] as { stdio: unknown };
+      const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { stdio: unknown };
       expect(spawnOpts.stdio).toEqual(['ignore', 'ignore', 'pipe']);
 
       child.emit('close', 0);
@@ -436,7 +385,7 @@ describe('Default Actions', () => {
       expect(context.onCancel).toHaveBeenCalledWith(expect.any(Function));
 
       // Invoke the registered cancel callback
-      const cancelCallback = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+      const cancelCallback = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
       await expect(cancelCallback()).resolves.toBeUndefined();
 
       child.emit('close', null);
@@ -456,7 +405,7 @@ describe('Default Actions', () => {
       expect(context.onSwitchToInteractive).toHaveBeenCalledWith(expect.any(Function));
 
       // Invoke the registered callback and verify it hands the session and its slot to the successor
-      const switchCallback = vi.mocked(context.onSwitchToInteractive).mock.calls[0][0] as () => Promise<unknown>;
+      const switchCallback = vi.mocked(context.onSwitchToInteractive).mock.calls[0]![0] as () => Promise<unknown>;
       const result = await switchCallback();
       expect(result).toEqual({
         sessionId: 'test-uuid-1234',
@@ -486,7 +435,7 @@ describe('Default Actions', () => {
       );
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       expect(args).toContain('--resume');
       expect(args).toContain('existing-session-456');
       expect(args).not.toContain('--session-id');
@@ -532,7 +481,7 @@ describe('Default Actions', () => {
         const promise = action(baseInput({ codingAgent }), createMockContext());
         await flushMicrotasks();
 
-        const spawnCmd = vi.mocked(spawn).mock.calls[0][0] as string;
+        const spawnCmd = vi.mocked(spawn).mock.calls[0]![0] as string;
         expect(spawnCmd).toBe('claude');
 
         child.emit('close', 0);
@@ -637,7 +586,7 @@ describe('Default Actions', () => {
         const promise = action(baseInput({ codingAgent, actionName: 'Chat' }), createMockContext());
         await flushMicrotasks();
 
-        const spawnCmd = vi.mocked(spawn).mock.calls[0][0] as string;
+        const spawnCmd = vi.mocked(spawn).mock.calls[0]![0] as string;
         expect(spawnCmd).toBe('claude');
 
         child.emit('close', 0);

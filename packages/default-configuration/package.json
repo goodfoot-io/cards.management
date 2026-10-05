@@ -17,7 +17,7 @@
     "build:www": "bun run src/streams/claude-code-session/www/build.ts && bun run src/streams/codex-session/www/build.ts && bun run src/streams/opencode-session/www/build.ts && bun run src/streams/antigravity-session/www/build.ts",
     "watch": "yarn build && chokidar 'src/**/*.ts' -c 'yarn build'",
     "watch:www": "bun build --watch ./src/streams/claude-code-session/www/index.html --outdir=dist/www/claude-code-session",
-    "typecheck": "tsgo --noEmit && tsgo --noEmit -p src/streams/lib/tsconfig.json && tsgo --noEmit -p src/streams/claude-code-session/www/tsconfig.json && tsgo --noEmit -p src/streams/codex-session/www/tsconfig.json && tsgo --noEmit -p src/streams/opencode-session/www/tsconfig.json && tsgo --noEmit -p src/streams/antigravity-session/www/tsconfig.json",
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p src/streams/lib/tsconfig.json && tsgo --noEmit -p src/streams/claude-code-session/www/tsconfig.json && tsgo --noEmit -p src/streams/codex-session/www/tsconfig.json && tsgo --noEmit -p src/streams/opencode-session/www/tsconfig.json && tsgo --noEmit -p src/streams/antigravity-session/www/tsconfig.json && tsgo --noEmit -p tsconfig.test.json",
     "test": "vitest-unchanged",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -l"
   },

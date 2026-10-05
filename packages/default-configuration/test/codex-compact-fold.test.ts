@@ -11,7 +11,7 @@
  * @summary Unit tests for the Codex compact state's watermark reconciliation
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import {
   buildFoldedState,
   type FoldedState,
@@ -81,7 +81,7 @@ function shellFunctionCallLine(callId: string, timestamp = '2026-06-04T10:04:00.
  * Spies on `JSON.parse`, returning a spy whose call count measures fold work.
  * @returns A fresh `JSON.parse` spy.
  */
-function makeParseSpy(): ReturnType<typeof vi.spyOn<JSON, 'parse'>> {
+function makeParseSpy(): MockInstance<typeof JSON.parse> {
   return vi.spyOn(JSON, 'parse');
 }
 

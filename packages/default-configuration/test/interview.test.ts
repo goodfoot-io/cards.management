@@ -1,5 +1,4 @@
 import type { ChildProcess } from 'node:child_process';
-import path from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
@@ -61,18 +60,6 @@ vi.mock('node:crypto', async () => {
 });
 
 const originalFetch = globalThis.fetch;
-
-/**
- * Compiled-hook .mjs paths createWorktree() must be called with, derived from
- * the test ActionInput's extensionPath (`/test/extension`). Built with
- * path.join so the expectation matches production's `\`-separated paths on
- * Windows.
- */
-const _EXPECTED_COMPILED_SCRIPT_PATHS = {
-  'pre-commit': path.join('/test/extension', 'dist', 'git-hooks', 'pre-commit.mjs'),
-  'post-commit': path.join('/test/extension', 'dist', 'git-hooks', 'post-commit.mjs'),
-  'post-rewrite': path.join('/test/extension', 'dist', 'git-hooks', 'post-rewrite.mjs')
-};
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -147,19 +134,15 @@ beforeEach(async () => {
   // outfit-bearing options, so per-case createWorktree overrides and assertions
   // keep working against the pure-primitive call shape.
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, {
-      cwd: opts.cwd,
-      cardId: opts.cardId,
-      compiledScriptPaths: opts.compiledScriptPaths
-    })
-  );
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => createWorktree(ref, { cwd: opts.cwd }));
   vi.mocked(createWorktree).mockResolvedValue({
     path: '/test/workspace/.worktrees/cards/card-123/1',
     settle: Promise.resolve({
       branch: 'cards/card-123/1',
       worktree: '/test/workspace/.worktrees/cards/card-123/1',
-      baseSha: 'abc123'
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
     })
   });
 });
@@ -173,6 +156,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
@@ -214,45 +198,11 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
     cardRepoPath: '/test/repo',
     configPath: '/test/config',
     extensionPath: '/test/extension',
+    exitWhenDone: false,
+    marketplacePath: '/test/extension/dist/marketplace',
     codingAgent: 'claude-code-cli',
     ...overrides
   };
-}
-
-/**
- * Configures the fs/promises mock to serve per-branch entry files from the
- * card repo's `branches/` directory. `readdir` returns the encoded entry
- * filenames; `readFile` returns each entry's `{ name, ... }` JSON.
- *
- * @param branches - Branch data keyed by authoritative branch name.
- */
-async function _configureBranchEntries(
-  branches: Record<string, { worktree?: string; parentBranch: string; addedAt: string }>
-): Promise<void> {
-  const { readdir, readFile } = await import('node:fs/promises');
-  const entryFiles = Object.keys(branches).map((name) => `${encodeURIComponent(name)}.json`);
-
-  vi.mocked(readdir).mockImplementation(((dirPath: unknown) => {
-    if (String(dirPath).endsWith('branches')) {
-      return Promise.resolve(entryFiles);
-    }
-    return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-  }) as unknown as typeof readdir);
-
-  vi.mocked(readFile).mockImplementation((filePath: unknown) => {
-    const p = String(filePath);
-    // A readable, non-active status lets cleanupMergedBranches proceed past the
-    // fail-closed status guard so these lifecycle tests exercise the branch loop.
-    if (p.endsWith('CARD.meta.json')) {
-      return Promise.resolve(JSON.stringify({ status: 'needs_review' }));
-    }
-    for (const [name, data] of Object.entries(branches)) {
-      if (p.endsWith(`${encodeURIComponent(name)}.json`)) {
-        return Promise.resolve(JSON.stringify({ name, ...data }, null, 2));
-      }
-    }
-    return Promise.reject(Object.assign(new Error('ENOENT'), { code: 'ENOENT' }));
-  });
 }
 
 describe('Default Actions', () => {
@@ -272,7 +222,7 @@ describe('Default Actions', () => {
       const promise = action(baseInput(), createMockContext());
       await flushMicrotasks();
 
-      const spawnOpts = vi.mocked(spawn).mock.calls[0][2] as { stdio: unknown };
+      const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { stdio: unknown };
       expect(spawnOpts.stdio).toBe('inherit');
 
       child.emit('close', 0);
@@ -288,7 +238,7 @@ describe('Default Actions', () => {
       const promise = action(baseInput(), createMockContext());
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       expect(args[0]).toBe('Load the `runtime:interview` skill and follow the `<routing-instructions>`.');
 
       child.emit('close', 0);
@@ -304,7 +254,7 @@ describe('Default Actions', () => {
       const promise = action(baseInput(), createMockContext());
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       expect(args).not.toContain('--print');
 
       child.emit('close', 0);
@@ -320,7 +270,7 @@ describe('Default Actions', () => {
       const promise = action(baseInput(), createMockContext());
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       const { buildPluginSettings } = await import('../src/lib/claude-session.js');
       expect(args).toContain('--settings');
       expect(args).toContain(buildPluginSettings('/test/extension/dist/marketplace'));
@@ -339,7 +289,7 @@ describe('Default Actions', () => {
       const promise = action(baseInput(), createMockContext());
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       const addDirIdx = args.indexOf('--add-dir');
       expect(addDirIdx).toBeGreaterThan(-1);
       expect(args[addDirIdx + 1]).toBe('/test/repo');
@@ -401,13 +351,13 @@ describe('Default Actions', () => {
       const promise = action(baseInput(), createMockContext());
       await flushMicrotasks();
 
-      const spawnOpts = vi.mocked(spawn).mock.calls[0][2] as { env: Record<string, string> };
-      expect(spawnOpts.env.WORKSPACE_PATH).toBe('/test/workspace/.worktrees/cards/card-123/1');
-      expect(spawnOpts.env.CLAUDE_CODE_TASK_LIST_ID).toBe('cards-extension-card-123');
-      expect(spawnOpts.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS).toBe('1');
-      expect(spawnOpts.env.BASE_BRANCH).toBe('main');
-      expect(spawnOpts.env.PARENT_BRANCH).toBe('main');
-      expect(spawnOpts.env.WORKSPACE_BRANCH).toBe('cards/card-123/1');
+      const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
+      expect(spawnOpts.env['WORKSPACE_PATH']).toBe('/test/workspace/.worktrees/cards/card-123/1');
+      expect(spawnOpts.env['CLAUDE_CODE_TASK_LIST_ID']).toBe('cards-extension-card-123');
+      expect(spawnOpts.env['CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS']).toBe('1');
+      expect(spawnOpts.env['BASE_BRANCH']).toBe('main');
+      expect(spawnOpts.env['PARENT_BRANCH']).toBe('main');
+      expect(spawnOpts.env['WORKSPACE_BRANCH']).toBe('cards/card-123/1');
 
       child.emit('close', 0);
       await promise;
@@ -426,7 +376,7 @@ describe('Default Actions', () => {
       expect(context.onCancel).toHaveBeenCalledWith(expect.any(Function));
 
       // Invoke the registered cancel callback
-      const cancelCallback = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+      const cancelCallback = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
       await expect(cancelCallback()).resolves.toBeUndefined();
 
       child.emit('close', null);
@@ -462,7 +412,7 @@ describe('Default Actions', () => {
       );
       await flushMicrotasks();
 
-      const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+      const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
       // Should use randomUUID result, not the existing session ID
       expect(args).toContain('--session-id');
       expect(args).toContain('test-uuid-1234');
@@ -510,7 +460,7 @@ describe('Default Actions', () => {
         const promise = action(baseInput({ codingAgent }), createMockContext());
         await flushMicrotasks();
 
-        const spawnCmd = vi.mocked(spawn).mock.calls[0][0] as string;
+        const spawnCmd = vi.mocked(spawn).mock.calls[0]![0] as string;
         expect(spawnCmd).toBe('claude');
 
         child.emit('close', 0);

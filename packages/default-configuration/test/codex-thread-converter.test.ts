@@ -46,6 +46,21 @@ const CODEX_DATA_COMPONENTS = {
   'cx-session-start': CxSessionStartPart
 };
 
+/**
+ * Narrows a thread message to its leading `tool-call` part and returns that
+ * part's parsed args.
+ *
+ * @param message - Thread message expected to open with a `tool-call` part.
+ * @returns The tool-call part's args.
+ * @throws {Error} When the message does not open with a `tool-call` part.
+ */
+function firstToolCallArgs(message: ReturnType<typeof toThreadMessages>['messages'][number] | undefined): unknown {
+  const content = message?.content;
+  const part = typeof content === 'string' ? undefined : content?.[0];
+  if (part?.type !== 'tool-call') throw new Error('expected a leading tool-call part');
+  return part.args;
+}
+
 function toolCall(
   overrides: Partial<Extract<TranscriptItem, { kind: 'tool_call' }>> = {}
 ): Extract<TranscriptItem, { kind: 'tool_call' }> {
@@ -219,8 +234,7 @@ describe('toThreadMessages — tool_call', () => {
       [toolCall({ argumentsText: '{\n  "path": "/src/index.ts"\n}', prettyPrinted: true })],
       false
     );
-    const part = (messages[0]?.content as unknown as { args: unknown }[])[0];
-    expect(part.args).toEqual({ path: '/src/index.ts' });
+    expect(firstToolCallArgs(messages[0])).toEqual({ path: '/src/index.ts' });
   });
 
   it('wraps non-object raw arguments text under the argsLabel key', () => {
@@ -228,14 +242,12 @@ describe('toThreadMessages — tool_call', () => {
       [toolCall({ argumentsText: 'ls -la', argsLabel: 'command', prettyPrinted: false })],
       false
     );
-    const part = (messages[0]?.content as unknown as { args: unknown }[])[0];
-    expect(part.args).toEqual({ command: 'ls -la' });
+    expect(firstToolCallArgs(messages[0])).toEqual({ command: 'ls -la' });
   });
 
   it('produces an empty args object when argumentsText is empty', () => {
     const { messages } = toThreadMessages([toolCall({ argumentsText: '' })], false);
-    const part = (messages[0]?.content as unknown as { args: unknown }[])[0];
-    expect(part.args).toEqual({});
+    expect(firstToolCallArgs(messages[0])).toEqual({});
   });
 
   it('sets result from outputText when hasOutput, and isError from severity', () => {

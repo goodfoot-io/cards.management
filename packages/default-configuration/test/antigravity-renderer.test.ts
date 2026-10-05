@@ -317,7 +317,7 @@ describe('renderAntigravityTranscript — (idx, hash) idempotence and collation 
       idx: 2,
       detail: 'step_format 9 has no decoder in this build'
     });
-    if (item.kind !== 'unreadable') return;
+    if (item?.kind !== 'unreadable') throw new Error('expected an unreadable item');
     expect(item.withheldBytes).toBe('\x00\x01binary-garbage'.length);
     expect(JSON.stringify(item)).not.toContain('binary-garbage');
   });
@@ -425,11 +425,12 @@ describe('renderAntigravityTranscript — malformed records fail closed, never s
 
 describe('toThreadMessages — item → part mapping', () => {
   function firstPartNames(items: TranscriptItem[]): Array<{ type: string; name?: string }> {
-    return toThreadMessages(items, false).messages.flatMap((message) =>
-      (message.content as Array<{ type: string; name?: string }>).map((part) =>
+    return toThreadMessages(items, false).messages.flatMap((message) => {
+      if (typeof message.content === 'string') throw new Error('expected part-array message content');
+      return message.content.map((part) =>
         part.type === 'data' ? { type: part.type, name: part.name } : { type: part.type }
-      )
-    );
+      );
+    });
   }
 
   it('folds step content into content-run text parts', () => {

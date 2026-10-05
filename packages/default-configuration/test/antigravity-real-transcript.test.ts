@@ -274,6 +274,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };

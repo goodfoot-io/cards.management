@@ -1,5 +1,4 @@
 import type { ChildProcess } from 'node:child_process';
-import * as path from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
@@ -191,6 +190,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
@@ -276,45 +276,6 @@ async function configureExecFile(handlers: Record<string, { stdout: string; stde
     return {} as ReturnType<typeof execFile>;
   });
 }
-
-function _configureBranchesResponse(
-  branches: Array<{
-    name: string;
-    worktree?: string;
-    parentBranch: string;
-    addedAt: string;
-    exists?: boolean;
-  }>
-): void {
-  globalThis.fetch = vi.fn().mockImplementation((url: string, opts?: RequestInit) => {
-    if (typeof url === 'string' && url.includes('/branches') && (!opts?.method || opts.method === 'GET')) {
-      return Promise.resolve(
-        new Response(JSON.stringify({ branches, commits: [], defaultBranch: 'main' }), { status: 200 })
-      );
-    }
-    if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'POST') {
-      return Promise.resolve(new Response(JSON.stringify({}), { status: 201 }));
-    }
-    if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'DELETE') {
-      return Promise.resolve(new Response(null, { status: 204 }));
-    }
-    if (typeof url === 'string' && url.includes('/branches') && opts?.method === 'PATCH') {
-      throw new Error('Provider branch-owner mutation is retired; use admitted assignment');
-    }
-    return Promise.resolve(new Response(JSON.stringify({}), { status: 200 }));
-  });
-}
-
-/**
- * Compiled-hook .mjs paths createWorktree() must be called with, derived from
- * the test ActionInput's extensionPath (`/test/extension`) — see
- * compiledHookScriptPaths() in claude-session.ts (Phase 4.5).
- */
-const _EXPECTED_COMPILED_SCRIPT_PATHS = {
-  'pre-commit': path.join('/test/extension', 'dist', 'git-hooks', 'pre-commit.mjs'),
-  'post-commit': path.join('/test/extension', 'dist', 'git-hooks', 'post-commit.mjs'),
-  'post-rewrite': path.join('/test/extension', 'dist', 'git-hooks', 'post-rewrite.mjs')
-};
 
 describe('claude-session shared utilities', () => {
   describe('buildArgs', () => {
@@ -617,7 +578,7 @@ describe('claude-session shared utilities', () => {
       try {
         await updateMarketplaceRegistration('/ext/dist/marketplace', createMockLogger());
         expect(fsPromises.writeFile).toHaveBeenCalledTimes(1);
-        const written = JSON.parse(vi.mocked(fsPromises.writeFile).mock.calls[0][1] as string);
+        const written = JSON.parse(vi.mocked(fsPromises.writeFile).mock.calls[0]![1] as string);
         expect(written['cards.management'].source.path).toBe('/ext/dist/marketplace');
         expect(written['cards.management'].installLocation).toBe('/ext/dist/marketplace');
       } finally {
@@ -727,7 +688,7 @@ describe('claude-session shared utilities', () => {
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string>; cwd: string };
       // cwd and WORKSPACE_PATH must both be the worktree, not the original workspace
       expect(spawnOpts.cwd).toBe('/test/workspace/.worktrees/cards/card-123/1');
-      expect(spawnOpts.env.WORKSPACE_PATH).toBe('/test/workspace/.worktrees/cards/card-123/1');
+      expect(spawnOpts.env['WORKSPACE_PATH']).toBe('/test/workspace/.worktrees/cards/card-123/1');
 
       child.emit('close', 0);
       await promise;
@@ -755,9 +716,9 @@ describe('claude-session shared utilities', () => {
       await flushMicrotasks();
 
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
-      expect(spawnOpts.env.BASE_BRANCH).toBe('main');
-      expect(spawnOpts.env.PARENT_BRANCH).toBe('main');
-      expect(spawnOpts.env.WORKSPACE_BRANCH).toBe('cards/card-123/1');
+      expect(spawnOpts.env['BASE_BRANCH']).toBe('main');
+      expect(spawnOpts.env['PARENT_BRANCH']).toBe('main');
+      expect(spawnOpts.env['WORKSPACE_BRANCH']).toBe('cards/card-123/1');
 
       child.emit('close', 0);
       await promise;
@@ -1104,7 +1065,7 @@ describe('claude-session shared utilities', () => {
       await flushMicrotasks();
 
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
-      expect(spawnOpts.env.EXIT_WHEN_DONE).toBe('false');
+      expect(spawnOpts.env['EXIT_WHEN_DONE']).toBe('false');
 
       child.emit('close', 0);
       await promise;
@@ -1136,7 +1097,7 @@ describe('claude-session shared utilities', () => {
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
       // When suppressExitWhenDone is not set, EXIT_WHEN_DONE flows from process.env
       // — it is never explicitly overridden to 'false'.
-      expect(spawnOpts.env.EXIT_WHEN_DONE).toBe('true');
+      expect(spawnOpts.env['EXIT_WHEN_DONE']).toBe('true');
 
       child.emit('close', 0);
       await promise;
@@ -1175,7 +1136,7 @@ describe('claude-session shared utilities', () => {
       await flushMicrotasks();
 
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
-      expect(spawnOpts.env.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS).toBe('0');
+      expect(spawnOpts.env['CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS']).toBe('0');
 
       child.emit('close', 0);
       await promise;

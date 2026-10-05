@@ -12,12 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ActionInput } from '@cards.management/sdk/config';
 import { resolveTranscriptPath } from '@cards.management/sdk/session-resolver';
-import {
-  parseManifest,
-  type SessionSyncManifest,
-  type SqlitePollSourceSpec,
-  serializeManifest
-} from '@cards.management/sdk/transcript-sync';
+import { parseManifest, type SessionSyncManifest, serializeManifest } from '@cards.management/sdk/transcript-sync';
 import { afterEach, describe, expect, it } from 'vitest';
 import { defaultAntigravityHandlerDeps } from '../../agent-hooks/src/antigravity/internal/deps.js';
 import { handlePreInvocation } from '../../agent-hooks/src/antigravity/internal/handlers.js';
@@ -140,9 +135,12 @@ describe('Antigravity live transcript chain', () => {
       streamType: 'antigravity-session',
       sources: [{ mode: 'sqlite-poll', conversationId: CONVERSATION_ID }]
     });
-    expect(settingsConfig.environments.default?.streams?.[manifest.streamType]).toBeDefined();
+    expect(settingsConfig.environments['default']?.streams?.[manifest.streamType]).toBeDefined();
 
-    const spec = manifest.sources[0] as SqlitePollSourceSpec;
+    const spec = manifest.sources[0];
+    if (spec?.mode !== 'sqlite-poll') {
+      throw new Error(`expected a sqlite-poll main source, got ${spec?.mode}`);
+    }
     const destination = join(cardRepoPath, 'streams', manifest.streamType, `${spec.pattern}.jsonl`);
     const engine = new SqlitePollEngine({
       manifest,

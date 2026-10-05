@@ -10,6 +10,7 @@
 
 import type { ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
+import type { Dirent, PathLike } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, sep } from 'node:path';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
@@ -28,6 +29,34 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 function toPosix(p: unknown): string {
   return String(p).replace(/\\/g, '/');
 }
+
+/**
+ * Builds a complete `Dirent` fixture for a regular file or a directory.
+ *
+ * @param parentPath - Directory the entry was listed from.
+ * @param name - Entry name.
+ * @param kind - Whether the entry is a regular file or a directory.
+ * @returns A `Dirent` whose type predicates answer for `kind` alone.
+ */
+function dirent(parentPath: string, name: string, kind: 'file' | 'directory'): Dirent {
+  return {
+    name,
+    parentPath,
+    isFile: () => kind === 'file',
+    isDirectory: () => kind === 'directory',
+    isBlockDevice: () => false,
+    isCharacterDevice: () => false,
+    isSymbolicLink: () => false,
+    isFIFO: () => false,
+    isSocket: () => false
+  };
+}
+
+/** The `withFileTypes` overload of `readdirSync` the card-repo walk calls. */
+type ReaddirSyncWithFileTypes = (path: PathLike, options: { withFileTypes: true }) => Dirent[];
+
+/** The name-listing overload of `fs/promises.readdir` the bundle walk's fixture answers. */
+type ReaddirNames = (path: PathLike) => Promise<string[]>;
 
 /**
  * Asymmetric matcher that compares a (possibly backslash-separated) path
@@ -202,55 +231,31 @@ beforeEach(async () => {
   });
 
   const cardRepoDirents = [
-    {
-      name: 'CARD.md',
-      isDirectory: () => false,
-      isFile: () => true
-    },
-    {
-      name: 'plan',
-      isDirectory: () => true,
-      isFile: () => false
-    },
-    {
-      name: 'streams',
-      isDirectory: () => true,
-      isFile: () => false
-    }
+    dirent('/test/repo', 'CARD.md', 'file'),
+    dirent('/test/repo', 'plan', 'directory'),
+    dirent('/test/repo', 'streams', 'directory')
   ];
-  const streamDirents = [
-    {
-      name: 'claude-code-session',
-      isDirectory: () => true,
-      isFile: () => false
-    }
-  ];
-  const streamFileDirents = [
-    {
-      name: 'a.jsonl',
-      isDirectory: () => false,
-      isFile: () => true
-    }
-  ];
+  const streamDirents = [dirent('/test/repo/streams', 'claude-code-session', 'directory')];
+  const streamFileDirents = [dirent('/test/repo/streams/claude-code-session', 'a.jsonl', 'file')];
 
-  vi.mocked(syncFs.readdirSync).mockImplementation((targetPath: string | Buffer | URL) => {
+  vi.mocked(syncFs.readdirSync as ReaddirSyncWithFileTypes).mockImplementation((targetPath) => {
     if (toPosix(targetPath) === '/test/repo') {
-      return cardRepoDirents as ReturnType<typeof syncFs.readdirSync>;
+      return cardRepoDirents;
     }
     if (toPosix(targetPath) === '/test/repo/streams') {
-      return streamDirents as ReturnType<typeof syncFs.readdirSync>;
+      return streamDirents;
     }
     if (toPosix(targetPath) === '/test/repo/streams/claude-code-session') {
-      return streamFileDirents as ReturnType<typeof syncFs.readdirSync>;
+      return streamFileDirents;
     }
     throw Object.assign(new Error(`mock: unhandled readdirSync: ${String(targetPath)}`), { code: 'ENOENT' });
   });
-  vi.mocked(syncFs.statSync).mockImplementation((_targetPath: string | Buffer | URL) => {
+  vi.mocked(syncFs.statSync).mockImplementation((_targetPath: unknown) => {
     return {
       mtimeMs: new Date('2026-04-02T12:34:56Z').getTime()
     } as ReturnType<typeof syncFs.statSync>;
   });
-  vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+  vi.mocked(syncFs.readFileSync).mockImplementation((filePath: unknown) => {
     if (toPosix(filePath) === '/test/repo/CARD.meta.json') {
       return JSON.stringify({
         id: 'card-123',
@@ -313,42 +318,38 @@ beforeEach(async () => {
   // outfit-bearing options, so per-case createWorktree overrides and assertions
   // keep working against the pure-primitive call shape.
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, {
-      cwd: opts.cwd,
-      cardId: opts.cardId,
-      compiledScriptPaths: opts.compiledScriptPaths
-    })
-  );
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => createWorktree(ref, { cwd: opts.cwd }));
   vi.mocked(createWorktree).mockResolvedValue({
     path: '/test/workspace/.worktrees/cards/card-123/1',
     settle: Promise.resolve({
       branch: 'cards/card-123/1',
       worktree: '/test/workspace/.worktrees/cards/card-123/1',
-      baseSha: 'abc123'
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
     })
   });
 
   vi.mocked(fs.access).mockResolvedValue(undefined);
-  vi.mocked(fs.stat).mockImplementation(async (targetPath: string | URL) => {
+  vi.mocked(fs.stat).mockImplementation(async (targetPath: unknown) => {
     if (String(targetPath) === DEFAULT_CODEX_HOME) {
       return { isDirectory: () => true } as Awaited<ReturnType<typeof fs.stat>>;
     }
     throw Object.assign(new Error(`mock: unhandled stat: ${String(targetPath)}`), { code: 'ENOENT' });
   });
-  vi.mocked(fs.readdir).mockImplementation(async (targetPath: string | URL) => {
+  vi.mocked(fs.readdir as ReaddirNames).mockImplementation(async (targetPath) => {
     if (toPosix(targetPath) === '/test/extension/dist/codex') {
-      return ['.agents', 'cards', 'runtime'] as Awaited<ReturnType<typeof fs.readdir>>;
+      return ['.agents', 'cards', 'runtime'];
     }
     // The content-hash walk enumerates each bundled plugin source dir. An empty
     // listing keeps the fixture minimal — the digest just needs to be stable, and
     // these tests assert on the cp/spawn sequence rather than the hash itself.
     if (toPosix(targetPath).startsWith('/test/extension/dist/codex/')) {
-      return [] as unknown as Awaited<ReturnType<typeof fs.readdir>>;
+      return [];
     }
     throw Object.assign(new Error(`mock: unhandled readdir: ${String(targetPath)}`), { code: 'ENOENT' });
   });
-  vi.mocked(fs.readFile).mockImplementation(async (filePath: string | URL) => {
+  vi.mocked(fs.readFile).mockImplementation(async (filePath: unknown) => {
     const p = toPosix(filePath);
     // Bundle (`.../cards/...`), staged (`.../.plugin-install-*/<version>/...`), and
     // published (`.../cards/<version>/...`) manifests all resolve.
@@ -412,6 +413,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
@@ -445,6 +447,8 @@ function baseInput(overrides?: Partial<ActionInput>): ActionInput {
     cardRepoPath: '/test/repo',
     configPath: '/test/config',
     extensionPath: '/test/extension',
+    exitWhenDone: false,
+    marketplacePath: '/test/extension/dist/marketplace',
     codingAgent: 'codex-cli',
     ...overrides
   };
@@ -512,7 +516,7 @@ describe('launch action — codex branch', () => {
       })
     );
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
     expect(args).toContain('--cd');
     expect(args).toContain('/test/workspace/.worktrees/cards/card-123/1');
     expect(args).toContain('--add-dir');
@@ -547,7 +551,7 @@ describe('launch action — codex branch', () => {
     const cpDests = vi.mocked(fs.cp).mock.calls.map((call) => toPosix(call[1]));
     expect(cpDests.length).toBeGreaterThan(0);
     expect(cpDests.every((dest) => dest.startsWith('/custom/codex-home/plugins/cache/local/'))).toBe(true);
-    expect(vi.mocked(spawn).mock.calls[0][2]).toEqual(
+    expect(vi.mocked(spawn).mock.calls[0]![2]).toEqual(
       expect.objectContaining({ env: expect.objectContaining({ CODEX_HOME: '/custom/codex-home' }) })
     );
 
@@ -558,7 +562,7 @@ describe('launch action — codex branch', () => {
   it('fails closed when the bundled marketplace manifest is missing', async () => {
     const { spawn } = await import('node:child_process');
     const fs = await import('node:fs/promises');
-    vi.mocked(fs.access).mockImplementation(async (targetPath: string | URL) => {
+    vi.mocked(fs.access).mockImplementation(async (targetPath: unknown) => {
       if (toPosix(targetPath) === '/test/extension/dist/codex/.agents/plugins/marketplace.json') {
         throw Object.assign(new Error('marketplace missing'), { code: 'ENOENT' });
       }
@@ -599,7 +603,7 @@ describe('launch action — codex branch', () => {
     const spawnOptions = vi.mocked(spawn).mock.calls[0]![2] as Record<string, unknown>;
     expect(spawnOptions['detached']).toBeUndefined();
 
-    const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+    const onCancel = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
     await expect(onCancel()).resolves.toBeUndefined();
 
     child.emit('close', 0);
@@ -667,7 +671,7 @@ describe('chat action — codex branch', () => {
     const promise = action(baseInput({ actionName: 'Chat' }), createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
     expect(args).toEqual(
       expect.arrayContaining([
         '--dangerously-bypass-approvals-and-sandbox',
@@ -703,7 +707,7 @@ describe('interview action — codex branch', () => {
     const promise = action(baseInput({ actionName: 'Interview' }), createMockContext());
     await flushMicrotasks();
 
-    const args = vi.mocked(spawn).mock.calls[0][1] as string[];
+    const args = vi.mocked(spawn).mock.calls[0]![1] as string[];
     expect(args).toContain('--cd');
     expect(args).toContain('/test/workspace/.worktrees/cards/card-123/1');
     expect(args).toContain('--add-dir');

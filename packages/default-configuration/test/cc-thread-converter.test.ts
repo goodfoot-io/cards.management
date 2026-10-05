@@ -25,6 +25,7 @@ import type {
   CcAmbientGroupData,
   CcAttachmentData,
   CcHookData,
+  CcSessionStartData,
   CcSupplementalData,
   CcToolResult
 } from '../src/streams/claude-code-session/www/lib/to-thread-messages.js';
@@ -34,6 +35,25 @@ import { StreamThread } from '../src/streams/lib/aui/index.js';
 // ============================================================================
 // Fixtures (mirroring the retired attachment-render.test.ts / attachment-classify.test.ts)
 // ============================================================================
+
+/**
+ * Narrows a thread message to its leading `cc-session-start` data part and
+ * returns that part's payload.
+ *
+ * @param message - Thread message expected to open with a `cc-session-start` data part.
+ * @returns The part's session-start payload.
+ * @throws {Error} When the message does not open with a `cc-session-start` data part.
+ */
+function sessionStartData(
+  message: ReturnType<typeof toThreadMessages>['messages'][number] | undefined
+): CcSessionStartData {
+  const content = message?.content;
+  const part = typeof content === 'string' ? undefined : content?.[0];
+  if (part?.type !== 'data' || part.name !== 'cc-session-start') {
+    throw new Error('expected a leading cc-session-start data part');
+  }
+  return part.data as CcSessionStartData;
+}
 
 function assistantToolUse(id: string, name = 'Bash'): SessionMsg {
   return {
@@ -751,8 +771,7 @@ describe('toThreadMessages — session-preamble gathering (cc-session-start)', (
     const { messages } = toThreadMessages([{ type: 'mode', mode: 'normal' } as SessionMsg]);
 
     expect(messages).toHaveLength(1);
-    const content = messages[0]?.content as { type: string; name: string }[];
-    expect(content[0]?.name).toBe('cc-session-start');
+    expect(() => sessionStartData(messages[0])).not.toThrow();
   });
 
   it('a coordination-only user turn (no human prose) does not close gathering, and keeps rendering as its own ungrouped user message', () => {
@@ -780,8 +799,7 @@ describe('toThreadMessages — session-preamble gathering (cc-session-start)', (
     expect(threadMessages).toHaveLength(4);
     const group = threadMessages[0];
     expect(group?.content).toHaveLength(1);
-    const groupPart = (group?.content as { name: string; data: { entries: { name: string }[] } }[])[0];
-    expect(groupPart?.data.entries.map((e) => e.name)).toEqual(['status-line', 'status-line']);
+    expect(sessionStartData(group).entries.map((e) => e.name)).toEqual(['status-line', 'status-line']);
 
     const coordinationOnlyUser = threadMessages[1];
     expect(coordinationOnlyUser?.role).toBe('user');
@@ -828,9 +846,9 @@ describe('toThreadMessages — session-preamble gathering (cc-session-start)', (
     const group = threadMessages[0];
     expect(group?.role).toBe('assistant');
     expect(group?.metadata?.custom?.['service']).toBe(true);
-    const part = (group?.content as { name: string; data: { summary: string; entries: { name: string }[] } }[])[0];
-    expect(part?.data.entries.map((e) => e.name)).toEqual(['status-line', 'cc-attachment', 'status-line']);
-    expect(part?.data.summary).toBe('Session started · normal · "Check card status" · 57 skills');
+    const data = sessionStartData(group);
+    expect(data.entries.map((e) => e.name)).toEqual(['status-line', 'cc-attachment', 'status-line']);
+    expect(data.summary).toBe('Session started · normal · "Check card status" · 57 skills');
 
     // The user bubble renders in place, second, untouched.
     expect(threadMessages[1]?.role).toBe('user');

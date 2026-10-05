@@ -140,10 +140,10 @@ describe('populateCodexPluginCache concurrency and atomicity', () => {
 
     // Both calls resolve and resolve the same version-segmented load paths.
     for (const result of [result1, result2]) {
-      expect(result.pluginCachePaths.cards).toBe(
+      expect(result.pluginCachePaths['cards']).toBe(
         path.join(codexHome, 'plugins', 'cache', 'local', 'cards', PLUGIN_VERSIONS.cards)
       );
-      expect(result.pluginCachePaths.runtime).toBe(
+      expect(result.pluginCachePaths['runtime']).toBe(
         path.join(codexHome, 'plugins', 'cache', 'local', 'runtime', PLUGIN_VERSIONS.runtime)
       );
     }
@@ -209,7 +209,7 @@ describe('populateCodexPluginCache concurrency and atomicity', () => {
     const result = await populateCodexPluginCache(codexHome, marketplacePath);
 
     // The new launch resolves to the higher version slot...
-    expect(result.pluginCachePaths.cards).toBe(path.join(codexHome, 'plugins', 'cache', 'local', 'cards', upgraded));
+    expect(result.pluginCachePaths['cards']).toBe(path.join(codexHome, 'plugins', 'cache', 'local', 'cards', upgraded));
     await expectCachedManifest('cards', upgraded);
 
     // ...and the strictly-older slot is pruned, leaving only the current one.

@@ -206,6 +206,7 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
+    onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
@@ -228,6 +229,8 @@ function baseInput(overrides: Partial<ActionInput> = {}): ActionInput {
     cardRepoPath: join(scratchDir, 'card-repo'),
     configPath: join(scratchDir, 'config.json'),
     extensionPath: '/test/extension',
+    exitWhenDone: false,
+    marketplacePath: '/test/extension/dist/marketplace',
     codingAgent: AGENT,
     ...overrides
   };
@@ -273,7 +276,7 @@ async function readSettingsText(): Promise<string> {
  * @returns The file's inode number.
  */
 async function inodeOf(path: string): Promise<bigint> {
-  return (await stat(path)).ino;
+  return (await stat(path, { bigint: true })).ino;
 }
 
 /**
@@ -452,13 +455,17 @@ beforeEach(async () => {
   vi.mocked(checkWorktreeExists).mockResolvedValue(false);
   vi.mocked(createWorktree).mockResolvedValue({
     path: checkoutPath,
-    settle: Promise.resolve({ branch: WORKTREE_BRANCH, worktree: checkoutPath, baseSha: 'abc123' })
+    settle: Promise.resolve({
+      branch: WORKTREE_BRANCH,
+      worktree: checkoutPath,
+      baseSha: 'abc123',
+      copiedFromInclude: 0,
+      reroutedSymlinks: 0
+    })
   });
 
   const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
-  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-    createWorktree(ref, { cwd: opts.cwd, cardId: opts.cardId, compiledScriptPaths: opts.compiledScriptPaths })
-  );
+  vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) => createWorktree(ref, { cwd: opts.cwd }));
 
   const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
   vi.mocked(finalizePersistedSqlitePollSession).mockResolvedValue({ kind: 'flushed', emitted: 0, partial: 0 });

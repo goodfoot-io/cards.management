@@ -75,9 +75,9 @@ describe('settings registration — antigravity-session', () => {
   });
 
   it('wires the renderer into the package build pipeline', () => {
-    const pkg = JSON.parse(readPackageFile('package.json')) as Record<string, { scripts?: Record<string, string> }>;
+    const pkg = JSON.parse(readPackageFile('package.json')) as { scripts?: Record<string, string> };
     const buildWww = pkg.scripts?.['build:www'] ?? '';
-    const typecheck = pkg.scripts?.typecheck ?? '';
+    const typecheck = pkg.scripts?.['typecheck'] ?? '';
     expect(buildWww).toContain('src/streams/antigravity-session/www/build.ts');
     expect(typecheck).toContain('src/streams/antigravity-session/www/tsconfig.json');
 

@@ -272,9 +272,9 @@ describe('parseCodexLine — event_msg payload variants', () => {
     });
     const result = parseCodexLine(raw);
     expect(result.kind).toBe('event_msg');
-    if (result.kind === 'event_msg' && result.payload.type === 'token_count') {
-      expect(result.payload.info?.total_token_usage?.input_tokens).toBe(1024);
-    }
+    expect(result).toMatchObject({
+      payload: { type: 'token_count', info: { total_token_usage: { input_tokens: 1024 } } }
+    });
   });
 
   it('parses a task_started lifecycle event', () => {
@@ -354,10 +354,9 @@ describe('parseCodexLine — persisted tool-activity end events', () => {
     });
     const result = parseCodexLine(raw);
     expect(result.kind).toBe('event_msg');
-    if (result.kind === 'event_msg' && result.payload.type === 'mcp_tool_call_end') {
-      expect(result.payload.invocation.server).toBe('github');
-      expect(result.payload.invocation.tool).toBe('list_prs');
-    }
+    expect(result).toMatchObject({
+      payload: { type: 'mcp_tool_call_end', invocation: { server: 'github', tool: 'list_prs' } }
+    });
   });
 });
 

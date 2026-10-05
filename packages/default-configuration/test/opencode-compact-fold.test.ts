@@ -11,7 +11,7 @@
  * @summary Unit tests for the OpenCode compact state's watermark reconciliation
  */
 
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { opencodeToCompactCardModel } from '../src/streams/opencode-session/www/lib/adapt-compact-model.js';
 import { buildFoldedState, reconcileFolded } from '../src/streams/opencode-session/www/lib/compact-state.js';
 
@@ -95,7 +95,7 @@ function idleLine(ts = '2026-06-04T10:12:00.000Z'): string {
  * Spies on `JSON.parse`, returning a spy whose call count measures fold work.
  * @returns A fresh `JSON.parse` spy.
  */
-function makeParseSpy(): ReturnType<typeof vi.spyOn<JSON, 'parse'>> {
+function makeParseSpy(): MockInstance<typeof JSON.parse> {
   return vi.spyOn(JSON, 'parse');
 }
 

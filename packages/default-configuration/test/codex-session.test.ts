@@ -176,7 +176,7 @@ describe('codex-session library', () => {
 
   it('readCardRepoAgentsMd returns the trimmed AGENTS.md contents', async () => {
     const syncFs = await import('node:fs');
-    vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+    vi.mocked(syncFs.readFileSync).mockImplementation((filePath: unknown) => {
       if (toPosix(filePath) === '/test/repo/AGENTS.md') {
         return '\n\n# Card Repository Reference\n\nCommit everything that must persist.\n\n';
       }
@@ -191,7 +191,7 @@ describe('codex-session library', () => {
 
   it('readCardRepoAgentsMd fails closed when AGENTS.md is unreadable', async () => {
     const syncFs = await import('node:fs');
-    vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+    vi.mocked(syncFs.readFileSync).mockImplementation((filePath: unknown) => {
       throw Object.assign(new Error(`ENOENT: ${String(filePath)}`), { code: 'ENOENT' });
     });
     const { readCardRepoAgentsMd, CardRepoAccessError } = await import('../src/lib/codex-session.js');
@@ -523,18 +523,16 @@ describe('codex-session library', () => {
         settle: Promise.resolve({
           branch: 'cards/card-123/1',
           worktree: '/test/workspace/.worktrees/cards/card-123/1',
-          baseSha: 'abc123'
+          baseSha: 'abc123',
+          copiedFromInclude: 0,
+          reroutedSymlinks: 0
         })
       });
 
       // createWorktreeForCard forwards to createWorktree mock
       const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
       vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-        createWorktree(ref, {
-          cwd: opts.cwd,
-          cardId: opts.cardId,
-          compiledScriptPaths: opts.compiledScriptPaths
-        })
+        createWorktree(ref, { cwd: opts.cwd })
       );
 
       // Plugin cache: manifests resolve
@@ -586,7 +584,7 @@ describe('codex-session library', () => {
 
       // AGENTS.md for readCardRepoAgentsMd
       const syncFs = await import('node:fs');
-      vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+      vi.mocked(syncFs.readFileSync).mockImplementation((filePath: unknown) => {
         if (toPosix(filePath) === '/test/repo/AGENTS.md') {
           return '# Card Repo\n';
         }
@@ -609,6 +607,7 @@ describe('codex-session library', () => {
       return {
         logger: new Logger(),
         cwd: process.cwd(),
+        onShutdown: vi.fn(() => () => {}),
         onCancel: vi.fn(),
         onSwitchToInteractive: vi.fn()
       };
@@ -645,14 +644,15 @@ describe('codex-session library', () => {
         cardRepoPath: '/test/repo',
         configPath: '/test/config',
         extensionPath: '/test/extension',
-        exitWhenDone: true
+        exitWhenDone: true,
+        marketplacePath: '/test/extension/dist/marketplace'
       };
 
       const promise = spawnCodexSession(input, createMockContext(), { suppressExitWhenDone: true });
       await flushMicrotasks();
 
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string> };
-      expect(spawnOpts.env.EXIT_WHEN_DONE).toBe('false');
+      expect(spawnOpts.env['EXIT_WHEN_DONE']).toBe('false');
 
       child.emit('close', 0);
       await promise;
@@ -687,7 +687,8 @@ describe('codex-session library', () => {
           cardRepoPath: '/test/repo',
           configPath: '/test/config',
           extensionPath: '/test/extension',
-          exitWhenDone: true
+          exitWhenDone: true,
+          marketplacePath: '/test/extension/dist/marketplace'
         },
         createMockContext(),
         { prompt: 'Do the work' }

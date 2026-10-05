@@ -52,7 +52,7 @@ function assistantLine(opts: { uuid?: string; text?: string; tool?: string; outp
   if (opts.text != null) content.push({ type: 'text', text: opts.text });
   if (opts.tool != null) content.push({ type: 'tool_use', id: nextUuid(), name: opts.tool, input: {} });
   const message: Record<string, unknown> = { content };
-  if (opts.outputTokens != null) message.usage = { output_tokens: opts.outputTokens };
+  if (opts.outputTokens != null) message['usage'] = { output_tokens: opts.outputTokens };
   return JSON.stringify({ type: 'assistant', uuid: opts.uuid ?? nextUuid(), message });
 }
 

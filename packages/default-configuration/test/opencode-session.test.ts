@@ -594,17 +594,15 @@ describe('opencode-session library', () => {
         settle: Promise.resolve({
           branch: 'cards/card-123/1',
           worktree: '/test/workspace/.worktrees/cards/card-123/1',
-          baseSha: 'abc123'
+          baseSha: 'abc123',
+          copiedFromInclude: 0,
+          reroutedSymlinks: 0
         })
       });
 
       const { createWorktreeForCard } = await import('@cards.management/sdk/worktree-for-card');
       vi.mocked(createWorktreeForCard).mockImplementation((_client, ref, opts) =>
-        createWorktree(ref, {
-          cwd: opts.cwd,
-          cardId: opts.cardId,
-          compiledScriptPaths: opts.compiledScriptPaths
-        })
+        createWorktree(ref, { cwd: opts.cwd })
       );
 
       // Plugin cache: everything resolves; empty plugin dirs (no .mjs entries).
@@ -621,7 +619,7 @@ describe('opencode-session library', () => {
 
       // Card-repo AGENTS.md for the opening-turn composition
       const syncFs = await import('node:fs');
-      vi.mocked(syncFs.readFileSync).mockImplementation((filePath: string | Buffer | URL) => {
+      vi.mocked(syncFs.readFileSync).mockImplementation((filePath: unknown) => {
         if (toPosix(filePath) === '/test/repo/AGENTS.md') {
           return '# Card Repo Reference\n';
         }
@@ -638,6 +636,7 @@ describe('opencode-session library', () => {
       return {
         logger: new Logger(),
         cwd: process.cwd(),
+        onShutdown: vi.fn(() => () => {}),
         onCancel: vi.fn(),
         onSwitchToInteractive: vi.fn()
       };
@@ -671,6 +670,8 @@ describe('opencode-session library', () => {
         cardRepoPath: '/test/repo',
         configPath: '/test/config',
         extensionPath: '/test/extension',
+        exitWhenDone: false,
+        marketplacePath: '/test/extension/dist/marketplace',
         codingAgent: 'opencode-cli',
         ...overrides
       };
@@ -721,14 +722,14 @@ describe('opencode-session library', () => {
       const opts = calls[0]![2] as { cwd: string; stdio: string; env: Record<string, string | undefined> };
       expect(opts.cwd).toBe('/test/workspace/.worktrees/cards/card-123/1');
       expect(opts.stdio).toBe('inherit');
-      expect(opts.env.WORKSPACE_PATH).toBe('/test/workspace/.worktrees/cards/card-123/1');
-      expect(opts.env.BASE_BRANCH).toBe('main');
-      expect(opts.env.PARENT_BRANCH).toBe('main');
-      expect(opts.env.WORKSPACE_BRANCH).toBe('cards/card-123/1');
+      expect(opts.env['WORKSPACE_PATH']).toBe('/test/workspace/.worktrees/cards/card-123/1');
+      expect(opts.env['BASE_BRANCH']).toBe('main');
+      expect(opts.env['PARENT_BRANCH']).toBe('main');
+      expect(opts.env['WORKSPACE_BRANCH']).toBe('cards/card-123/1');
       // A staged config document is passed via OPENCODE_CONFIG (never
       // CODEX_HOME-style replacement), written under the Cards home staging
       // dir — never into the user's OpenCode config dir.
-      const stagedConfig = String(opts.env.OPENCODE_CONFIG);
+      const stagedConfig = String(opts.env['OPENCODE_CONFIG']);
       expect(stagedConfig.startsWith(`${toPosix(CARDS_OPENCODE_STAGING_DIR)}/`)).toBe(true);
       expect(stagedConfig.endsWith('cards-launch.config.json')).toBe(true);
       const launchConfigWrites = vi
@@ -757,7 +758,7 @@ describe('opencode-session library', () => {
       await flushMicrotasks();
 
       const spawnOpts = vi.mocked(spawn).mock.calls[0]![2] as { env: Record<string, string | undefined> };
-      expect(spawnOpts.env.EXIT_WHEN_DONE).toBe('false');
+      expect(spawnOpts.env['EXIT_WHEN_DONE']).toBe('false');
 
       child.emit('close', 0);
       await promise;
@@ -789,7 +790,7 @@ describe('opencode-session library', () => {
       const promise = spawnOpencodeSession(baseInput(), context, {});
       await flushMicrotasks();
 
-      const onCancel = vi.mocked(context.onCancel).mock.calls[0][0] as () => Promise<void>;
+      const onCancel = vi.mocked(context.onCancel).mock.calls[0]![0] as () => Promise<void>;
       await onCancel();
       expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
 
