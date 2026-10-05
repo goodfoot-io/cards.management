@@ -18,9 +18,12 @@ import interview from './src/actions/interview.js';
 import launch from './src/actions/launch.js';
 // Cards assistant handler
 import cardsAssistant from './src/cards-assistant.js';
+// Worktree slot maintenance root command
+import worktreeMaintenance from './src/worktree-maintenance.js';
 
 export default defineConfig({
   cardsAssistant,
+  worktreeMaintenance,
   environments: {
     default: {
       version: 1,

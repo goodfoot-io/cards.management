@@ -240,6 +240,13 @@ describe('cleanupCardSlots preservation', () => {
     await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
     await fx.git(['branch', '-D', slot.branch]);
 
+    // Preview predicts the unregistration without making it.
+    expect(decisionOf(await pass({ mode: 'preview' }), slot.branch)).toMatchObject({
+      reason: 'missing',
+      outcome: 'eligible'
+    });
+    expect(fx.client.registrations.has(slot.branch)).toBe(true);
+
     const decision = decisionOf(await pass(), slot.branch);
 
     expect(decision).toMatchObject({ reason: 'missing', outcome: 'removed' });

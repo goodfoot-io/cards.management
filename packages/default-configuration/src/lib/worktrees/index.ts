@@ -19,6 +19,7 @@ export {
 } from './acquire.js';
 export {
   cleanupCardSlots,
+  clearsCardDeletion,
   SLOT_CLEANUP_MAINTENANCE_BUDGET_MS,
   SLOT_CLEANUP_PASS_BUDGET_MS,
   type SlotCleanupContext,

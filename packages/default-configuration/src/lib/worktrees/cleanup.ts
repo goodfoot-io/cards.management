@@ -151,6 +151,20 @@ function describeOccupants(occupants: readonly SlotOccupant[], previous: SlotLoc
 }
 
 /**
+ * Whether a pass's decisions allow the card to be deleted: the pass stopped
+ * nowhere and left no slot preserved, failed or unstarted. It is `ok` for
+ * `prepare-delete`, and the deletion verdict a preview or cleanup reports.
+ * @param result - The pass's decisions and any pass-level failure.
+ * @returns True when every slot was removed or is eligible and no failure is set.
+ */
+export function clearsCardDeletion(result: Pick<SlotCleanupResult, 'decisions' | 'failure'>): boolean {
+  return (
+    result.failure === undefined &&
+    result.decisions.every((decision) => decision.outcome === 'removed' || decision.outcome === 'eligible')
+  );
+}
+
+/**
  * Runs one cleanup pass over a card's slots.
  * @param context - Client, logger, card and workspace.
  * @param options - Requester, mode and budget.
@@ -173,10 +187,7 @@ export async function cleanupCardSlots(
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
-    const ok =
-      failure === undefined &&
-      (mode !== 'prepare-delete' ||
-        decisions.every((decision) => decision.outcome === 'removed' || decision.outcome === 'eligible'));
+    const ok = mode === 'prepare-delete' ? clearsCardDeletion({ decisions, failure }) : failure === undefined;
     logger.info('Slot cleanup pass finished', {
       cardId,
       mode,
@@ -444,7 +455,9 @@ export async function cleanupCardSlots(
       if (mode === 'preview' || !residue) {
         const verdict = await inspect(slot, inventory);
         if (mode === 'preview') {
-          record(slot, verdict.reason, verdict.detail, verdict.reason === 'eligible' ? 'eligible' : 'preserved');
+          // A missing slot is only unregistered by a cleanup, so it does not keep the card.
+          const removable = verdict.reason === 'eligible' || verdict.reason === 'missing';
+          record(slot, verdict.reason, verdict.detail, removable ? 'eligible' : 'preserved');
           continue;
         }
         if (verdict.reason !== 'eligible' && verdict.reason !== 'missing') {
