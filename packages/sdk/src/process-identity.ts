@@ -18,7 +18,7 @@
  * @module
  */
 import { type ChildProcess, spawn } from 'node:child_process';
-import { readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile, readlink, stat } from 'node:fs/promises';
 
 /**
  * Opaque name for one POSIX session, compared only for equality.
@@ -174,13 +174,13 @@ export async function runIdentityProbe(
   args: readonly string[],
   timeoutMs: number,
   helpers?: ControlHelperRegistry
-): Promise<{ stdout: string; failed: boolean; helperPid?: number }> {
+): Promise<IdentityProbeOutput> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return { stdout: '', failed: true };
   return new Promise((resolve) => {
     let settled = false;
     let timer: NodeJS.Timeout | undefined;
     let child: ReturnType<SessionExecFile>;
-    const finish = (value: { stdout: string; failed: boolean }): void => {
+    const finish = (value: Omit<IdentityProbeOutput, 'helperPid'>): void => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
@@ -196,12 +196,18 @@ export async function runIdentityProbe(
           killSignal: 'SIGKILL',
           env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }
         },
-        (error, stdout) => {
+        (error, stdout, stderr) => {
           // Also handles synchronous test/custom exec callbacks: the child must
           // be registered before its completion releases that registration.
           queueMicrotask(() => {
             if (error === null && child?.pid !== undefined) helpers?.release(child.pid);
-            finish({ stdout: String(stdout), failed: error !== null });
+            const code = (error as { code?: unknown } | null)?.code;
+            finish({
+              stdout: String(stdout),
+              failed: error !== null,
+              ...(stderr === undefined ? {} : { stderr: String(stderr) }),
+              ...(error === null ? { exitCode: 0 } : typeof code === 'number' ? { exitCode: code } : {})
+            });
           });
         }
       );
@@ -226,6 +232,18 @@ export async function runIdentityProbe(
   });
 }
 
+/** One identity helper's output and how it ended. */
+export interface IdentityProbeOutput {
+  readonly stdout: string;
+  /** True unless the helper exited 0 with complete output. */
+  readonly failed: boolean;
+  /** Present when the helper's stderr was observed. */
+  readonly stderr?: string;
+  /** Present when the helper exited by itself with a known code. */
+  readonly exitCode?: number;
+  readonly helperPid?: number;
+}
+
 /**
  * Runs a production probe directly through the helper's real Node lifetime.
  * Injected exec boundaries retain the narrower callback seam used by tests.
@@ -240,7 +258,7 @@ export async function runNodeIdentityProbe(
   args: readonly string[],
   timeoutMs: number,
   options: Pick<NodeSessionPlatformOptions, 'execFile' | 'helpers'> = {}
-): Promise<{ stdout: string; failed: boolean; helperPid?: number }> {
+): Promise<IdentityProbeOutput> {
   if (options.execFile !== undefined)
     return runIdentityProbe(options.execFile, command, args, timeoutMs, options.helpers);
   try {
@@ -249,9 +267,11 @@ export async function runNodeIdentityProbe(
       maxOutputBytes: 8 * 1024 * 1024,
       helpers: options.helpers
     });
+    const exited = !result.timedOut && result.outputComplete && result.exitCode !== null;
     return {
       stdout: result.stdout,
       failed: result.exitCode !== 0 || result.timedOut || !result.outputComplete,
+      ...(exited ? { stderr: result.stderr, exitCode: result.exitCode as number } : {}),
       ...(result.pid === undefined ? {} : { helperPid: result.pid })
     };
   } catch {
@@ -334,6 +354,43 @@ function parseDarwinRow(row: string): WrapperProcessIdentity | null {
 }
 
 const DARWIN_FORMAT = 'pid=,ppid=,pgid=,sess=,stat=,lstart=';
+
+/**
+ * Whether a failed macOS `ps -p` proves the PID absent [F9].
+ *
+ * Apple's `ps` exits 1 with empty stdout for a missing PID, but also on its
+ * `errx(1, ...)` and `usage()` paths, so the output alone proves nothing. Only
+ * exit 1 with empty stdout and empty stderr, confirmed by a fresh signal-0
+ * probe made after `ps` returned, is absence; everything else stays unknown.
+ * @param result - How `ps` ended.
+ * @param result.stdout - Rows `ps` printed.
+ * @param result.stderr - Diagnostics `ps` printed; undefined when not observed.
+ * @param result.exitCode - Exit code; undefined or null when `ps` did not exit by itself.
+ * @param absentNow - Fresh signal-0 probe; true on `ESRCH`.
+ * @returns True only when absence is confirmed.
+ */
+function darwinPsConfirmsAbsence(
+  result: { readonly stdout: string; readonly stderr?: string; readonly exitCode?: number | null },
+  absentNow: () => boolean
+): boolean {
+  if (result.exitCode !== 1 || result.stdout.trim() !== '' || result.stderr === undefined) return false;
+  if (result.stderr.trim() !== '') return false;
+  return absentNow();
+}
+
+/**
+ * Signal-0 probe through `process.kill`, failing closed.
+ * @param pid - Process to probe.
+ * @returns True only when the kernel answers `ESRCH`.
+ */
+function killReportsAbsent(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ESRCH';
+  }
+}
 
 /**
  * Distinguishes confirmed process disappearance from an unreadable probe.
@@ -441,7 +498,7 @@ export function createNodeSessionPlatform(options: NodeSessionPlatformOptions = 
       }
     }
     const result = await runNodeIdentityProbe('ps', ['-o', DARWIN_FORMAT, '-p', String(pid)], budget, options);
-    if (result.failed) return 'unknown';
+    if (result.failed) return darwinPsConfirmsAbsence(result, () => killReportsAbsent(pid)) ? null : 'unknown';
     const row = result.stdout.split('\n').find((line) => line.trim() !== '');
     return row === undefined ? null : (parseDarwinRow(row) ?? 'unknown');
   };
@@ -826,15 +883,423 @@ export interface ProcessIdentityService {
   currentProcessIdentity(): Promise<ProcessIdentity | 'unknown'>;
 }
 
+/** Budget of the Windows CIM read behind the domain and self identity when no batch supplied them. */
+const WINDOWS_SELF_TIMEOUT_MS = 15_000;
+
+/**
+ * The host's OS readers.
+ * @returns Readers over `process.kill`, the filesystem and {@link runBoundedCommand}.
+ */
+function hostReaders(): ProcessIdentityReaders {
+  return {
+    platform: process.platform,
+    pid: process.pid,
+    kill: (pid, signal) => {
+      process.kill(pid, signal);
+    },
+    readText: (path, timeoutMs) =>
+      readFile(path, { encoding: 'utf8', signal: AbortSignal.timeout(Math.max(1, Math.ceil(timeoutMs))) }),
+    readLink: (path) => readlink(path),
+    inode: async (path) => (await stat(path, { bigint: true })).ino.toString(),
+    runCommand: (file, args, options) => runBoundedCommand(file, args, { timeoutMs: options.timeoutMs })
+  };
+}
+
+/**
+ * The `/proc/<pid>/stat` fields after the parenthesised command name.
+ * @param text - Raw stat line.
+ * @returns Fields from the state (field 3) onwards.
+ */
+function statFields(text: string): string[] {
+  return text
+    .slice(text.lastIndexOf(')') + 2)
+    .trim()
+    .split(/\s+/);
+}
+
+/**
+ * Narrows a wrapper observation to the parts a lock records.
+ * @param identity - Parsed wrapper identity.
+ * @returns The identity without session details.
+ */
+function narrow(identity: WrapperProcessIdentity): ProcessIdentity {
+  return {
+    pid: identity.pid,
+    parentPid: identity.parentPid,
+    startIdentity: identity.startIdentity,
+    processGroupId: identity.processGroupId
+  };
+}
+
+/**
+ * The errno code of a rejected read.
+ * @param error - Rejection reason.
+ * @returns Its `code`, if any.
+ */
+function errnoOf(error: unknown): string | undefined {
+  return (error as NodeJS.ErrnoException | undefined)?.code;
+}
+
+/** One Windows CIM read: the matching processes, plus the domain parts when requested. */
+interface WindowsCimResult {
+  readonly processes: readonly ProcessIdentity[];
+  readonly domain?: WindowsProcessDomain;
+}
+
+/**
+ * The PowerShell script of one CIM roster read.
+ * @param pids - Processes to read, or undefined for every process.
+ * @param withDomain - Whether to read `MachineGuid` and `LastBootUpTime` in the same call.
+ * @returns A script printing `{processes, machineId, bootTime}` as compact JSON.
+ */
+function windowsCimScript(pids: readonly number[] | undefined, withDomain: boolean): string {
+  const filter = pids === undefined ? '' : ` -Filter "${pids.map((pid) => `ProcessId=${pid}`).join(' OR ')}"`;
+  const domain = withDomain
+    ? `$g = $null; try { $g = (Get-ItemProperty -Path 'HKLM:\\SOFTWARE\\Microsoft\\Cryptography' -Name MachineGuid -ErrorAction Stop).MachineGuid } catch { }; $b = $null; try { $b = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime().ToString('o') } catch { }; `
+    : '$g = $null; $b = $null; ';
+  return `$ErrorActionPreference = 'Stop'; $p = @(Get-CimInstance Win32_Process${filter} -ErrorAction Stop | Where-Object { $_.ProcessId -gt 1 } | ForEach-Object { [PSCustomObject]@{ pid=[int]$_.ProcessId; parentPid=[int]$_.ParentProcessId; startIdentity=$_.CreationDate.ToUniversalTime().Ticks.ToString() } }); ${domain}[PSCustomObject]@{ processes=$p; machineId=$g; bootTime=$b } | ConvertTo-Json -Compress -Depth 4`;
+}
+
+/**
+ * Parses one CIM roster read, failing closed on any malformed row.
+ * @param stdout - The script's JSON output.
+ * @param withDomain - Whether the domain parts were requested.
+ * @returns The roster, or `unknown` when the output is not the expected shape.
+ */
+function parseWindowsCim(stdout: string, withDomain: boolean): WindowsCimResult | 'unknown' {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch {
+    return 'unknown';
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return 'unknown';
+  const record = parsed as Record<string, unknown>;
+  const rows: unknown[] = Array.isArray(record['processes'])
+    ? record['processes']
+    : record['processes'] === null || record['processes'] === undefined
+      ? []
+      : [record['processes']];
+  const processes: ProcessIdentity[] = [];
+  for (const raw of rows) {
+    if (raw === null || typeof raw !== 'object') return 'unknown';
+    const row = raw as Record<string, unknown>;
+    if (
+      typeof row['pid'] !== 'number' ||
+      !isSafeProcessId(row['pid']) ||
+      typeof row['parentPid'] !== 'number' ||
+      !Number.isSafeInteger(row['parentPid']) ||
+      row['parentPid'] < 0 ||
+      typeof row['startIdentity'] !== 'string' ||
+      !/^[1-9]\d*$/.test(row['startIdentity'])
+    )
+      return 'unknown';
+    processes.push({
+      pid: row['pid'],
+      parentPid: row['parentPid'],
+      startIdentity: row['startIdentity'],
+      processGroupId: 0
+    });
+  }
+  if (!withDomain) return { processes };
+  const text = (value: unknown): string | null => (typeof value === 'string' && value !== '' ? value : null);
+  return {
+    processes,
+    domain: { platform: 'win32', machineId: text(record['machineId']), bootTime: text(record['bootTime']) }
+  };
+}
+
 /**
  * Creates the identity service over the given OS readers.
  * @param readers - Overrides for any OS read; defaults are the host's.
  * @returns Identity operations; domain, group and self reads are cached per service.
- * @throws {Error} Always: not implemented yet.
  */
 export function createProcessIdentity(readers: Partial<ProcessIdentityReaders> = {}): ProcessIdentityService {
-  void readers;
-  throw new Error('Not Implemented');
+  const os: ProcessIdentityReaders = { ...hostReaders(), ...readers };
+  const { platform, pid: selfPid } = os;
+  let domainCache: Promise<ProcessDomain> | undefined;
+  let groupCache: Promise<number | null> | undefined;
+  let selfCache: ProcessIdentity | undefined;
+
+  const absent = (pid: number): boolean => {
+    try {
+      os.kill(pid, 0);
+      return false;
+    } catch (error) {
+      const code = errnoOf(error);
+      if (code === 'ESRCH') return true;
+      if (code === 'EPERM') return false;
+      throw error;
+    }
+  };
+  const absentFailClosed = (pid: number): boolean => {
+    try {
+      return absent(pid);
+    } catch {
+      return false;
+    }
+  };
+  const readOptional = async (path: string, timeoutMs: number): Promise<string | null> => {
+    try {
+      const value = (await os.readText(path, timeoutMs)).trim();
+      return value === '' ? null : value;
+    } catch {
+      return null;
+    }
+  };
+  // /proc may belong to another PID namespace; only a /proc/self that names
+  // this process speaks for it.
+  const procIsOurs = async (): Promise<boolean> => {
+    try {
+      return (await os.readLink('/proc/self')) === String(selfPid);
+    } catch {
+      return false;
+    }
+  };
+
+  const windowsCim = async (
+    pids: readonly number[] | undefined,
+    withDomain: boolean,
+    timeoutMs: number
+  ): Promise<WindowsCimResult | 'unknown'> => {
+    const result = await os.runCommand(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', windowsCimScript(pids, withDomain)],
+      { timeoutMs }
+    );
+    if (result.exitCode !== 0 || result.timedOut || !result.outputComplete) return 'unknown';
+    const parsed = parseWindowsCim(result.stdout, withDomain);
+    if (parsed === 'unknown') return parsed;
+    // The PowerShell helper lists itself in a full roster.
+    return result.pid === undefined
+      ? parsed
+      : { ...parsed, processes: parsed.processes.filter((entry) => entry.pid !== result.pid) };
+  };
+
+  const linuxIdentify = async (pid: number, timeoutMs: number): Promise<IdentityProbe> => {
+    let bootId: string;
+    try {
+      bootId = (await os.readText('/proc/sys/kernel/random/boot_id', timeoutMs)).trim();
+    } catch {
+      return 'unknown';
+    }
+    if (bootId === '') return 'unknown';
+    let text: string;
+    try {
+      text = await os.readText(`/proc/${pid}/stat`, timeoutMs);
+    } catch (error) {
+      return isAbsent(error) ? null : 'unknown';
+    }
+    const parsed = parseLinuxStat(pid, text, bootId);
+    return parsed === null ? 'unknown' : narrow(parsed);
+  };
+
+  const darwinIdentify = async (pid: number, timeoutMs: number): Promise<IdentityProbe> => {
+    const result = await os.runCommand('ps', ['-o', DARWIN_FORMAT, '-p', String(pid)], { timeoutMs });
+    if (result.timedOut || !result.outputComplete || result.exitCode === null) return 'unknown';
+    if (result.exitCode !== 0) return darwinPsConfirmsAbsence(result, () => absentFailClosed(pid)) ? null : 'unknown';
+    const row = result.stdout.split('\n').find((line) => line.trim() !== '');
+    const parsed = row === undefined ? null : parseDarwinRow(row);
+    return parsed === null || parsed.pid !== pid ? 'unknown' : narrow(parsed);
+  };
+
+  const identifyMany = async (pids: readonly number[], options: IdentifyManyOptions): Promise<IdentifyManyResult> => {
+    const unique = [...new Set(pids)];
+    if (platform === 'win32') {
+      const requested = options.includeSelf === true ? [...new Set([...unique, selfPid])] : unique;
+      if (requested.length === 0) return { identities: new Map() };
+      const valid = requested.filter(isSafeProcessId);
+      const roster =
+        valid.length === 0
+          ? ({ processes: [] } satisfies WindowsCimResult)
+          : await withinObservationDeadline<WindowsCimResult | 'unknown'>(
+              () => windowsCim(valid, options.includeSelf === true, options.timeoutMs),
+              options.timeoutMs,
+              'unknown'
+            );
+      const identities = new Map<number, IdentityProbe>();
+      for (const pid of unique) {
+        if (!isSafeProcessId(pid)) identities.set(pid, null);
+        else if (roster === 'unknown') identities.set(pid, 'unknown');
+        else identities.set(pid, roster.processes.find((entry) => entry.pid === pid) ?? null);
+      }
+      if (options.includeSelf !== true) return { identities };
+      if (roster === 'unknown') return { identities, self: 'unknown' };
+      const self = roster.processes.find((entry) => entry.pid === selfPid);
+      if (self !== undefined) selfCache = self;
+      if (roster.domain !== undefined) domainCache ??= Promise.resolve(roster.domain);
+      return {
+        identities,
+        self: self ?? 'unknown',
+        ...(roster.domain === undefined ? {} : { domain: roster.domain })
+      };
+    }
+    const answers = await Promise.all(unique.map((pid) => service.identify(pid, options.timeoutMs)));
+    const identities = new Map(unique.map((pid, index) => [pid, answers[index] as IdentityProbe]));
+    if (options.includeSelf !== true) return { identities };
+    return { identities, self: await service.currentProcessIdentity() };
+  };
+
+  const readDomain = async (): Promise<ProcessDomain> => {
+    const budget = DEFAULT_SESSION_PROBE_TIMEOUT_MS;
+    if (platform === 'linux') {
+      const [machineId, bootId, ours] = await Promise.all([
+        readOptional('/etc/machine-id', budget),
+        readOptional('/proc/sys/kernel/random/boot_id', budget),
+        procIsOurs()
+      ]);
+      let pidNamespace: string | null = null;
+      let pidNamespaceInit: string | null = null;
+      if (ours) {
+        try {
+          pidNamespace = await os.inode('/proc/self/ns/pid');
+        } catch {
+          pidNamespace = null;
+        }
+        const init = await readOptional('/proc/1/stat', budget);
+        const start = init === null ? undefined : statFields(init)[19];
+        pidNamespaceInit = start !== undefined && /^\d+$/.test(start) ? start : null;
+      }
+      return { platform: 'linux', machineId, bootId, pidNamespace, pidNamespaceInit };
+    }
+    const sysctl = await os
+      .runCommand('sysctl', ['-n', 'kern.bootsessionuuid'], { timeoutMs: budget })
+      .catch(() => undefined);
+    const bootSessionUuid =
+      sysctl?.exitCode === 0 && sysctl.outputComplete && sysctl.stdout.trim() !== '' ? sysctl.stdout.trim() : null;
+    const ioreg = await os
+      .runCommand('ioreg', ['-rd1', '-c', 'IOPlatformExpertDevice'], { timeoutMs: budget })
+      .catch(() => undefined);
+    const machineId =
+      ioreg?.exitCode === 0 ? (/"IOPlatformUUID"\s*=\s*"([^"]+)"/.exec(ioreg.stdout)?.[1] ?? null) : null;
+    return { platform: 'darwin', machineId, bootSessionUuid };
+  };
+
+  const readGroup = async (): Promise<number | null> => {
+    if (platform === 'win32') return null;
+    if (platform === 'linux') {
+      if (!(await procIsOurs())) return null;
+      const text = await readOptional('/proc/self/stat', DEFAULT_SESSION_PROBE_TIMEOUT_MS);
+      const group = text === null ? Number.NaN : Number(statFields(text)[2]);
+      return Number.isSafeInteger(group) && group > 0 ? group : null;
+    }
+    const result = await os
+      .runCommand('ps', ['-o', 'pgid=', '-p', String(selfPid)], { timeoutMs: DEFAULT_SESSION_PROBE_TIMEOUT_MS })
+      .catch(() => undefined);
+    const group = result?.exitCode === 0 ? Number(result.stdout.trim()) : Number.NaN;
+    return Number.isSafeInteger(group) && group > 0 ? group : null;
+  };
+
+  const service: ProcessIdentityService = {
+    platform,
+    pid: selfPid,
+    async enumerate(timeoutMs) {
+      if (platform === 'win32') {
+        const roster = await withinObservationDeadline<WindowsCimResult | 'unknown'>(
+          () => windowsCim(undefined, false, timeoutMs),
+          timeoutMs,
+          'unknown'
+        );
+        return roster === 'unknown' ? roster : roster.processes;
+      }
+      if (platform === 'linux') {
+        return withinObservationDeadline<readonly ProcessIdentity[] | 'unknown'>(
+          async () => {
+            let bootId: string;
+            try {
+              bootId = (await os.readText('/proc/sys/kernel/random/boot_id', timeoutMs)).trim();
+            } catch {
+              return 'unknown';
+            }
+            const names = (await readdir('/proc')).filter((name) => /^\d+$/.test(name));
+            const rows = await Promise.all(
+              names.map(async (name): Promise<ProcessIdentity | null | 'unknown'> => {
+                try {
+                  const parsed = parseLinuxStat(
+                    Number(name),
+                    await os.readText(`/proc/${name}/stat`, timeoutMs),
+                    bootId
+                  );
+                  return parsed === null ? 'unknown' : narrow(parsed);
+                } catch (error) {
+                  // Permission, I/O and malformed reads are not evidence of death.
+                  return isAbsent(error) ? null : 'unknown';
+                }
+              })
+            );
+            if (rows.includes('unknown')) return 'unknown';
+            return rows.filter((row): row is ProcessIdentity => row !== null && row !== 'unknown');
+          },
+          timeoutMs,
+          'unknown'
+        );
+      }
+      return withinObservationDeadline<readonly ProcessIdentity[] | 'unknown'>(
+        async () => {
+          const result = await os.runCommand('ps', ['-Ao', DARWIN_FORMAT], { timeoutMs });
+          if (result.exitCode !== 0 || result.timedOut || !result.outputComplete) return 'unknown';
+          const rows = result.stdout
+            .split('\n')
+            .filter((line) => line.trim() !== '')
+            .map(parseDarwinRow);
+          if (rows.length === 0 || rows.some((row) => row === null)) return 'unknown';
+          // ps lists itself even though it has exited by now.
+          return rows
+            .filter((row): row is WrapperProcessIdentity => row !== null && row.pid !== result.pid)
+            .map(narrow);
+        },
+        timeoutMs,
+        'unknown'
+      );
+    },
+    async identify(pid, timeoutMs = DEFAULT_SESSION_PROBE_TIMEOUT_MS) {
+      if (!isSafeProcessId(pid)) return null;
+      // A fresh ESRCH settles absence without a helper process.
+      if (absentFailClosed(pid)) return null;
+      if (platform === 'win32') {
+        return (await identifyMany([pid], { timeoutMs })).identities.get(pid) ?? 'unknown';
+      }
+      const read = platform === 'linux' ? linuxIdentify : darwinIdentify;
+      return withinObservationDeadline<IdentityProbe>(() => read(pid, timeoutMs), timeoutMs, 'unknown');
+    },
+    identifyMany,
+    isProcessAbsent: absent,
+    isProcessGroupAlive(pgid) {
+      if (platform === 'win32') return null;
+      if (!isSafeProcessId(pgid)) throw new RangeError(`Refusing to probe process group ${pgid}`);
+      return !absent(-pgid);
+    },
+    currentProcessDomain() {
+      if (platform === 'win32') {
+        if (domainCache !== undefined) return domainCache;
+        return identifyMany([], { timeoutMs: WINDOWS_SELF_TIMEOUT_MS, includeSelf: true }).then(
+          (result) => result.domain ?? { platform: 'win32', machineId: null, bootTime: null }
+        );
+      }
+      domainCache ??= readDomain();
+      return domainCache;
+    },
+    currentProcessGroupId() {
+      groupCache ??= readGroup();
+      return groupCache;
+    },
+    async currentProcessIdentity() {
+      if (selfCache !== undefined) return selfCache;
+      let self: IdentityProbe;
+      if (platform === 'win32') {
+        const result = await identifyMany([], { timeoutMs: WINDOWS_SELF_TIMEOUT_MS, includeSelf: true });
+        self = result.self ?? 'unknown';
+      } else if (platform === 'linux' && !(await procIsOurs())) {
+        self = 'unknown';
+      } else {
+        self = await service.identify(selfPid);
+      }
+      if (self === null || self === 'unknown') return 'unknown';
+      selfCache = self;
+      return self;
+    }
+  };
+  return service;
 }
 
 /**
@@ -842,12 +1307,27 @@ export function createProcessIdentity(readers: Partial<ProcessIdentityReaders> =
  * @param holder - Domain recorded in the lock.
  * @param self - This process's domain.
  * @returns How the holder's PIDs may be judged here.
- * @throws {Error} Always: not implemented yet.
  */
 export function compareDomains(holder: ProcessDomain, self: ProcessDomain): DomainComparison {
-  void holder;
-  void self;
-  throw new Error('Not Implemented');
+  if (holder.platform !== self.platform) return 'other';
+  if (holder.platform === 'win32' || self.platform === 'win32') return 'pid_rules';
+  const parts: { boot: boolean; held: string | null; own: string | null }[] =
+    holder.platform === 'linux' && self.platform === 'linux'
+      ? [
+          { boot: true, held: holder.bootId, own: self.bootId },
+          { boot: false, held: holder.pidNamespace, own: self.pidNamespace },
+          { boot: false, held: holder.pidNamespaceInit, own: self.pidNamespaceInit }
+        ]
+      : holder.platform === 'darwin' && self.platform === 'darwin'
+        ? [{ boot: true, held: holder.bootSessionUuid, own: self.bootSessionUuid }]
+        : [];
+  const differs = (part: (typeof parts)[number]): boolean =>
+    part.held !== null && part.own !== null && part.held !== part.own;
+  if (parts.some((part) => part.held === null || part.own === null)) {
+    // With a part unreadable, only a boot that provably differs is decisive.
+    return parts.some((part) => part.boot && differs(part)) ? 'other' : 'unverified';
+  }
+  return parts.some(differs) ? 'other' : 'same';
 }
 
 let defaultService: ProcessIdentityService | undefined;

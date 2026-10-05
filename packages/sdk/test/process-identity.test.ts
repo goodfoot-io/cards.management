@@ -48,7 +48,7 @@ function commandResult(partial: Partial<BoundedCommandResult>): BoundedCommandRe
 }
 
 describe('real probes', () => {
-  it.skip('reads this process with its parent and group', async () => {
+  it('reads this process with its parent and group', async () => {
     const service = createProcessIdentity();
     const self = await service.identify(process.pid, 2_000);
     expect(self).not.toBeNull();
@@ -60,7 +60,7 @@ describe('real probes', () => {
     if (LINUX) expect(self.startIdentity).toMatch(/^[0-9a-f-]+:\d+$/);
   });
 
-  it.skip('keeps a live child identity stable and reads a reaped one as absent', async () => {
+  it('keeps a live child identity stable and reads a reaped one as absent', async () => {
     const service = createProcessIdentity();
     const child = spawnSleeper();
     const pid = child.pid as number;
@@ -77,70 +77,66 @@ describe('real probes', () => {
     expect(service.isProcessAbsent(pid)).toBe(true);
   });
 
-  it.skip('reads this process as present', async () => {
+  it('reads this process as present', async () => {
     expect(createProcessIdentity().isProcessAbsent(process.pid)).toBe(false);
     expect(createProcessIdentity().isProcessAbsent(await exitedPid())).toBe(true);
   });
 
-  it.runIf(POSIX)
-    .skip('reads a live group as alive and an emptied group as gone', async () => {
-      const service = createProcessIdentity();
-      const ownGroup = await service.currentProcessGroupId();
-      expect(ownGroup).not.toBeNull();
-      expect(service.isProcessGroupAlive(ownGroup as number)).toBe(true);
+  it.runIf(POSIX)('reads a live group as alive and an emptied group as gone', async () => {
+    const service = createProcessIdentity();
+    const ownGroup = await service.currentProcessGroupId();
+    expect(ownGroup).not.toBeNull();
+    expect(service.isProcessGroupAlive(ownGroup as number)).toBe(true);
 
-      const leader = spawnSleeper(true);
-      const pgid = leader.pid as number;
-      expect(service.isProcessGroupAlive(pgid)).toBe(true);
-      leader.kill('SIGKILL');
-      await new Promise((resolveExit) => leader.once('exit', resolveExit));
-      expect(service.isProcessGroupAlive(pgid)).toBe(false);
-    });
+    const leader = spawnSleeper(true);
+    const pgid = leader.pid as number;
+    expect(service.isProcessGroupAlive(pgid)).toBe(true);
+    leader.kill('SIGKILL');
+    await new Promise((resolveExit) => leader.once('exit', resolveExit));
+    expect(service.isProcessGroupAlive(pgid)).toBe(false);
+  });
 
-  it.skip('refuses a group id that would signal more than one recorded group', () => {
+  it('refuses a group id that would signal more than one recorded group', () => {
     const service = createProcessIdentity({ platform: 'linux' });
     expect(() => service.isProcessGroupAlive(1)).toThrow(RangeError);
     expect(() => service.isProcessGroupAlive(0)).toThrow(RangeError);
   });
 
-  it.skip('has no process groups on Windows', () => {
+  it('has no process groups on Windows', () => {
     expect(createProcessIdentity({ platform: 'win32' }).isProcessGroupAlive(4242)).toBeNull();
   });
 
-  it.runIf(LINUX)
-    .skip('reads the Linux domain with its boot and PID namespace', async () => {
-      const domain = await createProcessIdentity().currentProcessDomain();
-      expect(domain.platform).toBe('linux');
-      if (domain.platform !== 'linux') return;
-      expect(domain.bootId).toMatch(/^[0-9a-f-]{36}$/);
-      expect(domain.pidNamespace).toMatch(/^\d+$/);
-      expect(domain.pidNamespaceInit).toMatch(/^\d+$/);
-    });
+  it.runIf(LINUX)('reads the Linux domain with its boot and PID namespace', async () => {
+    const domain = await createProcessIdentity().currentProcessDomain();
+    expect(domain.platform).toBe('linux');
+    if (domain.platform !== 'linux') return;
+    expect(domain.bootId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(domain.pidNamespace).toMatch(/^\d+$/);
+    expect(domain.pidNamespaceInit).toMatch(/^\d+$/);
+  });
 
-  it.runIf(DARWIN)
-    .skip('reads the macOS domain from kern.bootsessionuuid, stable across reads', async () => {
-      const first = await createProcessIdentity().currentProcessDomain();
-      const second = await createProcessIdentity().currentProcessDomain();
-      expect(first.platform).toBe('darwin');
-      if (first.platform !== 'darwin') return;
-      expect(first.bootSessionUuid).toMatch(/^[0-9A-Fa-f-]{36}$/);
-      expect(second).toEqual(first);
-    });
+  it.runIf(DARWIN)('reads the macOS domain from kern.bootsessionuuid, stable across reads', async () => {
+    const first = await createProcessIdentity().currentProcessDomain();
+    const second = await createProcessIdentity().currentProcessDomain();
+    expect(first.platform).toBe('darwin');
+    if (first.platform !== 'darwin') return;
+    expect(first.bootSessionUuid).toMatch(/^[0-9A-Fa-f-]{36}$/);
+    expect(second).toEqual(first);
+  });
 
-  it.runIf(process.platform === 'win32')
-    .skip('batches N pids plus self into one real CIM call', async () => {
-      const service = createProcessIdentity();
-      const a = spawnSleeper();
-      const b = spawnSleeper();
-      const result = await service.identifyMany([a.pid as number, b.pid as number], {
-        timeoutMs: 15_000,
-        includeSelf: true
-      });
-      expect(result.identities.get(a.pid as number)).toMatchObject({ pid: a.pid });
-      expect(result.identities.get(b.pid as number)).toMatchObject({ pid: b.pid });
-      expect(result.self).toMatchObject({ pid: process.pid });
-      expect(result.domain?.platform).toBe('win32');
+  it.runIf(process.platform === 'win32')('batches N pids plus self into one real CIM call', async () => {
+    const service = createProcessIdentity();
+    const a = spawnSleeper();
+    const b = spawnSleeper();
+    const result = await service.identifyMany([a.pid as number, b.pid as number], {
+      timeoutMs: 15_000,
+      includeSelf: true
     });
+    expect(result.identities.get(a.pid as number)).toMatchObject({ pid: a.pid });
+    expect(result.identities.get(b.pid as number)).toMatchObject({ pid: b.pid });
+    expect(result.self).toMatchObject({ pid: process.pid });
+    expect(result.domain?.platform).toBe('win32');
+  });
 });
 
 describe('macOS ps contract [F9]', () => {
@@ -151,7 +147,7 @@ describe('macOS ps contract [F9]', () => {
     return createProcessIdentity({ platform: 'darwin', runCommand: run, kill });
   }
 
-  it.skip('reads exit 1 with empty output and a fresh ESRCH as absent', async () => {
+  it('reads exit 1 with empty output and a fresh ESRCH as absent', async () => {
     let probes = 0;
     const service = darwin(
       async () => commandResult({ exitCode: 1 }),
@@ -164,7 +160,7 @@ describe('macOS ps contract [F9]', () => {
     expect(probes).toBe(2);
   });
 
-  it.skip('reads exit 1 with empty output as unknown while kill(pid, 0) still succeeds', async () => {
+  it('reads exit 1 with empty output as unknown while kill(pid, 0) still succeeds', async () => {
     const service = darwin(
       async () => commandResult({ exitCode: 1 }),
       () => {}
@@ -172,7 +168,7 @@ describe('macOS ps contract [F9]', () => {
     expect(await service.identify(4242, 2_000)).toBe('unknown');
   });
 
-  it.skip('reads exit 1 with stderr (errx, usage) as unknown even after ESRCH', async () => {
+  it('reads exit 1 with stderr (errx, usage) as unknown even after ESRCH', async () => {
     let probes = 0;
     const service = darwin(
       async () => commandResult({ exitCode: 1, stderr: 'ps: illegal option\nusage: ps ...' }),
@@ -184,7 +180,7 @@ describe('macOS ps contract [F9]', () => {
     expect(await service.identify(4242, 2_000)).toBe('unknown');
   });
 
-  it.skip('reads exit 2 as unknown', async () => {
+  it('reads exit 2 as unknown', async () => {
     const service = darwin(
       async () => commandResult({ exitCode: 2 }),
       () => {}
@@ -192,7 +188,7 @@ describe('macOS ps contract [F9]', () => {
     expect(await service.identify(4242, 2_000)).toBe('unknown');
   });
 
-  it.skip('short-circuits on ESRCH before running ps', async () => {
+  it('short-circuits on ESRCH before running ps', async () => {
     let runs = 0;
     const service = darwin(async () => {
       runs++;
@@ -202,7 +198,7 @@ describe('macOS ps contract [F9]', () => {
     expect(runs).toBe(0);
   });
 
-  it.skip('parses a live ps row', async () => {
+  it('parses a live ps row', async () => {
     const service = darwin(
       async () => commandResult({ stdout: ' 4242     1  4242  0 Ss   Mon Oct  5 17:40:12 2026\n' }),
       () => {}
@@ -220,7 +216,7 @@ describe('Windows CIM batching', () => {
   const roster = (rows: object[], extra: object = {}): string =>
     JSON.stringify({ processes: rows, machineId: 'guid-1', bootTime: '2026-10-05T08:00:00.0000000Z', ...extra });
 
-  it.skip('makes one CIM call for N pids plus self, domain included', async () => {
+  it('makes one CIM call for N pids plus self, domain included', async () => {
     const calls: string[][] = [];
     const service = createProcessIdentity({
       platform: 'win32',
@@ -247,7 +243,7 @@ describe('Windows CIM batching', () => {
     expect(result.domain).toEqual({ platform: 'win32', machineId: 'guid-1', bootTime: '2026-10-05T08:00:00.0000000Z' });
   });
 
-  it.skip('answers unknown for every pid and self when the call times out', async () => {
+  it('answers unknown for every pid and self when the call times out', async () => {
     const service = createProcessIdentity({
       platform: 'win32',
       pid: 100,
@@ -259,7 +255,7 @@ describe('Windows CIM batching', () => {
     expect(result.self).toBe('unknown');
   });
 
-  it.skip('caches the domain read with the self probe', async () => {
+  it('caches the domain read with the self probe', async () => {
     let runs = 0;
     const service = createProcessIdentity({
       platform: 'win32',
@@ -301,7 +297,7 @@ describe('injected Linux domain reads', () => {
     });
   }
 
-  it.skip('reads every part', async () => {
+  it('reads every part', async () => {
     expect(await linux().currentProcessDomain()).toEqual({
       platform: 'linux',
       machineId: 'machine-1',
@@ -313,12 +309,12 @@ describe('injected Linux domain reads', () => {
     expect(await linux().currentProcessIdentity()).toMatchObject({ pid: 4242, startIdentity: 'boot-1:1834455' });
   });
 
-  it.skip('records the namespace parts as unreadable when /proc/self is not this process', async () => {
+  it('records the namespace parts as unreadable when /proc/self is not this process', async () => {
     const domain = await linux({ readLink: async () => '1' }).currentProcessDomain();
     expect(domain).toMatchObject({ pidNamespace: null, pidNamespaceInit: null, bootId: 'boot-1' });
   });
 
-  it.skip('records a missing or unreadable machine id as null and still reads the deciding parts', async () => {
+  it('records a missing or unreadable machine id as null and still reads the deciding parts', async () => {
     const domain = await linux({
       readText: async (path) => {
         if (path === '/etc/machine-id') throw Object.assign(new Error(path), { code: 'EACCES' });
@@ -330,7 +326,7 @@ describe('injected Linux domain reads', () => {
     expect(domain).toMatchObject({ machineId: null, bootId: 'boot-1', pidNamespace: '4026531836' });
   });
 
-  it.skip('reads the group independently of an unreadable start identity [N2]', async () => {
+  it('reads the group independently of an unreadable start identity [N2]', async () => {
     const service = linux({
       readText: async (path) => {
         if (path === '/proc/sys/kernel/random/boot_id') throw Object.assign(new Error(path), { code: 'EACCES' });
@@ -359,20 +355,20 @@ describe('compareDomains [F1]', () => {
     bootSessionUuid
   });
 
-  it.skip('is the same domain when the deciding parts match, whatever the machine id', () => {
+  it('is the same domain when the deciding parts match, whatever the machine id', () => {
     expect(compareDomains(linux(), linux())).toBe('same');
     expect(compareDomains(linux({ machineId: null }), linux({ machineId: 'other' }))).toBe('same');
     expect(compareDomains(darwin('u', 'a'), darwin('u', 'b'))).toBe('same');
   });
 
-  it.skip('is another domain when a boot or namespace part differs [K] [G4]', () => {
+  it('is another domain when a boot or namespace part differs [K] [G4]', () => {
     expect(compareDomains(linux({ bootId: 'b2' }), linux())).toBe('other');
     expect(compareDomains(linux({ pidNamespace: 'n2' }), linux())).toBe('other');
     expect(compareDomains(linux({ pidNamespaceInit: 'i2' }), linux())).toBe('other');
     expect(compareDomains(darwin('u2'), darwin('u'))).toBe('other');
   });
 
-  it.skip('always applies the PID rules on Windows, even across boot times [N1]', () => {
+  it('always applies the PID rules on Windows, even across boot times [N1]', () => {
     const windows = (bootTime: string | null, machineId: string | null): ProcessDomain => ({
       platform: 'win32',
       machineId,
@@ -382,14 +378,14 @@ describe('compareDomains [F1]', () => {
     expect(compareDomains(windows(null, null), windows('2026-10-05', 'b'))).toBe('pid_rules');
   });
 
-  it.skip('is unverified when a deciding part is unreadable and no boot part differs [W] [N3]', () => {
+  it('is unverified when a deciding part is unreadable and no boot part differs [W] [N3]', () => {
     expect(compareDomains(linux({ pidNamespace: null }), linux())).toBe('unverified');
     expect(compareDomains(linux(), linux({ bootId: null }))).toBe('unverified');
     expect(compareDomains(darwin(null), darwin('u'))).toBe('unverified');
     expect(compareDomains(linux({ pidNamespace: null, bootId: 'b2' }), linux())).toBe('other');
   });
 
-  it.skip('is another domain across platforms', () => {
+  it('is another domain across platforms', () => {
     expect(compareDomains(darwin('u'), linux())).toBe('other');
   });
 });
