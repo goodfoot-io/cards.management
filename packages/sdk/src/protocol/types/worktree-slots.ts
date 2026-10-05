@@ -30,6 +30,12 @@ export type WorktreeCleanupReason =
   | 'in_use'
   | 'head_off_branch'
   | 'quarantine_stranded'
+  /**
+   * A recovered creation left a non-empty directory with no worktree entry at
+   * the slot path; it may be a stray writer's, so it is preserved. The detail
+   * names the path and the dead creator's execution.
+   */
+  | 'creation_residue'
   /** The slot lock is held; the detail names the holder's execution. */
   | 'locked'
   | 'lock_unknown'
