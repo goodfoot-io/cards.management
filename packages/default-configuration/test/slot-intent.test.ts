@@ -90,14 +90,14 @@ function slotOid(): Promise<string | null> {
 }
 
 describe('recoverCreationIntent', () => {
-  it.skip('rolls back an intent written before any git step', async () => {
+  it('rolls back an intent written before any git step', async () => {
     const main = await fx.git(['rev-parse', 'main']);
 
     expect(await recover(intentFor('create', main))).toEqual({ status: 'rolled_back' });
     expect(await slotOid()).toBeNull();
   });
 
-  it.skip('deletes a ref created at createdOid', async () => {
+  it('deletes a ref created at createdOid', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     await fx.git(['update-ref', `refs/heads/${BRANCH}`, main, '']);
 
@@ -105,7 +105,7 @@ describe('recoverCreationIntent', () => {
     expect(await slotOid()).toBeNull();
   });
 
-  it.skip('keeps a ref that moved past createdOid', async () => {
+  it('keeps a ref that moved past createdOid', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     await fx.git(['update-ref', `refs/heads/${BRANCH}`, main, '']);
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'moved'], fx.repoRoot);
@@ -118,7 +118,7 @@ describe('recoverCreationIntent', () => {
     expect(await slotOid()).toBe(moved);
   });
 
-  it.skip('removes the checkout and entry a create added, then its ref', async () => {
+  it('removes the checkout and entry a create added, then its ref', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await fx.git(['update-ref', `refs/heads/${BRANCH}`, main, '']);
@@ -130,7 +130,7 @@ describe('recoverCreationIntent', () => {
     expect(await slotOid()).toBeNull();
   });
 
-  it.skip('removes a checkout whose add was interrupted while its entry is locked initializing', async () => {
+  it('removes a checkout whose add was interrupted while its entry is locked initializing', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await fx.git(['update-ref', `refs/heads/${BRANCH}`, main, '']);
@@ -141,7 +141,7 @@ describe('recoverCreationIntent', () => {
     expect(await exists(path)).toBe(false);
   });
 
-  it.skip('only clears the intent of a create that finished registration', async () => {
+  it('only clears the intent of a create that finished registration', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await fx.git(['update-ref', `refs/heads/${BRANCH}`, main, '']);
@@ -154,7 +154,7 @@ describe('recoverCreationIntent', () => {
     expect(fx.client.calls.filter((call) => call.startsWith('removeBranch'))).toEqual([]);
   });
 
-  it.skip('rolls back a recreate without unregistering the slot', async () => {
+  it('rolls back a recreate without unregistering the slot', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await fx.client.addBranch(fx.cardId, { intent: 'create', name: BRANCH, worktree: path, parentBranch: 'main' });
@@ -166,7 +166,7 @@ describe('recoverCreationIntent', () => {
     expect(fx.client.registrations.has(BRANCH)).toBe(true);
   });
 
-  it.skip('rolls back a reattach by removing its checkout and keeping its ref', async () => {
+  it('rolls back a reattach by removing its checkout and keeping its ref', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await fx.git(['update-ref', `refs/heads/${BRANCH}`, main, '']);
@@ -177,7 +177,7 @@ describe('recoverCreationIntent', () => {
     expect(await slotOid()).toBe(main);
   });
 
-  it.skip('preserves an entry-less directory with content and reports creation_residue', async () => {
+  it('preserves an entry-less directory with content and reports creation_residue', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await mkdir(path, { recursive: true });
@@ -189,7 +189,7 @@ describe('recoverCreationIntent', () => {
     expect(await readFile(join(path, 'notes.txt'), 'utf8')).toBe('not ours');
   });
 
-  it.skip('removes an empty entry-less directory', async () => {
+  it('removes an empty entry-less directory', async () => {
     const main = await fx.git(['rev-parse', 'main']);
     const path = join(fx.slotRoot, '1');
     await mkdir(path, { recursive: true });

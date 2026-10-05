@@ -29,7 +29,7 @@ export type CreationRecovery =
   | { readonly status: 'completed' }
   /** The ref, admin entry and directory the creation made are gone. */
   | { readonly status: 'rolled_back' }
-  /** Rolled back, but a non-empty directory without an entry stays at the path. */
+  /** Rolled back, but a non-empty directory without an entry, or a ref that gained commits, stays. */
   | { readonly status: 'creation_residue'; readonly detail: string };
 
 /**
@@ -69,7 +69,12 @@ async function undoCreation(
       residue = `${intent.path} is a non-empty directory without a git worktree entry, left by an interrupted ${intent.op}; it is preserved`;
     }
   }
-  if (intent.createdOid !== null && (await refOid(git, place.repoRoot, intent.branch)) === intent.createdOid) {
+  const current = intent.createdOid === null ? null : await refOid(git, place.repoRoot, intent.branch);
+  if (current !== null && current !== intent.createdOid) {
+    const moved = `refs/heads/${intent.branch} moved from ${intent.createdOid} to ${current} after an interrupted ${intent.op}; it is preserved`;
+    residue = residue === null ? moved : `${residue}; ${moved}`;
+  }
+  if (intent.createdOid !== null && current === intent.createdOid) {
     lock.checkpoint();
     // The oid guard leaves a ref that gained commits untouched.
     const deleted = await git.run(

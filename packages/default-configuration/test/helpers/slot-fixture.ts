@@ -185,7 +185,7 @@ export interface SlotFixture {
    * Action input for one execution of the card.
    * @param executionId - Execution the input belongs to.
    * @param overrides - Fields replacing the defaults.
-   * @returns Input naming the card, the workspace repository and scratch card-repo and extension paths.
+   * @returns Input naming the card, the workspace repository and a scratch extension path.
    */
   input(executionId: string, overrides?: Partial<SlotActionInput>): SlotActionInput;
   /**
@@ -268,11 +268,17 @@ export async function createSlotFixture(cardId = 'card-1'): Promise<SlotFixture>
       executionId,
       cardId,
       repoRoot,
-      cardRepoPath: join(scratch, 'card-repo'),
       extensionPath: join(scratch, 'extension'),
       ...overrides
     }),
-    cleanupContext: () => ({ client, logger: new Logger(), cardId, workspacePath: repoRoot, layer }),
+    cleanupContext: () => ({
+      client,
+      logger: new Logger(),
+      cardId,
+      executionId: 'cleanup-exec',
+      workspacePath: repoRoot,
+      layer
+    }),
     dispose: async () => {
       if (previousWorktreesDir === undefined) delete process.env['CARDS_WORKTREES_DIR'];
       else process.env['CARDS_WORKTREES_DIR'] = previousWorktreesDir;

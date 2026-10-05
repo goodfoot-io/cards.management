@@ -41,7 +41,7 @@ export interface DiscoveredSlot {
   /** Every path at which git has the slot branch checked out. */
   readonly checkedOutAt: readonly string[];
   readonly directoryExists: boolean;
-  /** Quarantine residue (`<n>.deleting-*`) beside the slot path. */
+  /** Quarantine residue (`<n>.deleting-*`, `<n>.held*`) beside the slot path. */
   readonly residue: readonly string[];
 }
 
@@ -50,8 +50,10 @@ export interface SlotInventory extends SlotPlace {
   /** Slots in ascending ordinal order. */
   readonly slots: readonly DiscoveredSlot[];
   readonly entries: readonly WorktreeEntry[];
-  /** True when an invalid branch file could not be attributed to a branch name. */
+  /** True when registrations could not be read, or an invalid branch file could not be attributed to a branch. */
   readonly registrationsUncertain: boolean;
+  /** Why registrations could not be read; null when they were. */
+  readonly registrationError: string | null;
   /** Highest ordinal seen anywhere, lock reservations included; 0 when none. */
   readonly highestOrdinal: number;
 }
@@ -112,7 +114,8 @@ async function slotRootNames(slotRoot: string): Promise<readonly string[]> {
  * @param client - Cards API client for the registrations.
  * @param place - Card, main repository and slot root.
  * @returns The inventory.
- * @throws When registrations, refs, the worktree list or the slot root cannot be read.
+ * @throws When refs, the worktree list or the slot root cannot be read. Unreadable registrations
+ * are reported through `registrationError` instead, with every slot then unregistered.
  */
 export async function discoverSlots(
   git: SlotGit,
@@ -120,8 +123,12 @@ export async function discoverSlots(
   place: SlotPlace
 ): Promise<SlotInventory> {
   const { cardId, repoRoot, slotRoot } = place;
+  let registrationError: string | null = null;
   const [registrations, refs, entries, names, lockOrdinals] = await Promise.all([
-    client.getBranches(cardId),
+    client.getBranches(cardId).catch((error: unknown) => {
+      registrationError = error instanceof Error ? error.message : String(error);
+      return { branches: [], invalidEntries: [] };
+    }),
     git.text(repoRoot, ['for-each-ref', '--format=%(refname)', `refs/heads/cards/${cardId}/`]),
     listWorktreeEntries(git, repoRoot),
     slotRootNames(slotRoot),
@@ -147,7 +154,7 @@ export async function discoverSlots(
     found(ordinal);
   }
   const invalid = new Map<number, string>();
-  let registrationsUncertain = false;
+  let registrationsUncertain = registrationError !== null;
   for (const entry of registrations.invalidEntries) {
     const branch = invalidEntryBranch(entry.name);
     if (branch === null) {
@@ -173,7 +180,7 @@ export async function discoverSlots(
     const ordinal = slotOrdinal(cardId, slotBranch(cardId, Number(match[1])));
     if (match[2] === undefined) {
       found(ordinal);
-    } else if (match[2].startsWith('.deleting-') && ordinal !== null) {
+    } else if ((match[2].startsWith('.deleting-') || match[2].startsWith('.held')) && ordinal !== null) {
       reserve(ordinal);
       residue.set(ordinal, [...(residue.get(ordinal) ?? []), join(slotRoot, name)]);
     }
@@ -204,5 +211,5 @@ export async function discoverSlots(
       residue: residue.get(ordinal) ?? []
     });
   }
-  return { ...place, slots, entries, registrationsUncertain, highestOrdinal: highest };
+  return { ...place, slots, entries, registrationsUncertain, registrationError, highestOrdinal: highest };
 }

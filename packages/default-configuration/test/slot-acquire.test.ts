@@ -69,7 +69,7 @@ async function oidOf(branch: string): Promise<string | null> {
 }
 
 describe('acquireSlot', () => {
-  it.skip('creates, registers and provisions ordinal 1 for a card without slots, and clears its intent', async () => {
+  it('creates, registers and provisions ordinal 1 for a card without slots, and clears its intent', async () => {
     const slot = await acquire('exec-1');
 
     expect(slot).toMatchObject({
@@ -92,7 +92,7 @@ describe('acquireSlot', () => {
     expect((await snapshotOf(1)).creating).toBeNull();
   });
 
-  it.skip('reuses the most recently released free slot first (LIFO)', async () => {
+  it('reuses the most recently released free slot first (LIFO)', async () => {
     const [one, two, three] = [await acquire('exec-1'), await acquire('exec-2'), await acquire('exec-3')];
     expect([one.ordinal, two.ordinal, three.ordinal]).toEqual([1, 2, 3]);
     for (const slot of [two, three, one]) {
@@ -106,13 +106,13 @@ describe('acquireSlot', () => {
     expect(fx.provisioned).toHaveLength(3);
   });
 
-  it.skip('passes over a held slot and creates the next ordinal', async () => {
+  it('passes over a held slot and creates the next ordinal', async () => {
     await acquire('exec-1');
 
     expect(await acquire('exec-2')).toMatchObject({ ordinal: 2, outcome: 'created' });
   });
 
-  it.skip('gives two concurrent acquires different slots, both for one free slot and for one new ordinal', async () => {
+  it('gives two concurrent acquires different slots, both for one free slot and for one new ordinal', async () => {
     const first = await acquire('exec-1');
     await first.lock.release();
 
@@ -124,7 +124,7 @@ describe('acquireSlot', () => {
     expect(new Set([...reuse, ...fresh].map((slot) => slot.ordinal)).size).toBe(4);
   });
 
-  it.skip('passes over a head_off_branch checkout and keeps its detached commit', async () => {
+  it('passes over a head_off_branch checkout and keeps its detached commit', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['checkout', '-q', '--detach'], slot.worktreePath);
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'detached work'], slot.worktreePath);
@@ -137,7 +137,7 @@ describe('acquireSlot', () => {
     expect(await fx.git(['rev-parse', 'HEAD'], slot.worktreePath)).toBe(detached);
   });
 
-  it.skip('treats a checkout whose worktree entry is locked as unusable', async () => {
+  it('treats a checkout whose worktree entry is locked as unusable', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['worktree', 'lock', '--reason', 'held by a test', slot.worktreePath]);
     await slot.lock.release();
@@ -148,7 +148,7 @@ describe('acquireSlot', () => {
     expect(await exists(slot.worktreePath)).toBe(true);
   });
 
-  it.skip('reattaches a free slot whose checkout is gone, keeping the commits on its ref', async () => {
+  it('reattaches a free slot whose checkout is gone, keeping the commits on its ref', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'slot work'], slot.worktreePath);
     const tip = await oidOf(slot.branch);
@@ -162,7 +162,7 @@ describe('acquireSlot', () => {
     expect((await snapshotOf(1)).creating).toBeNull();
   });
 
-  it.skip('recreates a free registered slot whose ref and checkout are gone', async () => {
+  it('recreates a free registered slot whose ref and checkout are gone', async () => {
     const slot = await acquire('exec-1');
     await slot.lock.release();
     await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
@@ -174,7 +174,7 @@ describe('acquireSlot', () => {
     expect(await oidOf(slot.branch)).toBe(await oidOf('main'));
   });
 
-  it.skip('reserves ordinals past an unregistered ref, an invalid entry, a .deleting directory and a lock directory', async () => {
+  it('reserves ordinals past an unregistered ref, an invalid entry, a .deleting directory and a lock directory', async () => {
     await fx.git(['branch', 'cards/card-1/3', 'main']);
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'unmerged'], fx.repoRoot);
     await fx.git(['update-ref', 'refs/heads/cards/card-1/3', 'HEAD']);
@@ -197,7 +197,7 @@ describe('acquireSlot', () => {
     expect(await oidOf('cards/card-1/3')).toBe(unmerged);
   });
 
-  it.skip('leaves a ref created behind its back untouched and moves to the next ordinal (create-only)', async () => {
+  it('leaves a ref created behind its back untouched and moves to the next ordinal (create-only)', async () => {
     let foreign: string | null = null;
     fx.beforeGit = async (args) => {
       if (args[0] === 'update-ref' && args[1] === 'refs/heads/cards/card-1/1' && foreign === null) {
@@ -215,7 +215,7 @@ describe('acquireSlot', () => {
     expect(fx.client.registrations.has('cards/card-1/1')).toBe(false);
   });
 
-  it.skip('rolls back a create whose worktree add fails, deleting only the ref it created', async () => {
+  it('rolls back a create whose worktree add fails, deleting only the ref it created', async () => {
     fx.beforeGit = async (args) => {
       if (args[0] === 'worktree' && args[1] === 'add') throw new Error('injected worktree add failure');
     };
@@ -228,7 +228,7 @@ describe('acquireSlot', () => {
     expect((await snapshotOf(1)).creating).toBeNull();
   });
 
-  it.skip('rolls back a create whose provisioning fails, including its checkout', async () => {
+  it('rolls back a create whose provisioning fails, including its checkout', async () => {
     fx.beforeProvision = async () => {
       throw new Error('injected provisioning failure');
     };
@@ -241,7 +241,7 @@ describe('acquireSlot', () => {
     expect((await snapshotOf(1)).creating).toBeNull();
   });
 
-  it.skip('keeps the ref of a failed reattach', async () => {
+  it('keeps the ref of a failed reattach', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'slot work'], slot.worktreePath);
     const tip = await oidOf(slot.branch);
@@ -259,7 +259,7 @@ describe('acquireSlot', () => {
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
   });
 
-  it.skip('counts a registration whose response was lost as registered', async () => {
+  it('counts a registration whose response was lost as registered', async () => {
     fx.client.failAfterAddBranch = true;
 
     const slot = await acquire('exec-1');
@@ -268,7 +268,7 @@ describe('acquireSlot', () => {
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
   });
 
-  it.skip('preserves stray content found at the slot path during a create and never reuses that ordinal', async () => {
+  it('preserves stray content found at the slot path during a create and never reuses that ordinal', async () => {
     const path = join(fx.slotRoot, '1');
     fx.beforeGit = async (args) => {
       if (args[0] === 'worktree' && args[1] === 'add' && args.includes(path)) {
@@ -285,19 +285,22 @@ describe('acquireSlot', () => {
     expect(await readFile(join(path, 'notes.txt'), 'utf8')).toBe('not ours');
   });
 
-  it.skip('removes an empty entry-less directory found at the slot path during a create', async () => {
+  it('removes the empty entry-less directory a failed worktree add leaves at the slot path', async () => {
     const path = join(fx.slotRoot, '1');
     fx.beforeGit = async (args) => {
-      if (args[0] === 'worktree' && args[1] === 'add' && args.includes(path)) await mkdir(path, { recursive: true });
+      if (args[0] === 'worktree' && args[1] === 'add' && args.includes(path)) {
+        await mkdir(path, { recursive: true });
+        throw new Error('injected worktree add failure after mkdir');
+      }
     };
 
-    await expect(acquire('exec-1')).rejects.toThrow();
+    await expect(acquire('exec-1')).rejects.toThrow('injected worktree add failure after mkdir');
 
     expect(await exists(path)).toBe(false);
     expect(await oidOf('cards/card-1/1')).toBeNull();
   });
 
-  it.skip('uses the main repository slot root when REPO_ROOT is a linked worktree', async () => {
+  it('uses the main repository slot root when REPO_ROOT is a linked worktree', async () => {
     const linked = join(fx.repoRoot, '..', 'linked');
     await fx.git(['worktree', 'add', '-q', '-b', 'linked', linked]);
 
@@ -306,7 +309,7 @@ describe('acquireSlot', () => {
     expect(slot.worktreePath).toBe(join(fx.slotRoot, '1'));
   });
 
-  it.skip('treats a slot whose legacy owner is running as held and one whose owner is terminal as free', async () => {
+  it('treats a slot whose legacy owner is running as held and one whose owner is terminal as free', async () => {
     const slot = await acquire('exec-1');
     await slot.lock.release();
     const registration = fx.client.registrations.get(slot.branch);
@@ -320,7 +323,7 @@ describe('acquireSlot', () => {
     expect(await acquire('exec-3')).toMatchObject({ ordinal: 1, outcome: 'reused' });
   });
 
-  it.skip('keeps the slot of a dead handler whose agent group is alive held', async () => {
+  it('keeps the slot of a dead handler whose agent group is alive held', async () => {
     const slot = await acquire('exec-1');
     // The owner's PID is dead, but its recorded group is this live test process's.
     await abandonSlotLock(slot.lock);
@@ -332,7 +335,7 @@ describe('acquireSlot', () => {
     expect((await acquire('exec-2')).ordinal).toBe(2);
   });
 
-  it.skip('takes over the slot of a dead handler and finishes the creation it left', async () => {
+  it('takes over the slot of a dead handler and finishes the creation it left', async () => {
     const slot = await acquire('exec-1');
     await slot.lock.writeIntent({
       version: 1,
@@ -351,7 +354,7 @@ describe('acquireSlot', () => {
     expect((await snapshotOf(1)).creating).toBeNull();
   });
 
-  it.skip('formats skipped unjudgeable slots for the launch output', () => {
+  it('formats skipped unjudgeable slots for the launch output', () => {
     expect(describeSkippedSlots([])).toBeNull();
     expect(
       describeSkippedSlots([
@@ -363,7 +366,7 @@ describe('acquireSlot', () => {
 });
 
 describe('acquireSlot handoff', () => {
-  it.skip('lands the successor in the source checkout while the source is alive', async () => {
+  it('lands the successor in the source checkout while the source is alive', async () => {
     const source = await acquire('exec-1');
     const { generation, token } = await source.lock.offerHandoff();
 
@@ -378,7 +381,7 @@ describe('acquireSlot handoff', () => {
     expect(successor.worktreePath).toBe(source.worktreePath);
   });
 
-  it.skip('lands the successor in the source checkout after the source died within the expiry', async () => {
+  it('lands the successor in the source checkout after the source died within the expiry', async () => {
     const source = await acquire('exec-1');
     const { generation, token } = await source.lock.offerHandoff();
     await abandonSlotLock(source.lock);
@@ -393,7 +396,7 @@ describe('acquireSlot handoff', () => {
     expect(successor).toMatchObject({ ordinal: 1, outcome: 'handoff' });
   });
 
-  it.skip('still claims an expired, untaken handoff', async () => {
+  it('still claims an expired, untaken handoff', async () => {
     const source = await acquire('exec-1');
     const { generation, token } = await source.lock.offerHandoff();
     await abandonSlotLock(source.lock);
@@ -410,7 +413,7 @@ describe('acquireSlot handoff', () => {
     expect(successor).toMatchObject({ ordinal: 1, outcome: 'handoff' });
   });
 
-  it.skip('reports handoff_lost and acquires normally when another acquirer took the expired slot', async () => {
+  it('reports handoff_lost and acquires normally when another acquirer took the expired slot', async () => {
     const source = await acquire('exec-1');
     const { generation, token } = await source.lock.offerHandoff();
     await abandonSlotLock(source.lock);

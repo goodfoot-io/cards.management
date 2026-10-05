@@ -7,7 +7,7 @@
  * @module
  */
 
-import { mkdir, readdir, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
@@ -85,10 +85,11 @@ async function generationsOf(ordinal: number): Promise<string[]> {
 }
 
 describe('cleanupCardSlots preview', () => {
-  it.skip('reports a merged clean slot eligible and an unmerged one preserved, taking no locks', async () => {
-    const merged = await finishedSlot('exec-1');
+  it('reports a merged clean slot eligible and an unmerged one preserved, taking no locks', async () => {
+    const merged = await acquire('exec-1');
     const unmerged = await acquire('exec-2');
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], unmerged.worktreePath);
+    await merged.lock.release();
     await unmerged.lock.release();
     const before = [await generationsOf(1), await generationsOf(2)];
 
@@ -100,7 +101,7 @@ describe('cleanupCardSlots preview', () => {
     expect([await generationsOf(1), await generationsOf(2)]).toEqual(before);
   });
 
-  it.skip('reports a held slot locked, naming the holder execution', async () => {
+  it('reports a held slot locked, naming the holder execution', async () => {
     const held = await acquire('exec-holder');
 
     const result = await pass({ mode: 'preview' });
@@ -109,7 +110,21 @@ describe('cleanupCardSlots preview', () => {
     expect(decisionOf(result, held.branch).detail).toContain('exec-holder');
   });
 
-  it.skip('lists no ordinal that has only a lock directory', async () => {
+  it('counts unjudgeable locks and their unverified owners', async () => {
+    const held = await acquire('exec-holder');
+    const ownerPath = join(fx.slotRoot, '.locks', '1', String(held.lock.generation), 'owner.json');
+    const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as { holder: Record<string, unknown> };
+    owner.holder.startIdentity = null;
+    await writeFile(ownerPath, JSON.stringify(owner));
+
+    const result = await pass({ mode: 'preview' });
+
+    expect(decisionOf(result, held.branch)).toMatchObject({ reason: 'lock_unknown', outcome: 'preserved' });
+    expect(decisionOf(result, held.branch).detail).toContain('unverified owner');
+    expect(result.unknownLocks).toEqual({ count: 1, unverifiedOwners: 1 });
+  });
+
+  it('lists no ordinal that has only a lock directory', async () => {
     await finishedSlot('exec-1');
     await mkdir(join(fx.slotRoot, '.locks', '9', '1'), { recursive: true });
 
@@ -120,7 +135,7 @@ describe('cleanupCardSlots preview', () => {
 });
 
 describe('cleanupCardSlots preservation', () => {
-  it.skip('spares the requester slot', async () => {
+  it('spares the requester slot', async () => {
     const own = await acquire('exec-own');
 
     const result = await pass({ requester: 'exec-own' });
@@ -128,7 +143,7 @@ describe('cleanupCardSlots preservation', () => {
     expect(decisionOf(result, own.branch)).toMatchObject({ reason: 'requester_slot', outcome: 'preserved' });
   });
 
-  it.skip('preserves a slot with uncommitted changes', async () => {
+  it('preserves a slot with uncommitted changes', async () => {
     const slot = await acquire('exec-1');
     await writeFile(join(slot.worktreePath, 'draft.txt'), 'draft');
     await slot.lock.release();
@@ -139,7 +154,7 @@ describe('cleanupCardSlots preservation', () => {
     });
   });
 
-  it.skip('preserves a checkout whose HEAD left the slot branch', async () => {
+  it('preserves a checkout whose HEAD left the slot branch', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['checkout', '-q', '--detach'], slot.worktreePath);
     await slot.lock.release();
@@ -147,7 +162,7 @@ describe('cleanupCardSlots preservation', () => {
     expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'head_off_branch', outcome: 'preserved' });
   });
 
-  it.skip('preserves a checkout whose worktree entry is locked, with the lock reason', async () => {
+  it('preserves a checkout whose worktree entry is locked, with the lock reason', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['worktree', 'lock', '--reason', 'kept by a test', slot.worktreePath]);
     await slot.lock.release();
@@ -158,7 +173,7 @@ describe('cleanupCardSlots preservation', () => {
     expect(decision.detail).toContain('kept by a test');
   });
 
-  it.skip('preserves a slot branch checked out at another path as checked_out_elsewhere', async () => {
+  it('preserves a slot branch checked out at another path as checked_out_elsewhere', async () => {
     const slot = await finishedSlot('exec-1');
     await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
     await fx.git(['worktree', 'add', '-q', join(fx.repoRoot, '..', 'elsewhere'), slot.branch]);
@@ -169,7 +184,7 @@ describe('cleanupCardSlots preservation', () => {
     });
   });
 
-  it.skip('preserves an unregistered slot named by an invalid entry as invalid_entry', async () => {
+  it('preserves an unregistered slot named by an invalid entry as invalid_entry', async () => {
     const slot = await finishedSlot('exec-1');
     fx.client.registrations.delete(slot.branch);
     fx.client.invalidEntries.push({ name: slot.branch, reason: 'unparseable' });
@@ -177,14 +192,14 @@ describe('cleanupCardSlots preservation', () => {
     expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'invalid_entry', outcome: 'preserved' });
   });
 
-  it.skip('preserves every unregistered slot when registrations cannot be read', async () => {
+  it('preserves every unregistered slot when registrations cannot be read', async () => {
     const slot = await finishedSlot('exec-1');
     fx.client.failGetBranches = true;
 
     expect(decisionOf(await pass(), slot.branch)).toMatchObject({ outcome: 'preserved' });
   });
 
-  it.skip('treats a slot whose legacy owner is running as locked', async () => {
+  it('treats a slot whose legacy owner is running as locked', async () => {
     const slot = await finishedSlot('exec-1');
     const registration = fx.client.registrations.get(slot.branch);
     if (registration === undefined) throw new Error('slot not registered');
@@ -194,7 +209,7 @@ describe('cleanupCardSlots preservation', () => {
     expect(decisionOf(await pass(), slot.branch)).toMatchObject({ outcome: 'preserved' });
   });
 
-  it.skip('unregisters a registration whose ref and directory are both gone', async () => {
+  it('unregisters a registration whose ref and directory are both gone', async () => {
     const slot = await finishedSlot('exec-1');
     await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
     await fx.git(['branch', '-D', slot.branch]);
@@ -253,7 +268,7 @@ describe('cleanupCardSlots removal', () => {
 });
 
 describe('cleanupCardSlots failures and budget', () => {
-  it.skip('returns a discovery failure instead of rejecting', async () => {
+  it('returns a discovery failure instead of rejecting', async () => {
     await finishedSlot('exec-1');
     fx.beforeGit = async (args) => {
       if (args[0] === 'worktree' && args[1] === 'list') throw new Error('injected discovery failure');
@@ -266,10 +281,11 @@ describe('cleanupCardSlots failures and budget', () => {
     expect(result.ok).toBe(false);
   });
 
-  it.skip('reports a slot whose checks throw as cleanup_failed and goes on', async () => {
-    const failing = await finishedSlot('exec-1');
+  it('reports a slot whose checks throw as cleanup_failed and goes on', async () => {
+    const failing = await acquire('exec-1');
     const other = await acquire('exec-2');
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], other.worktreePath);
+    await failing.lock.release();
     await other.lock.release();
     fx.beforeGit = async (args, cwd) => {
       if (cwd === failing.worktreePath && args[0] === 'status') throw new Error('injected status failure');
@@ -282,7 +298,7 @@ describe('cleanupCardSlots failures and budget', () => {
     expect(decisionOf(result, other.branch)).toMatchObject({ reason: 'unmerged_commits' });
   });
 
-  it.skip('reports slots not started within the budget as budget_exhausted without locking them', async () => {
+  it('reports slots not started within the budget as budget_exhausted without locking them', async () => {
     await finishedSlot('exec-1');
     const before = await generationsOf(1);
 
@@ -292,7 +308,7 @@ describe('cleanupCardSlots failures and budget', () => {
     expect(await generationsOf(1)).toEqual(before);
   });
 
-  it.skip('fails prepare-delete on a preserved slot, on budget_exhausted and on a pass failure', async () => {
+  it('fails prepare-delete on a preserved slot, on budget_exhausted and on a pass failure', async () => {
     const slot = await acquire('exec-1');
     await fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], slot.worktreePath);
     await slot.lock.release();
@@ -301,7 +317,7 @@ describe('cleanupCardSlots failures and budget', () => {
     expect((await pass({ mode: 'prepare-delete', budgetMs: 0 })).ok).toBe(false);
   });
 
-  it.skip('treats the requester as absent in prepare-delete', async () => {
+  it('treats the requester as absent in prepare-delete', async () => {
     const own = await acquire('exec-own');
 
     const result = await pass({ mode: 'prepare-delete', requester: 'exec-own' });
@@ -310,13 +326,13 @@ describe('cleanupCardSlots failures and budget', () => {
     expect(result.ok).toBe(false);
   });
 
-  it.skip('succeeds prepare-delete on a card without slots', async () => {
+  it('succeeds prepare-delete on a card without slots', async () => {
     const result = await pass({ mode: 'prepare-delete' });
 
-    expect(result).toEqual({ decisions: [], ok: true });
+    expect(result).toEqual({ decisions: [], unknownLocks: { count: 0, unverifiedOwners: 0 }, ok: true });
   });
 
-  it.skip('never removal-locks a slot it preserves, so concurrent launches reuse existing slots', async () => {
+  it('never removal-locks a slot it preserves, so concurrent launches reuse existing slots', async () => {
     const unmerged: AcquiredSlot[] = [];
     for (const executionId of ['exec-1', 'exec-2', 'exec-3']) {
       const slot = await acquire(executionId);
