@@ -40,7 +40,7 @@ import { mkdir, open, readFile, rename } from 'node:fs/promises';
 import { constants as osConstants } from 'node:os';
 import path from 'node:path';
 import { resolveGlobalCardsConfigDir } from '../cards-config.js';
-import { discoverApiInfo } from '../client/api-discovery.js';
+import { createCardsClient, discoverApiInfo } from '../client/api-discovery.js';
 import {
   createRuntimeClientFromCredentialFile,
   loadRuntimeCredential,
@@ -48,10 +48,18 @@ import {
 } from '../client/runtime/index.js';
 import { createFileClientOutbox, resolveOutboxRoot } from '../client/runtime/outbox/index.js';
 import type { RuntimeEnvelope, RuntimePayload } from '../protocol/index.js';
+import { commandReportPayloadSchema } from '../protocol/types/runtime-messages.js';
 import type { ActionCommand, CardsAssistantCommand, WorktreeMaintenanceCommand } from './command-types.js';
-import { extractActionInput, extractCardsAssistantInput } from './env.js';
+import { extractActionInput, extractCardsAssistantInput, extractWorktreeMaintenanceInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
-import type { ActionContext, ActionInput, CardsAssistantContext, CardsAssistantInput } from './inputs.js';
+import type {
+  ActionContext,
+  ActionInput,
+  CardsAssistantContext,
+  CardsAssistantInput,
+  WorktreeMaintenanceContext,
+  WorktreeMaintenanceInput
+} from './inputs.js';
 import { Logger } from './logger.js';
 import {
   configureShutdown,
@@ -308,7 +316,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
 
       return shutdownAndExit(EXIT_CODES.SUCCESS, 'completed');
     } else if (command.factoryType === 'worktree-maintenance') {
-      await executeRootCommand(command);
+      return executeRootCommand(command);
     } else {
       // Existing action path
       let input: ActionInput;
@@ -517,12 +525,91 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
  * extracts the command's own input, runs it with a report sink, and sends
  * `execution.commandReport` before exiting through the shutdown path.
  *
+ * A root command succeeds only by reporting: a handler that returns without a
+ * report, throws, or whose report the server does not accept exits 1 and
+ * leaves the caller with no report. Cancellation is the wrapper's signal, which
+ * the shutdown signal handlers already turn into an exit.
+ *
  * @param command - The root command to execute.
+ * @returns Settles only when `process.exit` is mocked.
+ * @throws Error when the execution identity disagrees with the credential, the
+ *   Cards API cannot be discovered, or the runtime connection fails.
  * @internal
  */
-async function executeRootCommand(command: WorktreeMaintenanceCommand): Promise<void> {
-  void command;
-  throw new Error('Not Implemented');
+async function executeRootCommand(command: WorktreeMaintenanceCommand): Promise<never> {
+  let input: WorktreeMaintenanceInput;
+  try {
+    input = extractWorktreeMaintenanceInput();
+  } catch (error) {
+    return handleEnvExtractionError(error);
+  }
+  logger.setContext(command.factoryType, { ...input });
+
+  const loaded = loadRuntimeCredential('agent-handler');
+  if (input.executionId !== loaded.execution.executionId) {
+    throw new Error('Root command execution identity does not match its runtime credential');
+  }
+  const client = await createCardsClient(undefined, { retryOnNetworkError: false });
+  if (client === null) throw new Error('Cards API discovery failed');
+
+  const runtimeClient = createRuntimeClientFromCredentialFile({
+    role: 'agent-handler',
+    capabilities: { switchToInteractive: false },
+    outbox: createFileClientOutbox({ root: resolveOutboxRoot(resolveGlobalCardsConfigDir()) }),
+    discover: async () => {
+      const info = await discoverApiInfo();
+      return info ? { host: info.host, port: info.port, accessToken: info.accessToken } : null;
+    },
+    // A root command registers no cancel or switch callbacks: its cancel is the
+    // wrapper's SIGTERM, so no server command needs a handler-side effect.
+    onMessage: async () => undefined
+  });
+  const connected = await runtimeClient.start();
+  if (connected.status !== 'connected') {
+    await runtimeClient.stop();
+    throw new Error(`Authenticated runtime connection ${connected.status}`);
+  }
+
+  let report: Record<string, unknown> | undefined;
+  const context: WorktreeMaintenanceContext = {
+    logger,
+    cwd: process.cwd(),
+    client,
+    report: (candidate) => {
+      const parsed = commandReportPayloadSchema.safeParse(candidate);
+      if (!parsed.success) throw new Error(`Invalid command report: ${parsed.error.message}`);
+      // A JSON copy: later mutation of the caller's object cannot change what is sent.
+      report = JSON.parse(JSON.stringify(parsed.data)) as Record<string, unknown>;
+    },
+    onShutdown: registerShutdownHook
+  };
+
+  try {
+    await command(input, context);
+  } catch (error) {
+    await runtimeClient.stop();
+    return handleHandlerError(error);
+  }
+  if (report === undefined) {
+    await runtimeClient.stop();
+    logger.error('Root command finished without a report');
+    return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
+  }
+
+  const sent = await runtimeClient.send({
+    type: 'execution.commandReport',
+    payload: report,
+    messageId: `${loaded.execution.executionId}:agent-handler:execution.commandReport`,
+    requestId: loaded.credential.requestId,
+    execution: loaded.execution,
+    deadlineMs: 5_000
+  });
+  await runtimeClient.stop();
+  if (sent.status !== 'accepted') {
+    logger.error(`Command report was not accepted: ${sent.status}`);
+    return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
+  }
+  return shutdownAndExit(EXIT_CODES.SUCCESS, 'completed');
 }
 
 // ============================================================================

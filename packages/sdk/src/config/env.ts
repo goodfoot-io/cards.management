@@ -17,6 +17,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '../cards-config.js';
+import { rootCommandLaunchRequestPayloadSchema } from '../protocol/types/runtime-messages.js';
 import type { ActionInput, CardsAssistantInput, WorktreeMaintenanceInput } from './inputs.js';
 
 // ============================================================================
@@ -764,5 +765,28 @@ export function extractCardsAssistantInput(): CardsAssistantInput {
  * @throws Error if required env vars are missing or invalid
  */
 export function extractWorktreeMaintenanceInput(): WorktreeMaintenanceInput {
-  throw new Error('Not Implemented');
+  const executionId = process.env[CARDS_ENV_VARS.EXECUTION_ID]?.trim();
+  if (!executionId) throw new Error(`Missing required environment variable: ${CARDS_ENV_VARS.EXECUTION_ID}`);
+  const raw = process.env[CARDS_ENV_VARS.ROOT_COMMAND_INPUT];
+  if (raw === undefined || raw === '') {
+    throw new Error(`Missing required environment variable: ${CARDS_ENV_VARS.ROOT_COMMAND_INPUT}`);
+  }
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(`${CARDS_ENV_VARS.ROOT_COMMAND_INPUT} is not JSON`);
+  }
+  const parsed = rootCommandLaunchRequestPayloadSchema.shape.input.safeParse(json);
+  if (!parsed.success) {
+    throw new Error(`Invalid ${CARDS_ENV_VARS.ROOT_COMMAND_INPUT}: ${parsed.error.message}`);
+  }
+  return {
+    executionId,
+    cardId: getCardId(),
+    mode: parsed.data.mode,
+    repoRoot: getRepoRoot(),
+    cardRepoPath: getCardRepoPath(),
+    extensionPath: getExtensionPath()
+  };
 }

@@ -151,7 +151,7 @@ describe('resolveSlotRoot', () => {
     GIT_COMMITTER_EMAIL: 'test@example.com'
   };
 
-  it.skip('derives the same slot root from a linked worktree as from the main repository [R12]', async () => {
+  it('derives the same slot root from a linked worktree as from the main repository [R12]', async () => {
     const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'cards-slot-root-')));
     try {
       process.env['CARDS_WORKTREES_DIR'] = path.join(dir, 'worktrees');
@@ -174,7 +174,7 @@ describe('resolveSlotRoot', () => {
     }
   });
 
-  it.skip('throws when the workspace has no .git marker', async () => {
+  it('throws when the workspace has no .git marker', async () => {
     const dir = mkdtempSync(path.join(tmpdir(), 'cards-slot-root-'));
     try {
       await expect(resolveSlotRoot(dir, 'main-734')).rejects.toThrow();

@@ -384,7 +384,7 @@ describe('build', () => {
   });
 
   describe('worktree maintenance', () => {
-    it.skip('compiles the worktreeMaintenance root command into its own settings entry', async () => {
+    it('compiles the worktreeMaintenance root command into its own settings entry', async () => {
       const factories = join(__dirname, '../../../src/config/factories/index.ts').replace(/\\/g, '/');
       const dir = join(FIXTURES_DIR, 'maintenance');
       mkdirSync(dir, { recursive: true });
@@ -419,7 +419,7 @@ export default {
       }
     });
 
-    it.skip('omits the entry when the configuration has no worktreeMaintenance', async () => {
+    it('omits the entry when the configuration has no worktreeMaintenance', async () => {
       const outdir = join(FIXTURES_DIR, 'output-no-maintenance');
       const result = await build({ config: join(FIXTURES_DIR, 'valid.config.ts'), outdir });
       expect(result.success).toBe(true);

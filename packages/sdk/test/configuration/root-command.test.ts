@@ -81,7 +81,7 @@ function lines(file: string): string[] {
 }
 
 describe('executeCommand root command branch', () => {
-  it.skip('passes the env-derived input, sends the last report before exiting 0, and runs shutdown hooks', async () => {
+  it('passes the env-derived input, sends the last report before exiting 0, and runs shutdown hooks', async () => {
     const output = join(harness.dir, 'input.json');
     const log = join(harness.dir, 'events.log');
     const run = harness.start(maintenanceHandler(output, log), env('cleanup', 'report'));
@@ -105,14 +105,14 @@ describe('executeCommand root command branch', () => {
     expect(lines(log)).toEqual(['hook:completed']);
   });
 
-  it.skip.each(['preview', 'prepare-delete'])('accepts the %s mode', async (mode) => {
+  it.each(['preview', 'prepare-delete'])('accepts the %s mode', async (mode) => {
     const output = join(harness.dir, 'input.json');
     const run = harness.start(maintenanceHandler(output, join(harness.dir, 'events.log')), env(mode, 'report'));
     expect(await run.exited).toEqual({ code: 0, signal: null });
     expect(JSON.parse(readFileSync(output, 'utf8'))).toMatchObject({ mode });
   });
 
-  it.skip.each([
+  it.each([
     ['an unknown mode', JSON.stringify({ mode: 'purge' })],
     ['extra input fields', JSON.stringify({ mode: 'cleanup', cardId: 'main-2' })],
     ['input that is not JSON', 'cleanup'],
@@ -128,7 +128,7 @@ describe('executeCommand root command branch', () => {
     expect(commandReports()).toEqual([]);
   });
 
-  it.skip('fails when CARDS_EXECUTION_ID disagrees with the credential', async () => {
+  it('fails when CARDS_EXECUTION_ID disagrees with the credential', async () => {
     const output = join(harness.dir, 'input.json');
     const run = harness.start(maintenanceHandler(output, join(harness.dir, 'events.log')), {
       ...env('cleanup', 'report'),
@@ -139,7 +139,7 @@ describe('executeCommand root command branch', () => {
     expect(commandReports()).toEqual([]);
   });
 
-  it.skip('exits 1 and sends nothing when the handler never reports', async () => {
+  it('exits 1 and sends nothing when the handler never reports', async () => {
     const log = join(harness.dir, 'events.log');
     const run = harness.start(maintenanceHandler(join(harness.dir, 'input.json'), log), env('preview', 'silent'));
     expect((await run.exited).code).toBe(1);
@@ -147,7 +147,7 @@ describe('executeCommand root command branch', () => {
     expect(lines(log)).toEqual(['hook:failed']);
   });
 
-  it.skip('exits 1 and sends nothing when the handler throws after reporting nothing', async () => {
+  it('exits 1 and sends nothing when the handler throws after reporting nothing', async () => {
     const log = join(harness.dir, 'events.log');
     const run = harness.start(maintenanceHandler(join(harness.dir, 'input.json'), log), env('cleanup', 'throw'));
     expect((await run.exited).code).toBe(1);
@@ -155,7 +155,7 @@ describe('executeCommand root command branch', () => {
     expect(lines(log)).toEqual(['hook:failed']);
   });
 
-  it.skip('refuses a report over the bound at the call and keeps the previous one', async () => {
+  it('refuses a report over the bound at the call and keeps the previous one', async () => {
     const log = join(harness.dir, 'events.log');
     const run = harness.start(maintenanceHandler(join(harness.dir, 'input.json'), log), env('preview', 'oversize'));
     expect(await run.exited).toEqual({ code: 0, signal: null });
