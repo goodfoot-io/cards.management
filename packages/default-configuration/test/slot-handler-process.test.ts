@@ -17,14 +17,21 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { chmod, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Logger } from '@cards.management/sdk';
+import { resolveSlotRoot } from '@cards.management/sdk/cards-config';
 import { createShutdownCoordinator, type ShutdownCoordinator } from '@cards.management/sdk/config';
 import { readSlotLock, readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { acquireSlot, cleanupCardSlots } from '../src/lib/worktrees/index.js';
-import { createFixtureLayer, createSlotFixture, FIXTURE_GIT_ENV, type SlotFixture } from './helpers/slot-fixture.js';
+import { acquireSlot, cleanupCardSlots, openSlotSession } from '../src/lib/worktrees/index.js';
+import {
+  createFixtureLayer,
+  createSlotFixture,
+  FakeSlotClient,
+  FIXTURE_GIT_ENV,
+  type SlotFixture
+} from './helpers/slot-fixture.js';
 import type { SlotHandlerConfig, SlotHandlerEvent, SlotHandlerStop } from './helpers/slot-handler.js';
 
 /** `--import=<file URL of the tsx loader>`, valid from any working directory. */
@@ -421,5 +428,78 @@ describe('shutdown hook order', () => {
     if (snapshot === null || 'unreadable' in snapshot) throw new Error('No readable generation');
     expect(snapshot.released).toBeNull();
     expect(snapshot.handoff).not.toBeNull();
+  });
+});
+
+/**
+ * What the wrapper's cancel fixture (`packages/cards/server/test/runtime/wrapper/`)
+ * leaves, as JSON at the path in `CARDS_SLOT_RACE_STATE`: the slot whose
+ * creation the wrapper's stop cut off during `worktree add`.
+ */
+interface SlotRaceState {
+  readonly repoRoot: string;
+  readonly slotRoot: string;
+  readonly cardId: string;
+  readonly ordinal: number;
+}
+
+/**
+ * Leaves the state the wrapper fixture leaves, with this package's handler:
+ * a create cut off by the stop burst during `worktree add`.
+ * @returns Path of a state file in the wrapper fixture's shape.
+ */
+async function leaveRaceState(): Promise<string> {
+  await blockWorktreeAdd();
+  const cancelled = startHandler('exec-cancelled', null);
+  await cancelled.waitFor((event) => event.event === 'stopped' && event.step === 'worktree-add');
+  await stopLikeTheWrapper(cancelled);
+  await unblockWorktreeAdd();
+  const statePath = join(fx.scratch, 'race-state.json');
+  const state: SlotRaceState = { repoRoot: fx.repoRoot, slotRoot: fx.slotRoot, cardId: fx.cardId, ordinal: 1 };
+  await writeFile(statePath, JSON.stringify(state));
+  return statePath;
+}
+
+describe('recovery half of the wrapper cancel test', () => {
+  it('completes the rollback a cancelled create left and never starts an agent in its partial checkout', async () => {
+    const statePath = process.env['CARDS_SLOT_RACE_STATE'] ?? (await leaveRaceState());
+    const state = JSON.parse(await readFile(statePath, 'utf8')) as SlotRaceState;
+    // The slot root is `<worktrees root>/<repo id>/cards/<card>`; point this process at the same root.
+    process.env['CARDS_WORKTREES_DIR'] = dirname(dirname(dirname(state.slotRoot)));
+    expect(await resolveSlotRoot(state.repoRoot, state.cardId)).toBe(state.slotRoot);
+    const branch = `cards/${state.cardId}/${state.ordinal}`;
+    const partial = join(state.slotRoot, String(state.ordinal));
+
+    const left = await readSlotLock(state.slotRoot, state.ordinal);
+    expect(left.state).toBe('free');
+    expect(left.snapshot?.released ?? null).toBeNull();
+    expect(left.snapshot?.creating).toMatchObject({ op: 'create', branch });
+
+    const client = new FakeSlotClient(state.cardId);
+    const session = await openSlotSession(
+      {
+        executionId: 'exec-next',
+        cardId: state.cardId,
+        repoRoot: state.repoRoot,
+        extensionPath: join(fx.scratch, 'extension')
+      },
+      { client, logger: new Logger(), layer: fx.layer }
+    );
+    // The unregistered partial slot is reserved, never reused; the new handler's start pass completes its rollback.
+    expect(session.slot.outcome).toBe('created');
+    expect(session.slot.worktreePath).not.toBe(partial);
+    session.beginCleanup();
+    const endPass = await session.finish();
+    const recovered = await readSlotLockSnapshot(state.slotRoot, state.ordinal);
+    if (recovered === null || 'unreadable' in recovered) throw new Error('No readable generation');
+
+    expect(endPass?.failure).toBeUndefined();
+    expect(await exists(partial)).toBe(false);
+    expect(
+      await fx.git(['rev-parse', '--verify', '--quiet', `refs/heads/${branch}`], state.repoRoot).catch(() => null)
+    ).toBeNull();
+    expect(recovered.creating).toBeNull();
+    expect(await fx.git(['symbolic-ref', 'HEAD'], session.slot.worktreePath)).toBe(`refs/heads/${session.slot.branch}`);
+    await session.slot.lock.release();
   });
 });
