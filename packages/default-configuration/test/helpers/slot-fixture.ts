@@ -23,7 +23,12 @@ import type {
   BranchInfo,
   ExecutionProcessStatus
 } from '@cards.management/sdk/client';
-import { createShutdownCoordinator, type ShutdownCoordinator } from '@cards.management/sdk/config';
+import {
+  createShutdownCoordinator,
+  type ShutdownCoordinator,
+  ShutdownError,
+  shutdownSignal
+} from '@cards.management/sdk/config';
 import type { SlotLock } from '@cards.management/sdk/slot-lock';
 import type { SlotActionInput, SlotCleanupContext, SlotClient, SlotLayer } from '../../src/lib/worktrees/index.js';
 import { defaultSlotLayer } from '../../src/lib/worktrees/index.js';
@@ -52,6 +57,12 @@ export class FakeSlotClient implements SlotClient {
   failAfterAddBranch = false;
   /** When set, `getBranches` throws. */
   failGetBranches = false;
+  /** Runs before `addBranch` writes; another process's stop point. */
+  beforeAddBranch: (() => Promise<void>) | null = null;
+  /** Runs after `addBranch` wrote and persisted, before it returns. */
+  afterAddBranch: (() => Promise<void>) | null = null;
+  /** File every registration write is mirrored to, so another process can read it; null keeps them in memory only. */
+  persistPath: string | null = null;
   readonly calls: string[] = [];
 
   /**
@@ -96,6 +107,7 @@ export class FakeSlotClient implements SlotClient {
    */
   async addBranch(cardId: string, data: AddBranchRequest): Promise<{ outcome: 'created' | 'upserted' }> {
     this.calls.push(`addBranch ${cardId} ${data.name}`);
+    await this.beforeAddBranch?.();
     const existing = this.registrations.has(data.name);
     if (existing && data.intent === 'create') throw new Error(`Branch ${data.name} already registered`);
     this.registrations.set(data.name, {
@@ -104,6 +116,8 @@ export class FakeSlotClient implements SlotClient {
       parentBranch: data.parentBranch ?? 'main',
       addedAt: new Date().toISOString()
     });
+    await this.save();
+    await this.afterAddBranch?.();
     if (this.failAfterAddBranch) {
       this.failAfterAddBranch = false;
       throw new Error('addBranch response lost');
@@ -120,7 +134,26 @@ export class FakeSlotClient implements SlotClient {
   async removeBranch(cardId: string, name: string): Promise<{ outcome: 'removed' | 'preserved' }> {
     this.calls.push(`removeBranch ${cardId} ${name}`);
     this.registrations.delete(name);
+    await this.save();
     return { outcome: 'removed' };
+  }
+
+  /** Mirrors the registrations to {@link persistPath}, when set. */
+  async save(): Promise<void> {
+    if (this.persistPath === null) return;
+    await writeFile(this.persistPath, JSON.stringify([...this.registrations.values()]));
+  }
+
+  /** Replaces the registrations with those mirrored to {@link persistPath}; a missing file means none. */
+  async reload(): Promise<void> {
+    if (this.persistPath === null) throw new Error('No persist path to reload from');
+    const text = await readFile(this.persistPath, 'utf8').catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return '[]';
+      throw error;
+    });
+    this.registrations.clear();
+    for (const registration of JSON.parse(text) as BranchInfo[])
+      this.registrations.set(registration.name, registration);
   }
 
   /**
@@ -158,12 +191,76 @@ export async function abandonSlotLock(lock: SlotLock): Promise<void> {
   await writeFile(ownerPath, JSON.stringify(owner));
 }
 
+/** Interception points of a fixture layer. */
+export interface SlotLayerHooks {
+  beforeGit: SlotGitInterceptor | null;
+  beforeProvision: ((options: ProvisionSlotCheckoutOptions) => Promise<void>) | null;
+  /**
+   * Observes each slot git call once it settled.
+   * @param args - Git arguments, without the fsmonitor override.
+   * @param call - How the call went against the shutdown fence.
+   * @param call.fencedAtCall - Whether the fence had closed when the call was made.
+   * @param call.refused - Whether the call was refused for the closed fence.
+   */
+  afterGit?: (args: readonly string[], call: { readonly fencedAtCall: boolean; readonly refused: boolean }) => void;
+}
+
+/**
+ * Builds the slot layer fixtures use: the host layer with git routed through
+ * {@link SlotLayerHooks.beforeGit}, provisioning that only records its calls,
+ * and the interim removal seam.
+ * @param scratch - The fixture's scratch directory.
+ * @param hooks - Interception points, read at each call.
+ * @param provisioned - Receives every provisioning call.
+ * @param shutdown - The coordinator slot locks fence on; the process's own when omitted.
+ * @returns A layer whose git, provisioning and removal are the fixture's.
+ */
+export function createFixtureLayer(
+  scratch: string,
+  hooks: SlotLayerHooks,
+  provisioned: ProvisionSlotCheckoutOptions[],
+  shutdown?: ShutdownCoordinator
+): SlotLayer {
+  return {
+    ...defaultSlotLayer(),
+    git: createSlotGit({
+      run: async (cwd, args, options) => {
+        await hooks.beforeGit?.(args.slice(2), cwd);
+        const fencedAtCall = (shutdown?.signal ?? shutdownSignal).aborted;
+        try {
+          const result = await runGitBounded(cwd, args, options);
+          hooks.afterGit?.(args.slice(2), { fencedAtCall, refused: false });
+          return result;
+        } catch (error) {
+          hooks.afterGit?.(args.slice(2), { fencedAtCall, refused: error instanceof ShutdownError });
+          throw error;
+        }
+      }
+    }),
+    seams: {
+      provisionSlotCheckout: async (options) => {
+        options.checkpoint();
+        await hooks.beforeProvision?.(options);
+        provisioned.push(options);
+        return { checkout: options.worktreePath, branchName: options.branch };
+      },
+      // TODO(S2): bind the SDK's verified removal once it merges.
+      removal: interimSlotRemoval
+    },
+    ...(shutdown === undefined ? {} : { lockEnvironment: { shutdown } }),
+    sharedHooksDir: join(scratch, 'workspace-hooks')
+  };
+}
+
 /** One test's repositories, client and layer. */
 export interface SlotFixture {
   readonly cardId: string;
+  /** The temporary directory holding everything the fixture made. */
+  readonly scratch: string;
   /** The workspace (main) repository, with one commit on `main`. */
   readonly repoRoot: string;
   readonly slotRoot: string;
+  /** The fake client; its registrations are mirrored to `<scratch>/registrations.json`. */
   readonly client: FakeSlotClient;
   /** This test's shutdown coordinator; its exit only records the code. */
   readonly shutdown: ShutdownCoordinator;
@@ -219,29 +316,10 @@ export async function createSlotFixture(cardId = 'card-1'): Promise<SlotFixture>
 
   const client = new FakeSlotClient(cardId);
   const shutdown = createShutdownCoordinator({ exit: () => {} });
+  client.persistPath = join(scratch, 'registrations.json');
   const provisioned: ProvisionSlotCheckoutOptions[] = [];
-  const host = defaultSlotLayer();
-  const hooks: Pick<SlotFixture, 'beforeGit' | 'beforeProvision'> = { beforeGit: null, beforeProvision: null };
-  const layer: SlotLayer = {
-    ...host,
-    git: createSlotGit({
-      run: async (cwd, args, options) => {
-        await hooks.beforeGit?.(args.slice(2), cwd);
-        return runGitBounded(cwd, args, options);
-      }
-    }),
-    seams: {
-      provisionSlotCheckout: async (options) => {
-        options.checkpoint();
-        await hooks.beforeProvision?.(options);
-        provisioned.push(options);
-      },
-      // TODO(S2): bind the SDK's verified removal once it merges.
-      removal: interimSlotRemoval
-    },
-    lockEnvironment: { shutdown },
-    sharedHooksDir: join(scratch, 'workspace-hooks')
-  };
+  const hooks: SlotLayerHooks = { beforeGit: null, beforeProvision: null };
+  const layer = createFixtureLayer(scratch, hooks, provisioned, shutdown);
 
   return {
     get beforeGit() {
@@ -257,6 +335,7 @@ export async function createSlotFixture(cardId = 'card-1'): Promise<SlotFixture>
       hooks.beforeProvision = value;
     },
     cardId,
+    scratch,
     repoRoot,
     slotRoot: await resolveSlotRoot(repoRoot, cardId),
     client,

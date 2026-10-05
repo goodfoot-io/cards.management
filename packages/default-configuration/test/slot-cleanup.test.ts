@@ -114,7 +114,7 @@ describe('cleanupCardSlots preview', () => {
     const held = await acquire('exec-holder');
     const ownerPath = join(fx.slotRoot, '.locks', '1', String(held.lock.generation), 'owner.json');
     const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as { holder: Record<string, unknown> };
-    owner.holder.startIdentity = null;
+    owner.holder['startIdentity'] = null;
     await writeFile(ownerPath, JSON.stringify(owner));
 
     const result = await pass({ mode: 'preview' });

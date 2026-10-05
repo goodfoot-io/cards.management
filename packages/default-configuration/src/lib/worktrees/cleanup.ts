@@ -447,15 +447,18 @@ export async function cleanupCardSlots(
         record(slot, 'lock_unknown', state.detail.reason, 'preserved');
         continue;
       }
-      const verdict = await inspect(slot, inventory);
-      if (mode === 'preview') {
-        record(slot, verdict.reason, verdict.detail, verdict.reason === 'eligible' ? 'eligible' : 'preserved');
-        continue;
-      }
-      const residue = slot.residue.length > 0 || state.snapshot?.creating != null;
-      if (verdict.reason !== 'eligible' && verdict.reason !== 'missing' && !residue) {
-        record(slot, verdict.reason, verdict.detail, 'preserved');
-        continue;
+      // A slot with residue goes straight to its lock: a partial checkout can fail the lock-free checks.
+      const residue = slot.residue.length > 0 || (state.snapshot?.creating ?? null) !== null;
+      if (mode === 'preview' || !residue) {
+        const verdict = await inspect(slot, inventory);
+        if (mode === 'preview') {
+          record(slot, verdict.reason, verdict.detail, verdict.reason === 'eligible' ? 'eligible' : 'preserved');
+          continue;
+        }
+        if (verdict.reason !== 'eligible' && verdict.reason !== 'missing') {
+          record(slot, verdict.reason, verdict.detail, 'preserved');
+          continue;
+        }
       }
       // 3. Lock only candidates and slots with residue.
       const done = await withSlotLock(
