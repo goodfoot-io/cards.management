@@ -66,7 +66,6 @@ Post a process-oriented comment. The plan content is already in the plan files â
 - Focus on what the reviewer cannot see: reasoning process, judgment calls, areas of lower certainty
 - **Ambiguous feedback**: Surface your interpretation as a question with your selected answer inline
 - Include surprises, new assumptions, or risks discovered during revision when useful
-- Mention the plan version
 
 Write the comment to the card repository. Commit to the card repository:
 

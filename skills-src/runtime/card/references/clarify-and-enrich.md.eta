@@ -20,16 +20,7 @@ Based on comments and prior clarification requests:
   git commit -m "[single sentence summarizing the new information and how it affects requirements]"  # <card-repo-commit-style>
   ```
 
-- **Existing clarification request AND no new user response**: Write a comment confirming you are still waiting, referencing which questions remain unanswered. Commit and **STOP**.
-
-  ```bash
-  cd $CARD_REPO_PATH
-  cat <<'EOF' > comments/clarification-pending.md
-  [confirm still waiting; reference which questions from the prior clarification request remain unanswered]
-  EOF
-  git add comments/clarification-pending.md
-  git commit -m "[single sentence noting which questions from the prior request remain unanswered]"  # <card-repo-commit-style>
-  ```
+- **Existing clarification request AND no new user response**: **STOP**.
 
 ## 2. Research and Enrich
 
@@ -61,7 +52,7 @@ Evaluate whether the title and description are clear enough and enrich them with
 **When clarifying:**
 - Preserve all user-provided details, requirements, constraints, error messages, and reproduction steps
 - Maintain user intent — the clarified version must request the same outcome or describe the same bug
-- Correct factual errors in the main text; append a footnote: `*Corrections: Changed X to Y (reason)*`
+- Correct factual errors in the main text
 - Do not expand scope beyond user intent
 
 If changes are needed, update `CARD.meta.json` (for title) and/or `CARD.md` (for description) in the card repository per `<markdown-guidelines>`. Commit to the card repository:
@@ -95,16 +86,7 @@ Research the workspace:
 2. Check tests for expected behavior
 3. Identify relevant file paths for code references
 
-- **Research resolves all gaps**: Write findings as a comment to the card repository and commit. Proceed to Step 4: Re-route After Enrichment.
-
-  ```bash
-  cd $CARD_REPO_PATH
-  cat <<'EOF' > comments/research-findings.md
-  [research findings: relevant implementations found, expected behaviors from tests, file paths with code references that resolve the missing requirements]
-  EOF
-  git add comments/research-findings.md
-  git commit -m "[single sentence summarizing the research findings that resolved requirement gaps]"  # <card-repo-commit-style>
-  ```
+- **Research resolves all gaps**: Enrich `CARD.md` with the resolved requirements per Step 2.2 and commit. Proceed to Step 4: Re-route After Enrichment.
 
 ### 3.3 Request Clarification
 

@@ -112,7 +112,7 @@ Prompts for generating plan-revealed questions:
 - **Step dependencies and failure paths** — For each step that can fail, what question does the plan answer about what happens when it does? Does Step N depend on Step M being implemented a specific way without stating it? Each unstated dependency is a question.
 - **New failure categories the plan introduces** — If the plan chooses an approach (a new daemon, a new cache, a new error-handling strategy) that brings its own failure modes, what questions does that approach now invite? Add them.
 
-Append new questions to the failure-mode-questions note as you discover them. Plans are only meaningfully compared when evaluated against the same set: do not report `APPROVED` for any plan until every question that gates it has been answered against it. Follow the `<take-notes>` instructions for any separate architectural discovery that doesn't fit as a question.
+Append new questions to the failure-mode-questions note as you discover them. The note holds only the live question set — never answers or verdicts; delete a question once the mechanism it targets is gone. Plans are only meaningfully compared when evaluated against the same set: do not report `APPROVED` for any plan until every question that gates it has been answered against it. Follow the `<take-notes>` instructions for any separate architectural discovery that doesn't fit as a question.
 
 ### 2.3. Handle Peer-Submitted Critiques
 

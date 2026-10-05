@@ -87,7 +87,7 @@ Prompts for generating diff-revealed questions:
 - **Step dependencies and failure paths** — For each branch that can fail, what question does the implementation answer about what happens when it does? Each unhandled failure path is a question.
 - **New failure categories the diff introduces** — If the implementation chooses an approach that brings its own failure modes (a new daemon, cache, or error-handling strategy), what questions does it invite? Add them.
 
-Append new questions to the `failure-mode-questions` note as you discover them and commit the update. After your first verdict:
+Append new questions to the `failure-mode-questions` note as you discover them and commit the update. The note holds only the live question set — never answers or verdicts; delete a question once the mechanism it targets is gone. After your first verdict:
 
 - A new question **gates** approval only when it names the fix commit that introduced the mechanism it targets, or names an artifact that did not exist at round 1 (a commit, a generated file, a runtime observation from a path the fix created). "I had not yet read/traced/run it" is not unaskability — it is a review defect per §3.3.
 - A non-gating question is still recorded in the note and answered as you go; it never gates approval.

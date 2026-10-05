@@ -63,14 +63,14 @@ Read `$CARD_REPO_PATH/CARD.meta.json` for current `gates.*` and `tags`. Obtain t
 
 ### 1.2 Derive Routing Signals
 
-> **Comment authorship convention**: Determine authorship from the git commit that added each comment file: `git log --diff-filter=A --format='%an' -1 -- comments/<file>`. User-authored comments are committed by the user's git identity; agent-authored comments are committed by your git identity. Sort `comments/*.md` by modification time; the most recent user-authored file is the "latest user comment."
+> **Comment convention**: A comment's author is the author of the commit that added it (`git log --diff-filter=A --format='%an' -1 -- comments/<file>`) — the user's git identity or yours. Its time is its latest commit (`git log -1 --format=%ct -- comments/<file>`). The latest user-authored file is the "latest user comment."
 
 | Signal | Derivation |
 |--------|------------|
 | HAS_QUESTION | Latest user comment contains a genuine information-seeking question (not rhetorical, not "Can you fix X?", not "Could you implement Y?") |
 | HAS_BLOCKED_TAG | `tags` contains "blocked". Identify the blocker comment and all later user-authored comments; later handling instructions are reconciliation input even when not questions. |
 | HAS_WORK | `commits/` contains an attributed commit, or workspace changes remain after `<workspace-ownership>` classifies them as card-owned. Off-card paths never count. |
-| HAS_IMPLEMENTATION_FEEDBACK | `commits/` directory contains at least one commit file AND the latest user comment's modification time is more recent than the most recent agent comment's modification time. |
+| HAS_IMPLEMENTATION_FEEDBACK | `commits/` contains at least one commit file AND the latest user comment is newer than both your latest comment and the latest commit touching `commits/`. |
 | REVIEW_APPROVED | `gates.mergeApproved` in CARD.meta.json |
 | PLAN_REQUIRED | `gates.planRequired` in CARD.meta.json |
 | PLAN_APPROVED | `gates.planApproved` in CARD.meta.json |

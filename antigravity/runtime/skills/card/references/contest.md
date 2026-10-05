@@ -114,9 +114,9 @@ The only things that legitimately reopen a closeable field: a planner choosing t
 
 ### Convergence Collapse (Instrumented)
 
-When every live plan has converged on the same architecture — the reviewer's `MONOCULTURE:` DMs (copied to you) plus matching mechanisms across plan files are the signal — the design fork is settled. Record the collapse point (round and evidence) the moment the signal covers every live plan. From then on, at each `APPROVED` for a converged plan, either trigger Step 4 with `SELECT_WINNER (convergence collapse)` in the DM body — do not wait for the others to qualify — or append one card-note line stating why not; never continue silently. One deferral per collapse point: the next `APPROVED` for a converged plan triggers Step 4 unconditionally.
+When every live plan has converged on the same architecture — the reviewer's `MONOCULTURE:` DMs (copied to you) plus matching mechanisms across plan files are the signal — the design fork is settled. Record the collapse point (round and evidence) the moment the signal covers every live plan. From then on, at each `APPROVED` for a converged plan, either trigger Step 4 with `SELECT_WINNER (convergence collapse)` in the DM body — do not wait for the others to qualify — or record why not for the promotion commit message; never continue silently. One deferral per collapse point: the next `APPROVED` for a converged plan triggers Step 4 unconditionally.
 
-After the `WINNER:` DM, before Step 5: DM each losing live planner a red-team assignment naming `[WINNING_PLANNER]` — stop revising your own plan; DM `CRITIQUE: ... for:[WINNING_PLANNER]` for every real risk you find in the winning plan. The reviewer verifies critiques, streams verified findings to the winner, and re-verdicts per its §5. Proceed to Step 5 once the winner holds `APPROVED` with no critique or finding in flight and every red-teamer's idle notification has arrived — you cannot see `CRITIQUE:` traffic, so idle is the only settle signal. Record the red-team yield (count of reviewer-verified findings) in a card note; this path is piloted.
+After the `WINNER:` DM, before Step 5: DM each losing live planner a red-team assignment naming `[WINNING_PLANNER]` — stop revising your own plan; DM `CRITIQUE: ... for:[WINNING_PLANNER]` for every real risk you find in the winning plan. The reviewer verifies critiques, streams verified findings to the winner, and re-verdicts per its §5. Proceed to Step 5 once the winner holds `APPROVED` with no critique or finding in flight and every red-teamer's idle notification has arrived — you cannot see `CRITIQUE:` traffic, so idle is the only settle signal. Include the red-team yield (count of reviewer-verified findings) in the promotion commit message; this path is piloted.
 
 **Lone-survivor case** is the special case where the live set has exactly one element: closure reduces to the survivor holding `APPROVED` for its most recent `PLAN: READY` round. You still trigger Step 4 — the reviewer's lone-survivor branch names the survivor without comparison.
 
@@ -191,7 +191,7 @@ git mv plans/[WINNING_PLANNER].md.meta.json plans/[WINNING_SLUG].md.meta.json
 # seed. Never remove approved or implemented plans — follow-on work layers on them.
 git ls-files 'plans/planner-*' [PRE_EXISTING_UNAPPROVED_FILES] | xargs -r git rm
 
-git commit -m "[single sentence summarizing the winning approach]"
+git commit -m "[single sentence summarizing the winning approach; body: any convergence-deferral reasons and the red-team yield]"
 ```
 
 ## 6. Return to Caller
