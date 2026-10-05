@@ -52,7 +52,7 @@ function nextMessage<T>(worker: ChildProcess, match: (message: T) => boolean): P
 }
 
 describe('contention [L1]', () => {
-  it.skip(`gives exactly one of ${WORKERS} racing processes each generation`, async () => {
+  it(`gives exactly one of ${WORKERS} racing processes each generation`, async () => {
     const slotRoot = join(base, 'slots');
     mkdirSync(slotRoot);
     const script = join(base, 'contender.mts');
@@ -111,7 +111,7 @@ process.send({ ready: true });
 });
 
 describe('GC churn [L1]', () => {
-  it.skip('never lets two holders overlap while every acquirer collects eagerly', async () => {
+  it('never lets two holders overlap while every acquirer collects eagerly', async () => {
     const slotRoot = join(base, 'slots');
     mkdirSync(slotRoot);
     const marker = join(base, 'inside');
@@ -151,7 +151,7 @@ process.send(stats, () => process.exit(0));
 });
 
 describe('stale empty target [L1]', () => {
-  it.skip('backs off a rename that replaced a lower generation emptied behind the maximum', async () => {
+  it('backs off a rename that replaced a lower generation emptied behind the maximum', async () => {
     const slotRoot = join(base, 'slots');
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     mkdirSync(join(slotRoot, '.locks', '1', '2'));
@@ -165,7 +165,7 @@ describe('stale empty target [L1]', () => {
 });
 
 describe.runIf(POSIX)('liveness [L3] [L4]', () => {
-  it.skip('reads an unreaped zombie holder as alive and frees it once init reaps it', async () => {
+  it('reads an unreaped zombie holder as alive and frees it once init reaps it', async () => {
     const slotRoot = join(base, 'slots');
     const identity = createProcessIdentity();
     const parent = spawn('/bin/sh', ['-c', 'sleep 0.2 & echo $!; exec sleep 30'], {
@@ -197,7 +197,7 @@ describe.runIf(POSIX)('liveness [L3] [L4]', () => {
     await waitFor(async () => (await readSlotLock(slotRoot, 1)).state === 'free');
   });
 
-  it.skip('keeps a leaderless group held until its last member exits', async () => {
+  it('keeps a leaderless group held until its last member exits', async () => {
     const slotRoot = join(base, 'slots');
     const identity = createProcessIdentity();
     const leader = spawn('/bin/sh', ['-c', 'sleep 30 & echo $!; exit 0'], {
@@ -205,13 +205,13 @@ describe.runIf(POSIX)('liveness [L3] [L4]', () => {
       stdio: ['ignore', 'pipe', 'ignore']
     });
     children.push(leader);
+    // Listen before any await: an exited child's unread stdout is flushed and lost.
+    const memberLine = new Promise<string>((resolveLine) =>
+      leader.stdout?.once('data', (chunk) => resolveLine(String(chunk).trim()))
+    );
     const pgid = leader.pid as number;
     const leaderIdentity = await identity.identify(pgid, 2_000);
-    const member = Number(
-      await new Promise<string>((resolveLine) =>
-        leader.stdout?.once('data', (chunk) => resolveLine(String(chunk).trim()))
-      )
-    );
+    const member = Number(await memberLine);
     await new Promise((resolveExit) =>
       leader.exitCode === null ? leader.once('exit', resolveExit) : resolveExit(null)
     );
@@ -248,7 +248,7 @@ describe.runIf(POSIX)('action group [L4b]', () => {
     trailing: '"$NODE_BIN" "$TSX_IMPORT" ./handler.mts; true'
   };
 
-  it.skip.each(
+  it.each(
     shells.flatMap((shell) => Object.entries(shapes).map(([shape, command]) => [shell, shape, command]))
   )('records the handler and its agent in the action group under %s (%s)', async (shell, _shape, command) => {
     const slotRoot = join(base, 'slots');

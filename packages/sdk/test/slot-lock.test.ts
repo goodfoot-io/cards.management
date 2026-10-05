@@ -111,7 +111,7 @@ function ticks(at: Date): string {
 }
 
 describe('acquire and publish', () => {
-  it.skip('creates generation 1 with the full owner and an empty previous when the ordinal is new', async () => {
+  it('creates generation 1 with the full owner and an empty previous when the ordinal is new', async () => {
     const world = fakeWorld();
     const result = acquired(await acquire(world));
 
@@ -129,7 +129,7 @@ describe('acquire and publish', () => {
     expect(await listSlotLockOrdinals(slotRoot)).toEqual([1]);
   });
 
-  it.skip('takes over a released generation and GCs every generation below the new maximum', async () => {
+  it('takes over a released generation and GCs every generation below the new maximum', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     writeGeneration(slotRoot, 1, 2, { owner: ownerFile(), released: true });
     const result = acquired(await acquire(fakeWorld()));
@@ -140,7 +140,7 @@ describe('acquire and publish', () => {
     expect(readdirSync(join(slotRoot, '.locks', '1')).filter((name) => name.startsWith('.'))).toEqual([]);
   });
 
-  it.skip('leaves a crash between temp write and rename invisible: the next acquirer takes generation 1', async () => {
+  it('leaves a crash between temp write and rename invisible: the next acquirer takes generation 1', async () => {
     const lockDir = join(slotRoot, '.locks', '1');
     mkdirSync(join(lockDir, '.tmp-crashed'), { recursive: true });
     writeFileSync(join(lockDir, '.tmp-crashed', 'owner.json'), JSON.stringify(ownerFile()));
@@ -152,7 +152,7 @@ describe('acquire and publish', () => {
     expect(existsSync(join(lockDir, '.tmp-crashed'))).toBe(true);
   });
 
-  it.skip('sweeps .tmp-* and .gc-* entries older than an hour and keeps fresh ones', async () => {
+  it('sweeps .tmp-* and .gc-* entries older than an hour and keeps fresh ones', async () => {
     const lockDir = join(slotRoot, '.locks', '1');
     const old = new Date(Date.now() - LOCK_SWEEP_AGE_MS - 60_000);
     for (const name of ['.tmp-old', '.gc-old', '.tmp-fresh', '.gc-fresh'])
@@ -168,7 +168,7 @@ describe('acquire and publish', () => {
     expect(entries).toEqual(['.gc-fresh', '.tmp-fresh']);
   });
 
-  it.skip('reports taken when another acquirer created the next generation first', async () => {
+  it('reports taken when another acquirer created the next generation first', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     writeGeneration(slotRoot, 1, 2, { owner: ownerFile({ executionId: 'winner' }) });
 
@@ -179,7 +179,7 @@ describe('acquire and publish', () => {
     expect(readdirSync(join(slotRoot, '.locks', '1')).filter((name) => name.startsWith('.tmp-'))).toEqual([]);
   });
 
-  it.skip('backs off a stale-listing publish when a higher generation exists', async () => {
+  it('backs off a stale-listing publish when a higher generation exists', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     writeGeneration(slotRoot, 1, 3, { owner: ownerFile({ executionId: 'newest' }) });
 
@@ -190,7 +190,7 @@ describe('acquire and publish', () => {
     expect((await readSlotLock(slotRoot, 1, lockEnvironmentOptions(fakeWorld()))).snapshot?.generation).toBe(3);
   });
 
-  it.skip('backs off on verify when a stale rename replaced an emptied lower generation', async () => {
+  it('backs off on verify when a stale rename replaced an emptied lower generation', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     mkdirSync(generationDir(2));
     writeGeneration(slotRoot, 1, 3, { owner: ownerFile({ executionId: 'newest' }) });
@@ -201,7 +201,7 @@ describe('acquire and publish', () => {
     expect(existsSync(join(generationDir(2), 'released.json'))).toBe(true);
   });
 
-  it.skip('never replaces a target a GC rename emptied, because GC moves it away before emptying it', async () => {
+  it('never replaces a target a GC rename emptied, because GC moves it away before emptying it', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     writeGeneration(slotRoot, 1, 2, { owner: ownerFile(), released: true });
     const first = acquired(await acquire(fakeWorld()));
@@ -215,7 +215,7 @@ describe('acquire and publish', () => {
     expect(owner.executionId).toBe('exec-2');
   });
 
-  it.skip('treats ENOENT on the back-off write into an already collected generation as success', async () => {
+  it('treats ENOENT on the back-off write into an already collected generation as success', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), released: true });
     writeGeneration(slotRoot, 1, 3, { owner: ownerFile({ executionId: 'newest' }) });
     const lockDir = join(slotRoot, '.locks', '1');
@@ -238,7 +238,7 @@ describe('acquire and publish', () => {
     expect(result).toMatchObject({ status: 'backed_off', generation: 2 });
   });
 
-  it.skip('retries transient rename errors while the destination is absent, then acquires', async () => {
+  it('retries transient rename errors while the destination is absent, then acquires', async () => {
     let failures = 3;
     const result = acquired(
       await acquire(fakeWorld(), {
@@ -261,7 +261,7 @@ describe('acquire and publish', () => {
     expect(result.lock.generation).toBe(1);
   });
 
-  it.skip('reports unavailable once transient rename errors outlast the budget', async () => {
+  it('reports unavailable once transient rename errors outlast the budget', async () => {
     const started = Date.now();
     const result = await acquire(fakeWorld(), {
       environment: {
@@ -281,7 +281,7 @@ describe('acquire and publish', () => {
     expect(existsSync(generationDir(1))).toBe(false);
   });
 
-  it.skip('never replaces a target with a truncated temp file when an atomic write crashes', async () => {
+  it('never replaces a target with a truncated temp file when an atomic write crashes', async () => {
     let crash = false;
     const { environment } = lockEnvironment(fakeWorld(), {
       renameBudgetMs: 100,
@@ -308,7 +308,7 @@ describe('acquire and publish', () => {
 });
 
 describe('previous snapshot and intent carry [F12] [G2]', () => {
-  it.skip('returns the judged generation as previous although GC collected it', async () => {
+  it('returns the judged generation as previous although GC collected it', async () => {
     writeGeneration(slotRoot, 1, 4, {
       owner: ownerFile({ executionId: 'old' }),
       companions: [{ pid: 3_000, startIdentity: 'agent-start', role: 'agent' }],
@@ -326,27 +326,25 @@ describe('previous snapshot and intent carry [F12] [G2]', () => {
     expect(JSON.parse(readFileSync(join(generationDir(5), 'creating.json'), 'utf8'))).toEqual(INTENT);
   });
 
-  it.runIf(POSIX)
-    .skip('keeps the intent in the maximum when an acquirer dies after publish, before GC', async () => {
-      writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), creating: INTENT, released: true });
-      await runCrashingAcquirer('after-publish');
+  it.runIf(POSIX)('keeps the intent in the maximum when an acquirer dies after publish, before GC', async () => {
+    writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), creating: INTENT, released: true });
+    await runCrashingAcquirer('after-publish');
 
-      expect(generations()).toEqual([1, 2]);
-      expect(JSON.parse(readFileSync(join(generationDir(2), 'creating.json'), 'utf8'))).toEqual(INTENT);
-      const next = acquired(await acquire(null));
-      expect(next.previous.creating).toEqual(INTENT);
-      expect(next.previous.generation).toBe(2);
-    });
+    expect(generations()).toEqual([1, 2]);
+    expect(JSON.parse(readFileSync(join(generationDir(2), 'creating.json'), 'utf8'))).toEqual(INTENT);
+    const next = acquired(await acquire(null));
+    expect(next.previous.creating).toEqual(INTENT);
+    expect(next.previous.generation).toBe(2);
+  });
 
-  it.runIf(POSIX)
-    .skip('keeps the intent in the maximum when an acquirer dies during GC', async () => {
-      writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), creating: INTENT, released: true });
-      await runCrashingAcquirer('during-gc');
+  it.runIf(POSIX)('keeps the intent in the maximum when an acquirer dies during GC', async () => {
+    writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), creating: INTENT, released: true });
+    await runCrashingAcquirer('during-gc');
 
-      expect(generations()).toEqual([2]);
-      const next = acquired(await acquire(null));
-      expect(next.previous.creating).toEqual(INTENT);
-    });
+    expect(generations()).toEqual([2]);
+    const next = acquired(await acquire(null));
+    expect(next.previous.creating).toEqual(INTENT);
+  });
 
   /**
    * Runs a real acquirer that publishes generation 2 with the carried intent
@@ -379,17 +377,29 @@ if (${JSON.stringify(point)} === 'during-gc') await rename(join(${JSON.stringify
 process.kill(process.pid, 'SIGKILL');
 `
     );
-    const child = spawn(process.execPath, [TSX_IMPORT, script], { stdio: 'ignore' });
+    // Its own group, as the wrapper's action group would be, so the group dies with it.
+    const child = spawn(process.execPath, [TSX_IMPORT, script], { detached: true, stdio: 'ignore' });
     children.push(child);
     const signal = await new Promise<string | null>((resolveExit) =>
       child.once('exit', (_code, sig) => resolveExit(sig))
     );
     expect(signal).toBe('SIGKILL');
+    // tsx's esbuild service outlives its parent briefly and keeps the recorded group alive.
+    const pgid = child.pid as number;
+    expect(pgid).toBeGreaterThan(1);
+    await waitFor(() => {
+      try {
+        process.kill(-pgid, 0);
+        return false;
+      } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'ESRCH';
+      }
+    });
   }
 });
 
 describe('dead-holder judgement', () => {
-  it.skip('takes over a holder whose PID, group and companions are gone', async () => {
+  it('takes over a holder whose PID, group and companions are gone', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile(),
       companions: [{ pid: 3_000, startIdentity: 'agent-start', role: 'agent' }]
@@ -398,14 +408,14 @@ describe('dead-holder judgement', () => {
     expect(result.lock.generation).toBe(2);
   });
 
-  it.skip('takes over a holder whose PID was recycled by another process', async () => {
+  it('takes over a holder whose PID was recycled by another process', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
     const world = fakeWorld();
     world.processes.set(2_000, { parentPid: 1, startIdentity: 'someone-else', processGroupId: 5_000 });
     acquired(await acquire(world));
   });
 
-  it.skip('stays held while the agent keeps the group alive after the handler died', async () => {
+  it('stays held while the agent keeps the group alive after the handler died', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
     const world = fakeWorld();
     world.processes.set(2_100, { parentPid: 1, startIdentity: 'agent-start', processGroupId: 2_000 });
@@ -416,7 +426,7 @@ describe('dead-holder judgement', () => {
     });
   });
 
-  it.skip('stays held while a slot git child in the group outlives the handler [F2]', async () => {
+  it('stays held while a slot git child in the group outlives the handler [F2]', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
     const world = fakeWorld();
     world.processes.set(2_200, { parentPid: 1, startIdentity: 'git-start', processGroupId: 2_000 });
@@ -424,7 +434,7 @@ describe('dead-holder judgement', () => {
     expect(state).toMatchObject({ state: 'held', survivors: { groupAlive: true } });
   });
 
-  it.skip('stays held while a recorded companion lives', async () => {
+  it('stays held while a recorded companion lives', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile(),
       companions: [{ pid: 3_000, startIdentity: 'agent-start', role: 'agent' }]
@@ -434,7 +444,7 @@ describe('dead-holder judgement', () => {
     expect(await acquire(world)).toMatchObject({ status: 'held', survivors: { companions: [3_000] } });
   });
 
-  it.skip('reads lock_unknown, never free, when a holder probe answers unknown', async () => {
+  it('reads lock_unknown, never free, when a holder probe answers unknown', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
     const world = fakeWorld();
     world.processes.set(2_000, 'unknown');
@@ -443,13 +453,13 @@ describe('dead-holder judgement', () => {
     expect(generations()).toEqual([1]);
   });
 
-  it.skip('reads lock_unknown for an owner.json missing a required key', async () => {
+  it('reads lock_unknown for an owner.json missing a required key', async () => {
     const { holder: _holder, ...partial } = ownerFile();
     writeGeneration(slotRoot, 1, 1, { owner: JSON.stringify(partial) });
     expect((await acquire(fakeWorld())).status).toBe('unknown');
   });
 
-  it.skip('validates every unverified owner form [N2]', () => {
+  it('validates every unverified owner form [N2]', () => {
     for (const owner of [
       ownerFile({ holder: { startIdentity: null } }),
       ownerFile({ holder: { processGroupId: null } }),
@@ -463,7 +473,7 @@ describe('dead-holder judgement', () => {
     }
   });
 
-  it.skip.each([
+  it.each([
     'owner.json',
     'companions.json',
     'handoff.json',
@@ -490,12 +500,12 @@ describe('dead-holder judgement', () => {
     expect(result.status).toBe('unknown');
   });
 
-  it.skip('reads lock_unknown for a malformed optional file', async () => {
+  it('reads lock_unknown for a malformed optional file', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile(), companions: '{"version":1,' });
     expect((await acquire(fakeWorld())).status).toBe('unknown');
   });
 
-  it.skip('lists every recorded PID of a snapshot once', async () => {
+  it('lists every recorded PID of a snapshot once', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile(),
       companions: [
@@ -510,7 +520,7 @@ describe('dead-holder judgement', () => {
 });
 
 describe('process domain [F1] [K] [G4]', () => {
-  it.skip('ignores a hostname and machine id change within the same domain [N1]', async () => {
+  it('ignores a hostname and machine id change within the same domain [N1]', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({ hostname: 'old-container', domain: { ...LINUX_DOMAIN, machineId: null } })
     });
@@ -521,7 +531,7 @@ describe('process domain [F1] [K] [G4]', () => {
     acquired(await acquire(fakeWorld({ domain: { ...LINUX_DOMAIN, machineId: 'machine-2' } })));
   });
 
-  it.skip.each<[string, ProcessDomain]>([
+  it.each<[string, ProcessDomain]>([
     ['PID namespace', { ...LINUX_DOMAIN, pidNamespace: '4026532000' }],
     ['PID namespace birth marker', { ...LINUX_DOMAIN, pidNamespaceInit: '999' }],
     ['boot id', { ...LINUX_DOMAIN, bootId: 'boot-2' }]
@@ -540,7 +550,7 @@ describe('process domain [F1] [K] [G4]', () => {
     expect(world.calls.groups).not.toContain(2_000);
   });
 
-  it.skip('takes over at once a macOS holder from another boot session', async () => {
+  it('takes over at once a macOS holder from another boot session', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({ domain: { ...DARWIN_DOMAIN, bootSessionUuid: 'session-0' } })
     });
@@ -550,14 +560,14 @@ describe('process domain [F1] [K] [G4]', () => {
     expect(world.calls.absent).not.toContain(2_000);
   });
 
-  it.skip('does not let a live unrelated group with a reused pgid hold a lock from a reused namespace inode', async () => {
+  it('does not let a live unrelated group with a reused pgid hold a lock from a reused namespace inode', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile({ domain: { ...LINUX_DOMAIN, pidNamespaceInit: '50' } }) });
     const world = fakeWorld();
     world.processes.set(2_300, { parentPid: 1, startIdentity: 'unrelated', processGroupId: 2_000 });
     acquired(await acquire(world));
   });
 
-  it.skip('takes over Windows holders of an earlier boot by the PID rules [G3] [N1]', async () => {
+  it('takes over Windows holders of an earlier boot by the PID rules [G3] [N1]', async () => {
     const handlerStart = new Date('2026-10-04T09:00:00Z');
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({
@@ -570,7 +580,7 @@ describe('process domain [F1] [K] [G4]', () => {
     acquired(await acquire(world));
   });
 
-  it.skip('keeps a live Windows holder held across a forward clock step that moved LastBootUpTime', async () => {
+  it('keeps a live Windows holder held across a forward clock step that moved LastBootUpTime', async () => {
     const handlerStart = new Date('2026-10-05T09:00:00Z');
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({
@@ -586,7 +596,7 @@ describe('process domain [F1] [K] [G4]', () => {
     expect((await acquire(world)).status).toBe('held');
   });
 
-  it.skip('ignores a rewritten MachineGuid on Windows: live held, dead taken over', async () => {
+  it('ignores a rewritten MachineGuid on Windows: live held, dead taken over', async () => {
     const handlerStart = new Date('2026-10-05T09:00:00Z');
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({ domain: WINDOWS_DOMAIN, holder: { startIdentity: ticks(handlerStart), processGroupId: null } })
@@ -600,21 +610,21 @@ describe('process domain [F1] [K] [G4]', () => {
 });
 
 describe('unverified owners and readers [W] [N2] [N3]', () => {
-  it.skip('acquires with a null start identity when its own probe fails, keeping the separately read group', async () => {
+  it('acquires with a null start identity when its own probe fails, keeping the separately read group', async () => {
     const world = fakeWorld({ self: 'unknown' });
     const result = acquired(await acquire(world));
     expect(result.verified).toBe(false);
     expect(result.lock.owner.holder).toEqual({ pid: SELF_PID, startIdentity: null, processGroupId: SELF_GROUP });
   });
 
-  it.skip('acquires with a null domain part when it cannot read one', async () => {
+  it('acquires with a null domain part when it cannot read one', async () => {
     const world = fakeWorld({ domain: { ...LINUX_DOMAIN, pidNamespace: null, pidNamespaceInit: null } });
     const result = acquired(await acquire(world));
     expect(result.verified).toBe(false);
     expect(result.lock.owner.domain).toMatchObject({ pidNamespace: null, pidNamespaceInit: null });
   });
 
-  it.skip('takes over an unverified owner once every recorded PID and its group answer ESRCH', async () => {
+  it('takes over an unverified owner once every recorded PID and its group answer ESRCH', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({ holder: { startIdentity: null } }),
       companions: [{ pid: 3_000, startIdentity: 'agent-start', role: 'agent' }]
@@ -622,7 +632,7 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
     acquired(await acquire(fakeWorld()));
   });
 
-  it.skip('reads an unverified owner whose PID is live, even reused, as lock_unknown', async () => {
+  it('reads an unverified owner whose PID is live, even reused, as lock_unknown', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile({ holder: { startIdentity: null } }) });
     const world = fakeWorld();
     world.processes.set(2_000, { parentPid: 1, startIdentity: 'reused', processGroupId: 7_000 });
@@ -630,7 +640,7 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
     expect(result).toMatchObject({ status: 'unknown', detail: { unverifiedOwner: true } });
   });
 
-  it.skip('judges a verified owner by PID absence alone when the reader is unverified', async () => {
+  it('judges a verified owner by PID absence alone when the reader is unverified', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
     const world = fakeWorld({ self: 'unknown' });
     world.processes.set(2_000, { parentPid: 1, startIdentity: 'reused', processGroupId: 7_000 });
@@ -639,14 +649,14 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
     acquired(await acquire(world));
   });
 
-  it.skip('keeps an unverified owner held by a live member of its separately read group', async () => {
+  it('keeps an unverified owner held by a live member of its separately read group', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile({ holder: { startIdentity: null } }) });
     const world = fakeWorld();
     world.processes.set(2_100, { parentPid: 1, startIdentity: 'agent-start', processGroupId: 2_000 });
     expect((await acquire(world)).status).toBe('unknown');
   });
 
-  it.skip('reads an owner with no group as lock_unknown while its holder lives, and dead once all answer ESRCH', async () => {
+  it('reads an owner with no group as lock_unknown while its holder lives, and dead once all answer ESRCH', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({ holder: { startIdentity: null, processGroupId: null } }),
       companions: [{ pid: 3_000, startIdentity: 'agent-start', role: 'agent' }]
@@ -661,7 +671,7 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
     acquired(await acquire(world));
   });
 
-  it.skip.each<[string, ProcessDomain, ProcessDomain]>([
+  it.each<[string, ProcessDomain, ProcessDomain]>([
     ['Linux', { ...LINUX_DOMAIN, bootId: 'boot-0', pidNamespace: null }, LINUX_DOMAIN],
     ['macOS', { ...DARWIN_DOMAIN, bootSessionUuid: 'session-0' }, DARWIN_DOMAIN]
   ])('takes over at once an unverified %s owner from another boot, with no PID probe', async (_name, holderDomain, readerDomain) => {
@@ -674,7 +684,7 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
     expect(world.calls.absent).not.toContain(2_000);
   });
 
-  it.skip('lets PID absence decide when either boot part is null', async () => {
+  it('lets PID absence decide when either boot part is null', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: ownerFile({ domain: { ...LINUX_DOMAIN, bootId: null }, holder: { startIdentity: null } })
     });
@@ -685,8 +695,9 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
     acquired(await acquire(world));
   });
 
-  it.runIf(process.platform === 'linux')
-    .skip('records an unverified owner when /proc/self is not this process', async () => {
+  it.runIf(process.platform === 'linux')(
+    'records an unverified owner when /proc/self is not this process',
+    async () => {
       const identity = createProcessIdentity({ readLink: async () => '1' });
       const { environment } = lockEnvironment(null, { identity });
       const result = acquired(
@@ -694,7 +705,8 @@ describe('unverified owners and readers [W] [N2] [N3]', () => {
       );
       expect(result.verified).toBe(false);
       expect(result.lock.owner.domain).toMatchObject({ pidNamespace: null, pidNamespaceInit: null });
-    });
+    }
+  );
 });
 
 describe('Windows judgement [F7] [H3]', () => {
@@ -705,7 +717,7 @@ describe('Windows judgement [F7] [H3]', () => {
     return ownerFile({ domain: WINDOWS_DOMAIN, holder: { startIdentity: ticks(handlerStart), processGroupId: null } });
   }
 
-  it.skip.each<[string, Date, 'dead' | 'alive']>([
+  it.each<[string, Date, 'dead' | 'alive']>([
     ['after its writtenAt', new Date('2026-10-05T09:06:00Z'), 'dead'],
     ["before the handler's start", new Date('2026-10-05T08:59:00Z'), 'dead'],
     ['between the two', new Date('2026-10-05T09:04:00Z'), 'alive']
@@ -720,7 +732,7 @@ describe('Windows judgement [F7] [H3]', () => {
     expect(result.status).toBe(expected === 'dead' ? 'acquired' : 'held');
   });
 
-  it.skip('retries a timed-out CIM batch once', async () => {
+  it('retries a timed-out CIM batch once', async () => {
     const world = fakeWorld({ platform: 'win32' });
     world.identifyManyTimeouts = 1;
     const context = await createSlotJudgeContext([2_000], {
@@ -732,7 +744,7 @@ describe('Windows judgement [F7] [H3]', () => {
     expect(context.verified).toBe(true);
   });
 
-  it.skip('acquires unverified after a self probe fails on the retry, reusing an all-ESRCH slot and skipping the rest', async () => {
+  it('acquires unverified after a self probe fails on the retry, reusing an all-ESRCH slot and skipping the rest', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: windowsOwner() });
     writeGeneration(slotRoot, 2, 1, {
       owner: ownerFile({
@@ -757,7 +769,7 @@ describe('Windows judgement [F7] [H3]', () => {
     expect(reused.lock.owner.holder.startIdentity).toBeNull();
   });
 
-  it.skip('filters candidates with kill(pid, 0) before the CIM batch', async () => {
+  it('filters candidates with kill(pid, 0) before the CIM batch', async () => {
     const world = fakeWorld({ platform: 'win32' });
     world.processes.set(2_500, { parentPid: 4, startIdentity: '1', processGroupId: 0 });
     const context = await createSlotJudgeContext([2_000, 2_500], {
@@ -776,7 +788,7 @@ describe('handoff [R1]', () => {
     return ownerFile();
   }
 
-  it.skip('accepts the matching token while the source lives and refuses a wrong one', async () => {
+  it('accepts the matching token while the source lives and refuses a wrong one', async () => {
     const expiresAt = new Date(Date.now() + HANDOFF_EXPIRY_MS).toISOString();
     writeGeneration(slotRoot, 1, 1, { owner: handoffOwner(), handoff: { token: 'secret', expiresAt } });
     const world = fakeWorld();
@@ -787,7 +799,7 @@ describe('handoff [R1]', () => {
     expect(claimed.lock.generation).toBe(2);
   });
 
-  it.skip('refuses a matching token once the generation moved on', async () => {
+  it('refuses a matching token once the generation moved on', async () => {
     const expiresAt = new Date(Date.now() + HANDOFF_EXPIRY_MS).toISOString();
     writeGeneration(slotRoot, 1, 1, { owner: handoffOwner(), handoff: { token: 'secret', expiresAt } });
     writeGeneration(slotRoot, 1, 2, { owner: ownerFile({ executionId: 'other' }) });
@@ -796,7 +808,7 @@ describe('handoff [R1]', () => {
     });
   });
 
-  it.skip('keeps the slot held after the source died until the handoff expires', async () => {
+  it('keeps the slot held after the source died until the handoff expires', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: handoffOwner(),
       handoff: { token: 'secret', expiresAt: new Date(Date.now() + 60_000).toISOString() }
@@ -804,7 +816,7 @@ describe('handoff [R1]', () => {
     expect(await acquire(fakeWorld())).toMatchObject({ status: 'held', handoffPending: true });
   });
 
-  it.skip('lets the token claim after expiry while the generation is the unreleased maximum, and others once holders died', async () => {
+  it('lets the token claim after expiry while the generation is the unreleased maximum, and others once holders died', async () => {
     writeGeneration(slotRoot, 1, 1, {
       owner: handoffOwner(),
       handoff: { token: 'secret', expiresAt: new Date(Date.now() - 1_000).toISOString() }
@@ -822,7 +834,7 @@ describe('handoff [R1]', () => {
     acquired(await acquire(world, {}, 2));
   });
 
-  it.skip('offerHandoff writes the token atomically and latches so no release follows', async () => {
+  it('offerHandoff writes the token atomically and latches so no release follows', async () => {
     const world = fakeWorld();
     const env = lockEnvironment(world);
     const { lock } = acquired(
@@ -846,7 +858,7 @@ describe('handoff [R1]', () => {
 });
 
 describe('companions [L4b] [F7]', () => {
-  it.skip('records a live child whose probed parent is this process', async () => {
+  it('records a live child whose probed parent is this process', async () => {
     const { lock } = acquired(await acquire(null));
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     children.push(child);
@@ -859,7 +871,7 @@ describe('companions [L4b] [F7]', () => {
     expect(JSON.parse(readFileSync(join(generationDir(1), 'companions.json'), 'utf8')).companions).toEqual([]);
   });
 
-  it.skip('does not record a child that already exited', async () => {
+  it('does not record a child that already exited', async () => {
     const { lock } = acquired(await acquire(null));
     const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
     children.push(child);
@@ -868,7 +880,7 @@ describe('companions [L4b] [F7]', () => {
     expect(existsSync(join(generationDir(1), 'companions.json'))).toBe(false);
   });
 
-  it.skip('does not record a process whose probed parent is another process', async () => {
+  it('does not record a process whose probed parent is another process', async () => {
     const world = fakeWorld();
     const { lock } = acquired(await acquire(world));
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -877,7 +889,7 @@ describe('companions [L4b] [F7]', () => {
     expect(await lock.addCompanion(child, 'agent')).toEqual({ status: 'not_child', parentPid: 4_242 });
   });
 
-  it.skip('records a Windows companion as pending when its probe times out', async () => {
+  it('records a Windows companion as pending when its probe times out', async () => {
     const world = fakeWorld({ platform: 'win32' });
     const { lock } = acquired(await acquire(world));
     const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -890,7 +902,7 @@ describe('companions [L4b] [F7]', () => {
     });
   });
 
-  it.skip('records Windows slot git as pending at spawn, then its identity, then removes it on exit [F2]', async () => {
+  it('records Windows slot git as pending at spawn, then its identity, then removes it on exit [F2]', async () => {
     const world = fakeWorld({ platform: 'win32' });
     const { lock } = acquired(await acquire(world));
     const read = (): unknown[] =>
@@ -909,14 +921,14 @@ describe('companions [L4b] [F7]', () => {
     await waitFor(() => read().length === 0);
   });
 
-  it.skip('ignores slot git events on POSIX, where git is in the recorded group', async () => {
+  it('ignores slot git events on POSIX, where git is in the recorded group', async () => {
     const { lock } = acquired(await acquire(fakeWorld()));
     lock.recordGit({ kind: 'spawned', pid: 4_000 });
     await new Promise((resolveWait) => setTimeout(resolveWait, 100));
     expect(existsSync(join(generationDir(1), 'companions.json'))).toBe(false);
   });
 
-  it.skip('adds the agent’s live children created after it to the Windows release snapshot and does not release [L4]', async () => {
+  it('adds the agent’s live children created after it to the Windows release snapshot and does not release [L4]', async () => {
     const world = fakeWorld({ platform: 'win32' });
     const env = lockEnvironment(world);
     const { lock } = acquired(
@@ -961,7 +973,7 @@ describe('shutdown fence [G1] [F4]', () => {
     return { ...env, lock: result.lock };
   }
 
-  it.skip('refuses operations and throws at checkpoints once the fence has closed', async () => {
+  it('refuses operations and throws at checkpoints once the fence has closed', async () => {
     const { lock, shutdown } = await workLock();
     let ran = false;
     void shutdown.shutdownAndExit(0, 'completed');
@@ -974,7 +986,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(() => lock.checkpoint()).toThrow(ShutdownError);
   });
 
-  it.skip('ignores release() from in-process code once the fence has closed', async () => {
+  it('ignores release() from in-process code once the fence has closed', async () => {
     const { lock, shutdown } = await workLock();
     let releaseHook = (): void => {};
     shutdown.register(
@@ -989,7 +1001,7 @@ describe('shutdown fence [G1] [F4]', () => {
     await done;
   });
 
-  it.skip('releases a work lock from the hook when no operation was in flight, after aborting slot git', async () => {
+  it('releases a work lock from the hook when no operation was in flight, after aborting slot git', async () => {
     const { lock, shutdown, aborts } = await workLock();
     await lock.operation('done-before', async () => {});
     await shutdown.shutdownAndExit(0, 'completed');
@@ -997,7 +1009,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(true);
   });
 
-  it.skip('keeps a work lock when an operation was in flight at the fence', async () => {
+  it('keeps a work lock when an operation was in flight at the fence', async () => {
     const { lock, shutdown } = await workLock();
     let finish = (): void => {};
     const operation = lock.operation(
@@ -1013,7 +1025,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
   });
 
-  it.skip('releases a removal lock after fn returns with the fence open, but not once fn saw the fence close', async () => {
+  it('releases a removal lock after fn returns with the fence open, but not once fn saw the fence close', async () => {
     const env = lockEnvironment(fakeWorld());
     const options = { executionId: 'e', cardId: 'c', environment: env.environment };
     expect(await withSlotLock(slotRoot, 1, 'removal', options, async () => 'first')).toEqual({
@@ -1031,7 +1043,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1, 2), 'released.json'))).toBe(false);
   });
 
-  it.skip('never releases a removal lock from the hook, even with no operation in flight', async () => {
+  it('never releases a removal lock from the hook, even with no operation in flight', async () => {
     const env = lockEnvironment(fakeWorld());
     const result = acquired(
       await acquireSlotLock(slotRoot, 1, {
@@ -1046,7 +1058,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
   });
 
-  it.skip('releases a removal lock when fn throws with the fence open, and rethrows', async () => {
+  it('releases a removal lock when fn throws with the fence open, and rethrows', async () => {
     const env = lockEnvironment(fakeWorld());
     await expect(
       withSlotLock(
@@ -1062,7 +1074,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(true);
   });
 
-  it.skip('returns the acquire outcome from withSlotLock without running fn when the slot is held', async () => {
+  it('returns the acquire outcome from withSlotLock without running fn when the slot is held', async () => {
     writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
     const world = fakeWorld();
     world.processes.set(2_000, { parentPid: 1, startIdentity: 'holder-start', processGroupId: 2_000 });
@@ -1080,7 +1092,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(ran).toBe(false);
   });
 
-  it.skip('waits for a live companion within the budget and releases once it exits', async () => {
+  it('waits for a live companion within the budget and releases once it exits', async () => {
     const { lock, shutdown } = await workLock(null);
     const agent = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 300)'], { stdio: 'ignore' });
     children.push(agent);
@@ -1089,7 +1101,7 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(true);
   });
 
-  it.skip('does not release while a companion outlives the shutdown budget', async () => {
+  it('does not release while a companion outlives the shutdown budget', async () => {
     const { lock, shutdown } = await workLock(null);
     const agent = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
     children.push(agent);
@@ -1098,12 +1110,11 @@ describe('shutdown fence [G1] [F4]', () => {
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
   });
 
-  it.runIf(POSIX)
-    .skip('releases at once under a /bin/sh -c parent, with no wait for the group to drain', async () => {
-      const script = join(slotRoot, 'handler.mts');
-      writeFileSync(
-        script,
-        `
+  it.runIf(POSIX)('releases at once under a /bin/sh -c parent, with no wait for the group to drain', async () => {
+    const script = join(slotRoot, 'handler.mts');
+    writeFileSync(
+      script,
+      `
 import { acquireSlotLock } from ${JSON.stringify(join(SOURCE, 'slot-lock.ts'))};
 const acquired = await acquireSlotLock(${JSON.stringify(slotRoot)}, 1, { executionId: 'e', cardId: 'c', purpose: 'work' });
 if (acquired.status !== 'acquired') process.exit(3);
@@ -1112,39 +1123,38 @@ const released = await acquired.lock.release();
 process.stdout.write(JSON.stringify({ released, elapsed: Date.now() - started }));
 process.exit(0);
 `
-      );
-      const root = spawn('/bin/sh', ['-c', `"$NODE_BIN" "$TSX_IMPORT" ${JSON.stringify(script)}; true`], {
-        detached: true,
-        stdio: ['ignore', 'pipe', 'ignore'],
-        env: { ...process.env, NODE_BIN: process.execPath, TSX_IMPORT }
-      });
-      children.push(root);
-      let output = '';
-      root.stdout?.on('data', (chunk) => {
-        output += String(chunk);
-      });
-      await new Promise((resolveExit) => root.once('exit', resolveExit));
-      const report = JSON.parse(output);
-      expect(report.released).toBe(true);
-      expect(report.elapsed).toBeLessThan(1_000);
+    );
+    const root = spawn('/bin/sh', ['-c', `"$NODE_BIN" "$TSX_IMPORT" ${JSON.stringify(script)}; true`], {
+      detached: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+      env: { ...process.env, NODE_BIN: process.execPath, TSX_IMPORT }
     });
-
-  it.runIf(POSIX)
-    .skip("releases a removal lock while a sibling in the cleaner's group is alive", async () => {
-      const sibling = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
-      children.push(sibling);
-      const result = await withSlotLock(
-        slotRoot,
-        1,
-        'removal',
-        { executionId: 'e', cardId: 'c', environment: lockEnvironment(null).environment },
-        async () => 'removed'
-      );
-      expect(result).toEqual({ status: 'done', value: 'removed' });
-      expect(existsSync(join(generationDir(1), 'released.json'))).toBe(true);
+    children.push(root);
+    let output = '';
+    root.stdout?.on('data', (chunk) => {
+      output += String(chunk);
     });
+    await new Promise((resolveExit) => root.once('exit', resolveExit));
+    const report = JSON.parse(output);
+    expect(report.released).toBe(true);
+    expect(report.elapsed).toBeLessThan(1_000);
+  });
 
-  it.skip('writes and clears the creation intent', async () => {
+  it.runIf(POSIX)("releases a removal lock while a sibling in the cleaner's group is alive", async () => {
+    const sibling = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+    children.push(sibling);
+    const result = await withSlotLock(
+      slotRoot,
+      1,
+      'removal',
+      { executionId: 'e', cardId: 'c', environment: lockEnvironment(null).environment },
+      async () => 'removed'
+    );
+    expect(result).toEqual({ status: 'done', value: 'removed' });
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(true);
+  });
+
+  it('writes and clears the creation intent', async () => {
     const { lock } = await workLock();
     await lock.writeIntent(INTENT);
     expect(JSON.parse(readFileSync(join(generationDir(1), 'creating.json'), 'utf8'))).toEqual(INTENT);

@@ -108,7 +108,7 @@ describe.runIf(POSIX)('POSIX deadline', () => {
     expect(events.map((event) => event.kind)).toEqual(['spawned', 'identified', 'exited']);
   });
 
-  it.skip("leaves a double-forked escapee alive in the caller's group, where it keeps a slot lock held", async () => {
+  it("leaves a double-forked escapee alive in the caller's group, where it keeps a slot lock held", async () => {
     const slotRoot = join(dir, 'slots');
     mkdirSync(slotRoot);
     const escapeeFile = join(dir, 'escapee.pid');
