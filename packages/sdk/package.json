@@ -33,6 +33,8 @@
     "./bounded-git": "./src/bounded-git.ts",
     "./process-identity": "./src/process-identity.ts",
     "./slot-lock": "./src/slot-lock.ts",
+    "./slot-checkout": "./src/slot-checkout.ts",
+    "./worktree-removal": "./src/worktree-removal.ts",
     "./client/cardRepoFilters": "./src/client/cardRepoFilters.ts",
     "./card-repo": "./src/cardRepo.ts",
     "./card-repo-layout": "./src/cardRepoLayout.ts",

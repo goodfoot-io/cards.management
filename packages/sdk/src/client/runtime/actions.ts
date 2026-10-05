@@ -30,7 +30,8 @@ const MAX_RESPONSE_BYTES = MAX_COMMAND_REPORT_BYTES + 64 * 1024;
 const HTTP_REJECTIONS = new Set<RuntimeActionHttpRejectionReason>([
   'authentication-failed',
   'invalid-request',
-  'not-found'
+  'not-found',
+  'card-deleting'
 ]);
 const TRANSPORT_UNCERTAINTIES = new Set<RuntimeActionTransportUncertaintyReason>([
   'discovery-unavailable',
@@ -222,7 +223,12 @@ export interface RuntimeActionClientOptions {
 }
 
 /** HTTP-level failures that settle a request without granting retry permission. */
-export type RuntimeActionHttpRejectionReason = 'authentication-failed' | 'invalid-request' | 'not-found';
+export type RuntimeActionHttpRejectionReason =
+  | 'authentication-failed'
+  | 'invalid-request'
+  | 'not-found'
+  /** The server refused the launch with 409 `{ reason: 'card_deleting' }`: the card is being deleted. */
+  | 'card-deleting';
 
 /** Failures for which the durable server outcome is unknown. */
 export type RuntimeActionTransportUncertaintyReason =
