@@ -175,8 +175,17 @@ export interface ActionContext {
    */
   cwd: string;
 
-  /** Requests the authenticated execution's durable, fully provisioned checkout before spawning. */
-  assignWorktree(): Promise<import('../protocol/types/worktree-slots.js').AssignedWorktree>;
+  /**
+   * Registers work to finish before the handler exits.
+   *
+   * Same as {@link registerShutdownHook}: hooks run in reverse order of
+   * registration, once, under one 3 s best-effort budget, on completion,
+   * failure, cancel, switch, and `SIGTERM`/`SIGINT`.
+   *
+   * @param hook - Receives the shutdown reason.
+   * @returns Removes the hook.
+   */
+  onShutdown(hook: import('./runtime-shutdown.js').ShutdownHook): () => void;
 
   /**
    * Register a callback to be invoked when the action is cancelled.
@@ -287,4 +296,54 @@ export interface CardsAssistantContext {
    * Current working directory for the cards assistant.
    */
   cwd: string;
+}
+
+// ============================================================================
+// Worktree Maintenance Types
+// ============================================================================
+
+/**
+ * Input payload for the `worktreeMaintenance` root command.
+ *
+ * The runtime reads it from the environment the server launches the command
+ * with: the card scope and paths as for actions, and the mode from
+ * `CARDS_ROOT_COMMAND_INPUT`.
+ */
+export interface WorktreeMaintenanceInput {
+  /** Server-minted identity of the command's own execution. */
+  executionId: string;
+  /** Card whose worktree slots are maintained. */
+  cardId: string;
+  /** `preview` reads only; `cleanup` removes eligible slots; `prepare-delete` is the card-deletion pre-check. */
+  mode: import('../protocol/types/runtime-messages.js').WorktreeMaintenanceMode;
+  /** Workspace path the command was launched for; may be a linked worktree. */
+  repoRoot: string;
+  /** Absolute path to the card's repository directory. */
+  cardRepoPath: string;
+  /** Absolute path to the VS Code extension installation directory. */
+  extensionPath: string;
+}
+
+/** Runtime context injected when the worktree maintenance command executes. */
+export interface WorktreeMaintenanceContext {
+  /** Logger for structured, context-aware logging. */
+  logger: import('./logger.js').ILogger;
+  /** Current working directory of the command. */
+  cwd: string;
+  /** Authenticated Cards API client for branch registrations and execution status. */
+  client: import('../client/cardsClient.js').CardsClient;
+  /**
+   * Records the command's report. The last call wins; the runtime sends it as
+   * `execution.commandReport` before the process exits.
+   *
+   * @param report - JSON object of at most 256 KiB once serialized.
+   */
+  report(report: Readonly<Record<string, unknown>>): void;
+  /**
+   * Registers work to finish before the command exits.
+   *
+   * @param hook - Receives the shutdown reason.
+   * @returns Removes the hook.
+   */
+  onShutdown(hook: import('./runtime-shutdown.js').ShutdownHook): () => void;
 }

@@ -231,6 +231,17 @@ export interface CardsAssistant {
   command: Command;
 }
 
+/**
+ * Worktree maintenance root command configuration in settings.json.
+ *
+ * Launched by the server as a root command on one card; its result is an
+ * opaque report, never card state.
+ */
+export interface WorktreeMaintenance {
+  /** Command to execute for the worktree maintenance handler */
+  command: Command;
+}
+
 export interface Settings {
   /**
    * Named environments, each containing actions.
@@ -241,6 +252,9 @@ export interface Settings {
 
   /** Optional cards assistant handler configuration */
   cardsAssistant?: CardsAssistant;
+
+  /** Optional worktree maintenance root command configuration */
+  worktreeMaintenance?: WorktreeMaintenance;
 }
 
 // --- Runtime Types ---
@@ -284,12 +298,6 @@ export interface ActionState {
    * Interactive mode opens a terminal; background mode runs silently.
    */
   mode: 'interactive' | 'background';
-
-  /** Durable checkout assignment for this instance; absent before assignment completes. */
-  worktreeAssignment?: {
-    readonly branch: string;
-    readonly worktreePath: string;
-  };
 
   /** Authoritative runtime transport state; absence is never interpreted as terminal. */
   runtimeConnection?: 'connected' | 'reconnecting' | 'disconnected' | 'unknown';

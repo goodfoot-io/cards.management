@@ -38,7 +38,7 @@ import type { SettingsConfig } from '../config.js';
  * V8-based `getCallerFile()` fallback (which returns the temp bundle
  * path) is never reached.
  */
-const FACTORY_CALL_RE = /\b(define(?:Action|StreamTransform|CardsAssistant))\s*\(\s*\{/g;
+const FACTORY_CALL_RE = /\b(define(?:Action|StreamTransform|CardsAssistant|WorktreeMaintenance))\s*\(\s*\{/g;
 
 /**
  * esbuild plugin that injects `sourcePath` into factory config objects during

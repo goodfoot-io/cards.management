@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { resolveGlobalCardsConfigDir } from '../cards-config.js';
-import type { ActionInput, CardsAssistantInput } from './inputs.js';
+import type { ActionInput, CardsAssistantInput, WorktreeMaintenanceInput } from './inputs.js';
 
 // ============================================================================
 // Constants
@@ -51,6 +51,13 @@ export const CARDS_ENV_VARS = {
 
   /** Server-minted identity of the admitted execution. */
   EXECUTION_ID: 'CARDS_EXECUTION_ID',
+
+  /**
+   * JSON input of a root configuration command, exactly the launch request's
+   * `input` (for `worktreeMaintenance`, `{"mode": ...}`).
+   * Available in root commands only.
+   */
+  ROOT_COMMAND_INPUT: 'CARDS_ROOT_COMMAND_INPUT',
 
   /**
    * Card's execution mode, determining UI interaction model.
@@ -744,4 +751,18 @@ export function extractCardsAssistantInput(): CardsAssistantInput {
     repoRoot: getRepoRoot(),
     initialPrompt: getInitialPrompt()
   };
+}
+
+/**
+ * Builds a typed worktree maintenance input object from environment variables.
+ *
+ * Reads the card scope and paths like {@link extractActionInput}, and the mode
+ * from `CARDS_ROOT_COMMAND_INPUT`, validated against the launch contract's
+ * root-command input.
+ *
+ * @returns Typed WorktreeMaintenanceInput object
+ * @throws Error if required env vars are missing or invalid
+ */
+export function extractWorktreeMaintenanceInput(): WorktreeMaintenanceInput {
+  throw new Error('Not Implemented');
 }

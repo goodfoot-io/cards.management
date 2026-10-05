@@ -193,10 +193,24 @@ export interface CardsAssistant {
   command: Command;
 }
 
+/**
+ * Worktree maintenance root command configuration in settings.json.
+ *
+ * Launched by the server as a root command on one card; its result is an
+ * opaque report, never card state.
+ */
+export interface WorktreeMaintenance {
+  /** Command to execute for the worktree maintenance handler */
+  command: Command;
+}
+
 export interface Settings {
   /** Record of environments keyed by environment name */
   environments: Record<string, Environment>;
 
   /** Optional cards assistant handler configuration */
   cardsAssistant?: CardsAssistant;
+
+  /** Optional worktree maintenance root command configuration */
+  worktreeMaintenance?: WorktreeMaintenance;
 }

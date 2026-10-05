@@ -116,6 +116,13 @@ export interface BranchInfo {
    * Empty array if branch is fully merged or does not exist.
    */
   commits?: string[];
+
+  /**
+   * Execution recorded as the slot's active owner by a build before slot locks.
+   * Present only on entries a previous build committed with an owner; the slot
+   * is treated as held while that execution's process state reads `running`.
+   */
+  legacyExecutionOwner?: string;
 }
 
 /**

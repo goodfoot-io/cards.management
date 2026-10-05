@@ -1336,3 +1336,53 @@ export async function loadWorktreePathPolicy(opts: {
 
   return { ignorePatterns, includePatterns, omit, copy, share, classify, isOmitAncestor };
 }
+
+// ============================================================================
+// Slot recognition and ordering
+// ============================================================================
+
+/** A slot candidate and when it was last used. */
+export interface RankedWorktreeSlot {
+  /** Complete slot branch name, `cards/<cardId>/<ordinal>`. */
+  readonly branch: string;
+  /** Registration time of the slot's branch. */
+  readonly addedAt: string;
+  /** When the slot's lock was last released or its holder found dead; null when it never was. */
+  readonly lastUsedAt: string | null;
+}
+
+/**
+ * Recognizes only cards/<cardId>/<positive integer> for this exact card.
+ * @param cardId - Card whose dedicated slots are being inspected.
+ * @param branch - Complete Git branch name.
+ * @returns Its exact positive integer ordinal, or null for a non-slot.
+ */
+export function worktreeSlotNumber(cardId: string, branch: string): bigint | null {
+  const prefix = `cards/${cardId}/`;
+  if (!branch.startsWith(prefix)) return null;
+  const suffix = branch.slice(prefix.length);
+  if (!/^[1-9]\d*$/.test(suffix)) return null;
+  return BigInt(suffix);
+}
+
+/**
+ * Orders slots newest-first: by last use, using registration time only for never-used slots.
+ * Equal timestamps and non-date strings use the higher slot number.
+ * @param cardId - Card whose slot numbers break ties.
+ * @param slots - Slot candidates with their last-use evidence.
+ * @returns A fresh array in descending LIFO preference order.
+ */
+export function rankWorktreeSlots(cardId: string, slots: readonly RankedWorktreeSlot[]): RankedWorktreeSlot[] {
+  const usedAt = (slot: RankedWorktreeSlot): number => {
+    const timestamp = Date.parse(slot.lastUsedAt ?? slot.addedAt);
+    return Number.isFinite(timestamp) ? timestamp : Number.NEGATIVE_INFINITY;
+  };
+  return [...slots].sort((left, right) => {
+    const leftTime = usedAt(left);
+    const rightTime = usedAt(right);
+    if (leftTime !== rightTime) return rightTime > leftTime ? 1 : -1;
+    const leftOrdinal = worktreeSlotNumber(cardId, left.branch) ?? 0n;
+    const rightOrdinal = worktreeSlotNumber(cardId, right.branch) ?? 0n;
+    return leftOrdinal === rightOrdinal ? 0 : rightOrdinal > leftOrdinal ? 1 : -1;
+  });
+}

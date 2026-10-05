@@ -267,24 +267,31 @@ export {
 } from './runtime-identity.js';
 // --- Runtime Protocol: Message Catalogue ---
 export {
+  actionLaunchRequestPayloadSchema,
   type BestEffortCleanupResultPayload,
   type CleanupResultPayload,
   cleanupAllowsClaimRelease,
+  commandReportPayloadSchema,
   type LegacyCleanupResultPayload,
   launchRequestPayloadSchema,
+  MAX_COMMAND_REPORT_BYTES,
+  MAX_COMMAND_REPORT_FRAME_BYTES,
   MAX_CONTROL_FRAME_BYTES,
+  type RootCommandName,
   RUNTIME_MESSAGE_PAYLOADS,
   RUNTIME_MESSAGE_TYPES,
   type RuntimeCapabilities,
   type RuntimeMessageType,
   type RuntimePayload,
+  rootCommandLaunchRequestPayloadSchema,
   runtimeMessageTypeSchema,
   type TerminalDecision,
   terminalCloseRequestPayloadSchema,
   terminalDecisionId,
   terminalDecisionReasonSchema,
   terminalDecisionSchema,
-  worktreeAssignmentResultPayloadSchema
+  type WorktreeMaintenanceMode,
+  worktreeMaintenanceModeSchema
 } from './runtime-messages.js';
 // --- Runtime Protocol: Transition Tables ---
 export {
@@ -341,7 +348,8 @@ export type {
   Command,
   Environment,
   ExecutionMode,
-  Settings
+  Settings,
+  WorktreeMaintenance
 } from './settings.js';
 // --- Status Types ---
 export type {

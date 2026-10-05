@@ -116,11 +116,12 @@ export const livenessPayloadSchema = z
 export const executionModeSchema = z.enum(['background', 'interactive']);
 
 /**
- * Payload of `execution.launchRequest`. The parameters are immutable once bound
- * to an admission: reusing the envelope's `requestId` with different parameters
- * is rejected rather than admitted as a second launch.
+ * Action variant of `execution.launchRequest`: one configured action of one
+ * environment. The parameters are immutable once bound to an admission: reusing
+ * the envelope's `requestId` with different parameters is rejected rather than
+ * admitted as a second launch.
  */
-export const launchRequestPayloadSchema = z
+export const actionLaunchRequestPayloadSchema = z
   .object({
     actionId: z.string().min(1),
     environmentName: z.string().min(1),
@@ -134,6 +135,39 @@ export const launchRequestPayloadSchema = z
     continuation: z.string().min(1).optional()
   })
   .strict();
+
+/** Modes of the `worktreeMaintenance` root configuration command. */
+export const worktreeMaintenanceModeSchema = z.enum(['preview', 'cleanup', 'prepare-delete']);
+
+/** One `worktreeMaintenance` mode. */
+export type WorktreeMaintenanceMode = z.infer<typeof worktreeMaintenanceModeSchema>;
+
+/**
+ * Root-command variant of `execution.launchRequest`. A root command is a
+ * configuration-level command rather than an environment action: it is admitted
+ * and process-tracked like an action, but it is status-neutral and note-free,
+ * and its only result is an opaque `execution.commandReport` the server never
+ * interprets.
+ */
+export const rootCommandLaunchRequestPayloadSchema = z
+  .object({
+    rootCommand: z.literal('worktreeMaintenance'),
+    input: z.object({ mode: worktreeMaintenanceModeSchema }).strict()
+  })
+  .strict();
+
+/** Root configuration commands a launch may name. */
+export type RootCommandName = z.infer<typeof rootCommandLaunchRequestPayloadSchema>['rootCommand'];
+
+/**
+ * Payload of `execution.launchRequest`: either an action launch or a root
+ * command launch. Both variants are strict, so a payload mixing their fields
+ * matches neither.
+ */
+export const launchRequestPayloadSchema = z.union([
+  actionLaunchRequestPayloadSchema,
+  rootCommandLaunchRequestPayloadSchema
+]);
 
 /** Payload of `execution.cancelRequest` and `execution.cancelCommand`. */
 export const cancelPayloadSchema = z
@@ -151,7 +185,8 @@ export const cancelPayloadSchema = z
 export const interactiveHandoffPayloadSchema = z
   .object({
     continuation: inlineOrReferencedSchema,
-    worktreeProtocol: z.number().int().optional()
+    /** Launch protocol of the build that produced the handoff; informational for the successor's launcher. */
+    launchProtocol: z.number().int().optional()
   })
   .strict();
 
@@ -302,15 +337,6 @@ export const launchOutcomePayloadSchema = z
   })
   .strict();
 
-/** Durable worktree settlement reported by the admitted agent handler. */
-export const worktreeAssignmentResultPayloadSchema = z
-  .object({
-    branch: z.string().min(1),
-    worktreePath: z.string().min(1),
-    reason: z.enum(['reused', 'reattached', 'allocated'])
-  })
-  .strict();
-
 /** What began the wrapper's one bounded cleanup operation. */
 export const cleanupTriggerSchema = z.enum(['command', 'root-exit', 'spawn-error', 'terminal-close']);
 
@@ -384,32 +410,30 @@ export function cleanupAllowsClaimRelease(cleanup: CleanupResultPayload): boolea
     : cleanup.status === 'drained';
 }
 
-/**
- * Previous-build `execution.branchCleanupRegistration` reports remain valid
- * so already-running handlers can settle. Current providers use owner assignments.
- * No producer path can steer owner-process cleanup.
- */
-export const branchCleanupRegistrationPayloadSchema = z
-  .object({
-    sessionId: z.string().min(1).optional()
-  })
-  .strict();
+/** Largest serialized `execution.commandReport` payload a root command may send. */
+export const MAX_COMMAND_REPORT_BYTES = 256 * 1024;
+
+/** Largest encoded `execution.commandReport` frame: the report bound plus a control frame of envelope. */
+export const MAX_COMMAND_REPORT_FRAME_BYTES = MAX_COMMAND_REPORT_BYTES + MAX_CONTROL_FRAME_BYTES;
 
 /**
- * Historical `execution.branchCleanupEffect` records remain replayable after
- * an upgrade. The extension resolves the admission and runs current owner-process
- * content checks; these legacy path fields never select a program or checkout.
+ * Payload of `execution.commandReport`: the opaque JSON object a root command
+ * reports before it exits. The server stores and returns it with the completed
+ * retrieval and never interprets it; callers parse it against the command's own
+ * report contract.
  */
-export const branchCleanupEffectPayloadSchema = z
-  .object({
-    terminalDecisionId: z.string().min(1),
-    cardId: z.string().min(1),
-    repoRoot: z.string().min(1),
-    cardRepoPath: z.string().min(1),
-    /** Session the registration named, carried through for marker correlation. */
-    sessionId: z.string().min(1).optional()
-  })
-  .strict();
+export const commandReportPayloadSchema = z.record(z.string(), z.unknown()).superRefine((report, context) => {
+  let bytes: number;
+  try {
+    bytes = new TextEncoder().encode(JSON.stringify(report)).byteLength;
+  } catch {
+    context.addIssue({ code: 'custom', message: 'Command report must be JSON-serializable' });
+    return;
+  }
+  if (bytes > MAX_COMMAND_REPORT_BYTES) {
+    context.addIssue({ code: 'custom', message: `Command report exceeds ${MAX_COMMAND_REPORT_BYTES} bytes` });
+  }
+});
 
 /** Durable, fail-closed report for an agent-handler command whose effect cannot be reconciled after restart. */
 export const commandEffectResultPayloadSchema = z
@@ -539,24 +563,6 @@ export const commandCustodyPayloadSchema = z
   })
   .strict();
 
-/** Empty request; the authenticated envelope supplies scope and execution. */
-export const worktreeAssignPayloadSchema = z.strictObject({});
-/** Correlated, replayable assignment result returned only after durable assignment. */
-export const worktreeAssignResultPayloadSchema = z.strictObject({
-  requestMessageId: z.string().min(1),
-  outcome: z.discriminatedUnion('status', [
-    z.strictObject({
-      status: z.literal('completed'),
-      payload: z.strictObject({ branch: z.string().min(1), worktreePath: z.string().min(1) })
-    }),
-    z.strictObject({
-      status: z.literal('rejected'),
-      reason: z.enum(['worktree_busy', 'card_deleting', 'not_running', 'creation_failed', 'authority_unavailable']),
-      detail: z.string()
-    })
-  ])
-});
-
 // --- Catalogue ---
 
 /**
@@ -572,8 +578,6 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'runtime.liveness': livenessPayloadSchema,
   'runtime.resumeAck': resumeAckPayloadSchema,
   'runtime.accepted': acceptedPayloadSchema,
-  'worktree.assign': worktreeAssignPayloadSchema,
-  'worktree.assignResult': worktreeAssignResultPayloadSchema,
   'execution.commandCustody': commandCustodyPayloadSchema,
   'runtime.log': logPayloadSchema,
   'runtime.heartbeat': heartbeatPayloadSchema,
@@ -589,11 +593,9 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'execution.executeRequest': executeRequestPayloadSchema,
   'execution.launchAdmission': launchAdmissionPayloadSchema,
   'execution.launchOutcome': launchOutcomePayloadSchema,
-  'execution.worktreeAssignmentResult': worktreeAssignmentResultPayloadSchema,
+  'execution.commandReport': commandReportPayloadSchema,
   'execution.commandEffectResult': commandEffectResultPayloadSchema,
   'execution.cleanupResult': cleanupResultPayloadSchema,
-  'execution.branchCleanupRegistration': branchCleanupRegistrationPayloadSchema,
-  'execution.branchCleanupEffect': branchCleanupEffectPayloadSchema,
   'watcher.stopRequest': watcherStopPayloadSchema,
   'watcher.stopCommand': watcherStopPayloadSchema,
   'watcher.stopResult': watcherStopResultPayloadSchema,

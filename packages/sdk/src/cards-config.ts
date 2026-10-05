@@ -9,6 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
+import { lstat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -83,4 +84,54 @@ export function resolveWorktreesRoot(): string {
 export function resolveWorktreeDir(repoRoot: string, ref: string): string {
   const repoId = generateRepoId(repoRoot);
   return path.join(resolveWorktreesRoot(), repoId, ref);
+}
+
+/**
+ * Resolves the main Git repository root from a workspace path.
+ *
+ * A workspace may be a linked worktree, marked by a `.git` *file* holding a
+ * `gitdir:` pointer rather than a `.git` *directory*. This follows that pointer
+ * to the primary checkout, so every caller derives per-repository paths, such
+ * as worktree slot roots, from the same root whichever window it runs in.
+ *
+ * @param workspacePath - Absolute path to the workspace folder.
+ * @returns The main repository root (the input itself for a primary checkout).
+ * @throws {Error} When no `.git` marker is found at the workspace path.
+ */
+export async function resolveMainRepoRoot(workspacePath: string): Promise<string> {
+  const gitPath = path.join(workspacePath, '.git');
+  const stats = await lstat(gitPath);
+
+  if (stats.isDirectory()) {
+    return workspacePath;
+  }
+
+  if (stats.isFile()) {
+    // Format: "gitdir: /path/to/main-repo/.git/worktrees/<name>"
+    const gitFileContent = await readFile(gitPath, 'utf-8');
+    const gitdirPath = gitFileContent.trim().replace(/^gitdir:\s*/, '');
+    const resolvedGitdir = path.isAbsolute(gitdirPath) ? gitdirPath : path.resolve(workspacePath, gitdirPath);
+    // Git writes POSIX separators into the `.git` file even on Windows, but
+    // path.resolve() of a relative pointer yields native separators, so
+    // accept either separator when stripping `worktrees/<name>` and `.git`.
+    const mainGitDir = resolvedGitdir.replace(/[/\\]worktrees[/\\][^/\\]+$/, '');
+    return mainGitDir.replace(/[/\\]\.git$/, '');
+  }
+
+  throw new Error(`Unexpected .git type at ${gitPath}`);
+}
+
+/**
+ * Resolves a card's worktree slot root: the directory holding its slot
+ * checkouts and their `.locks/` directory.
+ *
+ * Always derived from the main repository root, never from the workspace path
+ * itself, which can be a linked worktree.
+ *
+ * @param workspacePath - Absolute path to the workspace folder; may be a linked worktree.
+ * @param cardId - Card whose slots live under the root.
+ * @returns Absolute path of `resolveWorktreeDir(mainRepoRoot, 'cards/<cardId>')`.
+ */
+export async function resolveSlotRoot(workspacePath: string, cardId: string): Promise<string> {
+  return resolveWorktreeDir(await resolveMainRepoRoot(workspacePath), `cards/${cardId}`);
 }

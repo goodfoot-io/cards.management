@@ -208,6 +208,7 @@ export type {
   WorkspaceCommitEvent,
   WorkspacePostCommitRequest,
   WorkspacePostCommitResponse,
+  WorktreeMaintenance,
   WrapperCommand,
   WrapperErrorResponse,
   WrapperResponse
@@ -217,6 +218,7 @@ export {
   type AuthorizationContext,
   type AuthorizationOutcome,
   type AuthorizationRefusalReason,
+  actionLaunchRequestPayloadSchema,
   assertSupportedProtocolVersion,
   authorizeMessage,
   BASE_ELEMENT_TAG_NAMES,
@@ -242,6 +244,7 @@ export {
   classifyResourceReference,
   cleanupAllowsClaimRelease,
   collectResourceReferences,
+  commandReportPayloadSchema,
   compareOwnership,
   connectionGenerationSchema,
   connectionSlotKeySchema,
@@ -296,6 +299,8 @@ export {
   type LifecycleTransition,
   type LifecycleTrigger,
   launchRequestPayloadSchema,
+  MAX_COMMAND_REPORT_BYTES,
+  MAX_COMMAND_REPORT_FRAME_BYTES,
   MAX_CONTROL_FRAME_BYTES,
   MAX_ID_LENGTH,
   MAX_OUTSTANDING_MESSAGES,
@@ -317,6 +322,7 @@ export {
   REGISTRATION_REFUSAL_REASONS,
   type RegistrationOutcome,
   type RegistrationRefusalReason,
+  type RootCommandName,
   RUNTIME_CREDENTIAL_HEADERS,
   RUNTIME_MESSAGE_CONTRACTS,
   RUNTIME_MESSAGE_PAYLOADS,
@@ -329,6 +335,7 @@ export {
   type RuntimeScope,
   registrationOutcomeSchema,
   registrationRefusalReasonSchema,
+  rootCommandLaunchRequestPayloadSchema,
   runtimeMessageTypeSchema,
   runtimeScopeSchema,
   type SnapshotStamp,
@@ -341,7 +348,9 @@ export {
   terminalDecisionId,
   terminalDecisionSchema,
   UnsupportedProtocolVersionError,
-  validateHtmlInfo
+  validateHtmlInfo,
+  type WorktreeMaintenanceMode,
+  worktreeMaintenanceModeSchema
 } from './types/index.js';
 // --- Status Types ---
 // --- Card Types ---
@@ -362,13 +371,8 @@ export {
   runtimeCredentialFileSchema
 } from './types/runtime-credential-file.js';
 export type {
-  AssignedWorktree,
   InvalidBranchEntry,
-  WorktreeAssignment,
-  WorktreeAssignmentOutcome,
-  WorktreeAssignmentRefusal,
   WorktreeCleanupDecision,
   WorktreeCleanupPreview,
-  WorktreeCleanupReason,
-  WorktreeCleanupResponse
+  WorktreeCleanupReason
 } from './types/worktree-slots.js';

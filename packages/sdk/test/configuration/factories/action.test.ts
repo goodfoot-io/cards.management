@@ -41,7 +41,7 @@ describe('defineAction', () => {
   const mockContext: ActionContext = {
     logger: mockLogger,
     cwd: '/workspace',
-    assignWorktree: async () => ({ branch: 'cards/card-123/1', worktreePath: '/worktree' }),
+    onShutdown: vi.fn(),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };

@@ -148,3 +148,31 @@ export class RequestCancelledError extends Error {
     this.name = 'RequestCancelledError';
   }
 }
+
+/** Why a root command did not resolve with a report. */
+export type RootCommandFailureCause = 'no_report' | 'rejected' | 'uncertain' | 'timeout' | 'cancelled' | 'unconfigured';
+
+/**
+ * Error thrown when a root configuration command does not complete with a report.
+ *
+ * Only `completed` with a `commandReport` resolves {@link CardsClient.runRootCommand};
+ * every other end names its cause here, so a caller never mistakes a missing report
+ * for an empty one.
+ */
+export class RootCommandError extends Error {
+  /**
+   * Creates a new RootCommandError instance.
+   *
+   * @param message - Human-readable error message
+   * @param cause - Machine-readable failure cause
+   * @param requestId - Original caller request ID of the command launch
+   */
+  constructor(
+    message: string,
+    public readonly cause: RootCommandFailureCause,
+    public readonly requestId: string
+  ) {
+    super(message);
+    this.name = 'RootCommandError';
+  }
+}

@@ -13,7 +13,14 @@
  * @module
  */
 
-import type { ActionContext, ActionInput, CardsAssistantContext, CardsAssistantInput } from './inputs.js';
+import type {
+  ActionContext,
+  ActionInput,
+  CardsAssistantContext,
+  CardsAssistantInput,
+  WorktreeMaintenanceContext,
+  WorktreeMaintenanceInput
+} from './inputs.js';
 
 // ============================================================================
 // Command Types
@@ -111,6 +118,39 @@ export interface CardsAssistantCommand {
 
   /** Discriminant for the CLI's AST analyzer. */
   factoryType: 'cards-assistant';
+
+  /**
+   * Path to the handler source file for CLI compilation.
+   *
+   * When provided, the CLI will compile this file into a standalone bundle
+   * and generate proper command paths in settings.json. If omitted, the
+   * CLI will generate placeholder command strings.
+   */
+  sourcePath?: string;
+}
+
+// ============================================================================
+// Worktree Maintenance Command
+// ============================================================================
+
+/**
+ * Callable command returned by the worktree-maintenance factory.
+ *
+ * The `worktreeMaintenance` root command: one per configuration, launched by
+ * the server as a status-neutral, note-free execution on a card, and reporting
+ * its result through `context.report()` rather than any card state.
+ */
+export interface WorktreeMaintenanceCommand {
+  /**
+   * Invokes the wrapped handler with the provided input and context.
+   * @param input - Maintenance input payload from environment variables
+   * @param context - Runtime context with logger, client, report and shutdown registration
+   * @returns Resolves when the handler completes
+   */
+  (input: WorktreeMaintenanceInput, context: WorktreeMaintenanceContext): Promise<void>;
+
+  /** Discriminant for the CLI's AST analyzer. */
+  factoryType: 'worktree-maintenance';
 
   /**
    * Path to the handler source file for CLI compilation.

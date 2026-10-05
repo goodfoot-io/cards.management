@@ -17,8 +17,7 @@ import type {
   StreamMeta,
   TimelineItem,
   VariableGroupsResponse,
-  WorktreeCleanupPreview,
-  WorktreeCleanupResponse
+  WorktreeMaintenanceMode
 } from '../protocol/index.js';
 import type {
   AddBranchRequest,
@@ -32,6 +31,32 @@ import type {
   TimelineOptions
 } from './types/client.js';
 import { ApiError, NetworkError, RequestCancelledError, RetryExhaustedError } from './types/errors.js';
+
+/** Input of each root configuration command, keyed by command name. */
+export interface RootCommandInputs {
+  readonly worktreeMaintenance: { readonly mode: WorktreeMaintenanceMode };
+}
+
+/** Options bounding one {@link CardsClient.runRootCommand} call. */
+export interface RunRootCommandOptions {
+  /** Overall deadline from launch to report; the command is cancelled when it passes. Defaults to 300 s. */
+  readonly timeoutMs?: number;
+  /** Aborts the wait and cancels the command. */
+  readonly signal?: AbortSignal;
+}
+
+/** A root command that completed with its report. */
+export interface RootCommandCompletion {
+  /** Original caller request ID the command was launched under. */
+  readonly requestId: string;
+  /** Execution the command ran as. */
+  readonly executionId: string;
+  /** The command's opaque report, parsed by the caller against the command's own contract. */
+  readonly report: Readonly<Record<string, unknown>>;
+}
+
+/** Process state of one execution: `unknown` means no record, which for a spawned execution means long settled. */
+export type ExecutionProcessStatus = 'running' | 'terminal' | 'unknown';
 
 /** Default initial fetch timeout in milliseconds for each individual request attempt. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
@@ -624,11 +649,16 @@ export class CardsClient {
   /**
    * Deletes a card.
    *
+   * Run `worktreeMaintenance` in `prepare-delete` mode first, through
+   * {@link CardsClient.runRootCommand}, and delete only when its report allows
+   * it: the server keeps no worktree state and does not clean up slots. The
+   * server refuses with 409 `running_execution` while any execution on the card
+   * is running.
+   *
    * @param cardId - The id of the card to delete.
    * @returns Promise resolving when deletion is complete.
-   * @throws ApiError when the server rejects the delete.
+   * @throws ApiError when the server rejects the delete, including the 409 while executions run.
    * @throws NetworkError when the request fails to reach the server.
-   * @deprecated Use direct git operations instead. This endpoint will be removed.
    */
   async deleteCard(cardId: string): Promise<void> {
     const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}`);
@@ -829,28 +859,46 @@ export class CardsClient {
     return this.request(() => this.getHttpClient().delete<RemoveBranchResponse>(url, { headers }));
   }
 
+  // --- Root Commands ---
+
   /**
-   * Reads authenticated owner-process cleanup decisions before card deletion or explicit cleanup.
-   * @param cardId - Card whose dedicated slots are inspected.
-   * @returns Per-slot preservation reasons and card-deletion eligibility.
+   * Runs a root configuration command on a card and waits for its report.
+   *
+   * Posts the launch to `POST /cards/:cardId/runtime/commands`, then polls the
+   * durable retrieve route every 250 ms. It resolves only when the command
+   * completed with a `commandReport`. When the deadline passes or `signal`
+   * aborts, it calls the cancel route before throwing, so an abandoned wait
+   * never leaves the command running unobserved.
+   *
+   * @param cardId - Card the command runs for.
+   * @param command - Which configured root command to launch.
+   * @param input - Arguments for that command, such as the maintenance `mode`.
+   * @param options - Deadline and cancellation.
+   * @returns The completed command's report.
+   * @throws RootCommandError with cause `no_report`, `rejected`, `uncertain`, `timeout`, `cancelled` or `unconfigured`.
    */
-  async previewWorktreeCleanup(cardId: string): Promise<WorktreeCleanupPreview> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/worktree-cleanup/preview`, {});
-    return this.request(() =>
-      this.getHttpClient().get<WorktreeCleanupPreview>(url, { signal: AbortSignal.timeout(120_000) })
-    );
+  async runRootCommand<TCommand extends keyof RootCommandInputs>(
+    cardId: string,
+    command: TCommand,
+    input: RootCommandInputs[TCommand],
+    options?: RunRootCommandOptions
+  ): Promise<RootCommandCompletion> {
+    void cardId;
+    void command;
+    void input;
+    void options;
+    throw new Error('Not Implemented');
   }
 
   /**
-   * Requests full content cleanup in the API owner without a requester warm-slot exemption.
-   * @param cardId - Card whose dedicated slots may be removed.
-   * @returns Actual per-slot removal, preservation, and failure decisions.
+   * Reads one execution's process state from `GET /runtime/executions/:executionId/status`.
+   *
+   * @param executionId - Execution to query.
+   * @returns `running`, `terminal`, or `unknown` when the server holds no record.
    */
-  async cleanupWorktrees(cardId: string): Promise<WorktreeCleanupResponse> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}/worktree-cleanup`, {});
-    return this.request(() =>
-      this.getHttpClient().post<WorktreeCleanupResponse>(url, {}, { signal: AbortSignal.timeout(120_000) })
-    );
+  async getExecutionStatus(executionId: string): Promise<ExecutionProcessStatus> {
+    void executionId;
+    throw new Error('Not Implemented');
   }
 
   // --- Tag Operations ---

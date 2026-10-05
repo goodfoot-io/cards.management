@@ -46,10 +46,10 @@ export interface AdmissionScope extends RuntimeScope {
 }
 
 /**
- * Immutable action parameters bound to an admission: the payload of
- * `execution.launchRequest`, unchanged. Once admitted these can never change
- * under the same request ID; a differing replay is rejected before it reaches a
- * dispatcher.
+ * Immutable launch parameters bound to an admission: the payload of
+ * `execution.launchRequest`, unchanged — an action launch or a root command
+ * launch. Once admitted these can never change under the same request ID; a
+ * differing replay is rejected before it reaches a dispatcher.
  */
 export type ImmutableActionParams = RuntimePayload<'execution.launchRequest'>;
 
@@ -81,8 +81,6 @@ export type AdmissionRejectionReason =
   | 'retired'
   | 'revoked'
   | 'retention-exhausted'
-  | 'card_deleting'
-  | 'source_has_no_worktree'
   | 'reload-window'
   | 'upgrade-cli-sdk';
 
@@ -126,8 +124,8 @@ export interface LaunchAdmissionRequest {
    * concurrent producers coexist without sharing an identity.
    */
   readonly credentialRoles: readonly ProducerRole[];
-  /** Capability marker outside immutable/fingerprinted action parameters. */
-  readonly worktreeProtocol?: number;
+  /** Launch protocol of the launching build; outside the immutable, fingerprinted parameters. */
+  readonly launchProtocol?: number;
   /** Server-only preowned source, authenticated before fresh successor admission. */
   readonly sourceExecutionId?: string;
 }
@@ -264,6 +262,8 @@ export type RetrievedAdmission =
       readonly retrievedOutcome: LaunchOutcome;
       /** Custodied cleanup proof which, unlike a successful spawn, is terminal. */
       readonly terminalOutcome?: RuntimePayload<'execution.cleanupResult'>;
+      /** A root command's opaque report; omitted, never `null`, on action records. */
+      readonly commandReport?: RuntimePayload<'execution.commandReport'>;
     }
   | {
       readonly status: 'rejected';

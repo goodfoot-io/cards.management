@@ -213,6 +213,15 @@ function extractCommands(config: SettingsConfig): CommandInfo[] {
     });
   }
 
+  // Extract the worktree maintenance root command (configuration-level, outside environments)
+  if (config.worktreeMaintenance?.sourcePath) {
+    commands.push({
+      factoryType: 'worktree-maintenance',
+      name: 'worktree-maintenance',
+      sourcePath: config.worktreeMaintenance.sourcePath
+    });
+  }
+
   return commands;
 }
 
@@ -495,6 +504,19 @@ function generateSettings(
     result.cardsAssistant = {
       command: generateCommand(
         { factoryType: 'cards-assistant', sourcePath: config.cardsAssistant.sourcePath },
+        compiledHandler,
+        binDir
+      )
+    };
+  }
+
+  // Include the worktree maintenance root command when present in config
+  if (config.worktreeMaintenance?.sourcePath) {
+    const key = 'worktree-maintenance:worktree-maintenance';
+    const compiledHandler = compiledByKey.get(key);
+    result.worktreeMaintenance = {
+      command: generateCommand(
+        { factoryType: 'worktree-maintenance', sourcePath: config.worktreeMaintenance.sourcePath },
         compiledHandler,
         binDir
       )

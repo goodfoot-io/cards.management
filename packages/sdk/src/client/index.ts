@@ -24,7 +24,13 @@ export {
   getUnattributedCommits,
   isBookkeepingCommit
 } from './cardRepoFilters.js';
-export { CardsClient } from './cardsClient.js';
+export {
+  CardsClient,
+  type ExecutionProcessStatus,
+  type RootCommandCompletion,
+  type RootCommandInputs,
+  type RunRootCommandOptions
+} from './cardsClient.js';
 export { calculateBackoffMs, EventSubscriber } from './eventSubscriber.js';
 // Client types
 export type {
@@ -39,6 +45,13 @@ export type {
   TimelineOptions
 } from './types/client.js';
 // Error classes
-export { ApiError, NetworkError, RequestCancelledError, RetryExhaustedError } from './types/errors.js';
+export {
+  ApiError,
+  NetworkError,
+  RequestCancelledError,
+  RetryExhaustedError,
+  RootCommandError,
+  type RootCommandFailureCause
+} from './types/errors.js';
 // Event types
 export type { DiscoverResult, EventCallback, EventMap, EventSubscriberOptions } from './types/events.js';

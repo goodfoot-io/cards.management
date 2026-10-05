@@ -26,7 +26,7 @@
  * ```
  */
 
-import type { ActionCommand, CardsAssistantCommand } from './command-types.js';
+import type { ActionCommand, CardsAssistantCommand, WorktreeMaintenanceCommand } from './command-types.js';
 
 // ============================================================================
 // Stream Configuration
@@ -179,4 +179,14 @@ export interface SettingsConfig {
    * uses this to launch the cards assistant in a VS Code terminal.
    */
   cardsAssistant?: CardsAssistantCommand;
+
+  /**
+   * Optional worktree maintenance root command.
+   *
+   * When provided, the CLI compiles this handler into a standalone bundle and
+   * generates a `worktreeMaintenance` entry in settings.json. The server
+   * launches it on a card for worktree preview, cleanup, and the
+   * card-deletion pre-check.
+   */
+  worktreeMaintenance?: WorktreeMaintenanceCommand;
 }

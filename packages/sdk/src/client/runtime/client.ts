@@ -3,8 +3,7 @@ import type {
   ConnectionState,
   RegistrationOutcome,
   RuntimeEnvelope,
-  RuntimeMessageType,
-  RuntimePayload
+  RuntimeMessageType
 } from '../../protocol/types/index.js';
 import {
   authorizeMessage,
@@ -322,15 +321,8 @@ class RuntimeClientImpl implements RuntimeClient {
     const accepted = await this.waitForFrame(
       socket,
       (envelope) =>
-        message.type === 'worktree.assign'
-          ? envelope.type === 'worktree.assignResult' &&
-            (envelope.payload as RuntimePayload<'worktree.assignResult'>).requestMessageId === message.messageId &&
-            envelope.causationId === message.messageId &&
-            envelope.requestId === message.requestId &&
-            envelope.execution?.executionId === message.execution?.executionId &&
-            envelope.execution?.launchRequestId === message.execution?.launchRequestId
-          : envelope.type === 'runtime.accepted' &&
-            (envelope.payload as { acknowledgedMessageId?: string }).acknowledgedMessageId === message.messageId,
+        envelope.type === 'runtime.accepted' &&
+        (envelope.payload as { acknowledgedMessageId?: string }).acknowledgedMessageId === message.messageId,
       message.deadlineMs
     );
 
@@ -352,12 +344,6 @@ class RuntimeClientImpl implements RuntimeClient {
     }
 
     await this.retire(message);
-    if (accepted.type === 'worktree.assignResult') {
-      const result = (accepted.payload as RuntimePayload<'worktree.assignResult'>).outcome;
-      return result.status === 'completed'
-        ? { status: 'completed', messageId: message.messageId, payload: result.payload }
-        : { status: 'rejected', messageId: message.messageId, reason: result.reason };
-    }
     return {
       status: 'accepted',
       messageId: message.messageId
@@ -662,7 +648,6 @@ class RuntimeClientImpl implements RuntimeClient {
       envelope.type === 'execution.cancelCommand' ||
       envelope.type === 'execution.switchToInteractiveCommand' ||
       envelope.type === 'execution.stopCommand' ||
-      envelope.type === 'execution.branchCleanupEffect' ||
       envelope.type === 'execution.executeRequest' ||
       envelope.type === 'watcher.stopCommand'
     );
@@ -701,9 +686,9 @@ class RuntimeClientImpl implements RuntimeClient {
         causationId: envelope.causationId,
         sentAt: envelope.sentAt,
         execution: envelope.execution,
-        deadlineMs: envelope.type === 'worktree.assign' ? 120_000 : 5_000
+        deadlineMs: 5_000
       } as OutboundMessage);
-      if (result.status !== 'accepted' && result.status !== 'completed') return;
+      if (result.status !== 'accepted') return;
     }
   }
 }

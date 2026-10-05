@@ -22,7 +22,11 @@ import type { DeliveryClass } from './runtime-delivery.js';
 import type { RuntimeEnvelope } from './runtime-envelope.js';
 import type { OwnershipStamp, ProducerRole, RuntimeScope } from './runtime-identity.js';
 import { compareOwnership, isAdmittedExecution } from './runtime-identity.js';
-import { MAX_CONTROL_FRAME_BYTES, type RuntimeMessageType } from './runtime-messages.js';
+import {
+  MAX_COMMAND_REPORT_FRAME_BYTES,
+  MAX_CONTROL_FRAME_BYTES,
+  type RuntimeMessageType
+} from './runtime-messages.js';
 
 /** Which way a message travels. */
 export type MessageDirection = 'client-to-server' | 'server-to-client';
@@ -74,28 +78,6 @@ const EXECUTION_PRODUCERS: readonly ProducerRole[] = [
 export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, MessageContract>> = {
   // An admitted CLI must register before it can submit shutdown. Registration
   // does not grant execution-owner liveness, capabilities, or cleanup authority.
-  'worktree.assign': {
-    type: 'worktree.assign',
-    direction: 'client-to-server',
-    deliveryClass: 'durable-intent',
-    allowedRoles: ['agent-handler'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: false,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
-  'worktree.assignResult': {
-    type: 'worktree.assignResult',
-    direction: 'server-to-client',
-    deliveryClass: 'reconciled-snapshot',
-    allowedRoles: ['server'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: true,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
   'runtime.register': {
     type: 'runtime.register',
     direction: 'client-to-server',
@@ -350,8 +332,10 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },
-  'execution.worktreeAssignmentResult': {
-    type: 'execution.worktreeAssignmentResult',
+  // A root command's one result. Its frame bound is the report bound plus a
+  // control frame's worth of envelope, so the largest legal report still fits.
+  'execution.commandReport': {
+    type: 'execution.commandReport',
     direction: 'client-to-server',
     deliveryClass: 'durable-result',
     allowedRoles: ['agent-handler'],
@@ -359,7 +343,7 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     requiresRequestId: true,
     requiresCausationId: false,
     requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
+    maxFrameBytes: MAX_COMMAND_REPORT_FRAME_BYTES
   },
   'execution.commandEffectResult': {
     type: 'execution.commandEffectResult',
@@ -384,28 +368,6 @@ export const RUNTIME_MESSAGE_CONTRACTS: Readonly<Record<RuntimeMessageType, Mess
     executionRequirement: 'admitted',
     requiresRequestId: true,
     requiresCausationId: false,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
-  'execution.branchCleanupRegistration': {
-    type: 'execution.branchCleanupRegistration',
-    direction: 'client-to-server',
-    deliveryClass: 'durable-intent',
-    allowedRoles: ['agent-handler'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: false,
-    requiresOwnershipCurrent: true,
-    maxFrameBytes: MAX_CONTROL_FRAME_BYTES
-  },
-  'execution.branchCleanupEffect': {
-    type: 'execution.branchCleanupEffect',
-    direction: 'server-to-client',
-    deliveryClass: 'durable-intent',
-    allowedRoles: ['server'],
-    executionRequirement: 'admitted',
-    requiresRequestId: true,
-    requiresCausationId: true,
     requiresOwnershipCurrent: true,
     maxFrameBytes: MAX_CONTROL_FRAME_BYTES
   },

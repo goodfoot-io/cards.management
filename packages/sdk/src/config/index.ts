@@ -38,6 +38,11 @@ export {
   type CardsAssistantHandler,
   defineCardsAssistant
 } from './factories/cards-assistant.js';
+export {
+  defineWorktreeMaintenance,
+  type WorktreeMaintenanceConfig,
+  type WorktreeMaintenanceHandler
+} from './factories/worktree-maintenance.js';
 
 // ============================================================================
 // Configuration
@@ -60,7 +65,8 @@ export type {
   Command,
   Environment,
   Settings,
-  StreamDefinition
+  StreamDefinition,
+  WorktreeMaintenance
 } from './schema.js';
 
 // ============================================================================
@@ -71,14 +77,16 @@ export type {
   ActionContext,
   ActionInput,
   CardsAssistantContext,
-  CardsAssistantInput
+  CardsAssistantInput,
+  WorktreeMaintenanceContext,
+  WorktreeMaintenanceInput
 } from './inputs.js';
 
 // ============================================================================
 // Command Types
 // ============================================================================
 
-export type { ActionCommand, CardsAssistantCommand } from './command-types.js';
+export type { ActionCommand, CardsAssistantCommand, WorktreeMaintenanceCommand } from './command-types.js';
 
 // ============================================================================
 // Type Utilities
@@ -94,6 +102,7 @@ export {
   CARDS_ENV_VARS,
   extractActionInput,
   extractCardsAssistantInput,
+  extractWorktreeMaintenanceInput,
   getBaseBranch,
   getCardRepoPath,
   getExecutionMode,
@@ -143,6 +152,17 @@ export {
 // ============================================================================
 
 export { executeCommand } from './runtime.js';
+export {
+  configureShutdown,
+  registerShutdownHook,
+  SHUTDOWN_BUDGET_MS,
+  type ShutdownConfiguration,
+  ShutdownError,
+  type ShutdownHook,
+  type ShutdownReason,
+  shutdownAndExit,
+  shutdownSignal
+} from './runtime-shutdown.js';
 
 // ============================================================================
 // Watcher

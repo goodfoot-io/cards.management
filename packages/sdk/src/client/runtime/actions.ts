@@ -194,12 +194,17 @@ export function normalizeActionLaunchResponse(
   return { status: 'accepted', ...ids, execution: response.execution };
 }
 
-/** Caller-owned immutable launch request sent to the durable runtime action route. */
+/** Action variant of the launch parameters; root commands launch through their own route. */
+export type ActionLaunchParams = Exclude<ImmutableActionParams, { readonly rootCommand: string }>;
+
+/**
+ * Caller-owned immutable launch request sent to the durable runtime action route.
+ * The client stamps its own launch protocol on every request.
+ */
 export interface RuntimeActionLaunchRequest {
   readonly requestId: OriginalCallerRequestId;
   readonly messageId: string;
-  readonly params: ImmutableActionParams;
-  readonly worktreeProtocol?: number;
+  readonly params: ActionLaunchParams;
 }
 
 /** Client configuration for discovered authenticated runtime action requests. */
@@ -261,6 +266,8 @@ export type RuntimeActionRetrievalResult =
       readonly execution: BoundExecution;
       readonly outcome: LaunchOutcome;
       readonly terminalOutcome?: RuntimePayload<'execution.cleanupResult'>;
+      /** A root command's opaque report; absent on action records. */
+      readonly commandReport?: RuntimePayload<'execution.commandReport'>;
     }
   | {
       readonly status: 'rejected';

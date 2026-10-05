@@ -15,3 +15,8 @@ export {
   type CardsAssistantHandler,
   defineCardsAssistant
 } from './cards-assistant.js';
+export {
+  defineWorktreeMaintenance,
+  type WorktreeMaintenanceConfig,
+  type WorktreeMaintenanceHandler
+} from './worktree-maintenance.js';

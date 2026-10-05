@@ -47,12 +47,12 @@ import {
 } from '../client/runtime/index.js';
 import { createFileClientOutbox, resolveOutboxRoot } from '../client/runtime/outbox/index.js';
 import type { RuntimeEnvelope, RuntimePayload } from '../protocol/index.js';
-import type { ActionCommand, CardsAssistantCommand } from './command-types.js';
+import type { ActionCommand, CardsAssistantCommand, WorktreeMaintenanceCommand } from './command-types.js';
 import { extractActionInput, extractCardsAssistantInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
 import type { ActionContext, ActionInput, CardsAssistantContext, CardsAssistantInput } from './inputs.js';
 import { Logger } from './logger.js';
-import { createWorktreeAssignmentCallback } from './worktree-assignment.js';
+import { registerShutdownHook } from './runtime-shutdown.js';
 
 /**
  * Logger for the handler runtime process.
@@ -79,7 +79,7 @@ export const logger = new Logger({ subsystem: 'cards-default-configuration-hooks
  *
  * @internal
  */
-type AnyCommand = ActionCommand | CardsAssistantCommand;
+type AnyCommand = ActionCommand | CardsAssistantCommand | WorktreeMaintenanceCommand;
 
 type AgentCommandType = 'execution.cancelCommand' | 'execution.switchToInteractiveCommand';
 type AgentCommandPhase =
@@ -311,6 +311,8 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       }
 
       cleanupAndExit(EXIT_CODES.SUCCESS);
+    } else if (command.factoryType === 'worktree-maintenance') {
+      await executeRootCommand(command);
     } else {
       // Existing action path
       let input: ActionInput;
@@ -357,10 +359,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       const context: ActionContext = {
         logger,
         cwd: process.cwd(),
-        assignWorktree: () =>
-          createWorktreeAssignmentCallback(runtimeClient, loaded.execution, loaded.credential.requestId, (error) =>
-            logger.warn(`Assignment connection close failed: ${getErrorMessage(error)}`)
-          )(),
+        onShutdown: registerShutdownHook,
         onCancel: (callback) => {
           cancelCallback = callback;
         },
@@ -517,6 +516,19 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
   }
 }
 
+/**
+ * Runs a root configuration command: loads the `agent-handler` credential,
+ * extracts the command's own input, runs it with a report sink, and sends
+ * `execution.commandReport` before exiting through the shutdown path.
+ *
+ * @param command - The root command to execute.
+ * @internal
+ */
+async function executeRootCommand(command: WorktreeMaintenanceCommand): Promise<void> {
+  void command;
+  throw new Error('Not Implemented');
+}
+
 // ============================================================================
 // Authenticated Runtime Command Handlers
 // ============================================================================
@@ -609,7 +621,7 @@ async function handleSwitchToInteractiveCommand(
     const continuation = await toPromise(callback());
     const accepted = await sendDurable(
       'execution.interactiveHandoff',
-      { worktreeProtocol: 2, continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
+      { launchProtocol: 2, continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
       command.messageId
     );
     await recordObserved();
