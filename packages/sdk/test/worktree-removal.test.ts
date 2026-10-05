@@ -163,33 +163,33 @@ describe('slot removal', () => {
   }
 
   describe('quarantine and removal', () => {
-    it.skip('names a fresh sibling quarantine per call', () => {
+    it('names a fresh sibling quarantine per call', () => {
       const first = quarantinePathFor(slotPath);
       expect(first).toMatch(new RegExp(`^${slotPath.replaceAll('.', '\\.')}\\.deleting-${UUID}$`));
       expect(quarantinePathFor(slotPath)).not.toBe(first);
     });
 
-    it.skip('moves the checkout to its quarantine through git', async () => {
+    it('moves the checkout to its quarantine through git', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       expect(existsSync(slotPath)).toBe(false);
       expect(await readFile(join(quarantine, 'tracked.txt'), 'utf8')).toBe('tracked\n');
       expect(worktreePaths(repo)).toContain(quarantine);
     });
 
-    it.skip('passes core.fsmonitor=false to every git call', async () => {
+    it('passes core.fsmonitor=false to every git call', async () => {
       const { git: runner, calls } = cannedGit({});
       await quarantineSlot(repo, slotPath, { git: runner });
       expect(calls.length).toBeGreaterThan(0);
       for (const args of calls) expect(args.slice(0, 2)).toEqual(['-c', 'core.fsmonitor=false']);
     });
 
-    it.skip('reports a refused move as a slot git error', async () => {
+    it('reports a refused move as a slot git error', async () => {
       await expect(quarantineSlot(repo, join(slotRoot, '9'))).rejects.toMatchObject({
         name: 'SlotGitError'
       } satisfies Partial<SlotGitError>);
     });
 
-    it.skip('removes a clean quarantined checkout and drops git’s record of it', async () => {
+    it('removes a clean quarantined checkout and drops git’s record of it', async () => {
       const { lock } = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       await expect(removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock })).resolves.toEqual({
@@ -201,7 +201,7 @@ describe('slot removal', () => {
       expect((await readdir(slotRoot)).filter((name) => name !== '.locks')).toEqual([]);
     });
 
-    it.skip('refuses an untracked file and moves the checkout back to its absent slot path', async () => {
+    it('refuses an untracked file and moves the checkout back to its absent slot path', async () => {
       const { lock } = await removalLock();
       await writeFile(join(slotPath, 'untracked.txt'), 'work in progress\n');
       const quarantine = await quarantineSlot(repo, slotPath);
@@ -212,7 +212,7 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).toContain(slotPath);
     });
 
-    it.skip('never nests the checkout into a recreated slot path, leaving it at the quarantine', async () => {
+    it('never nests the checkout into a recreated slot path, leaving it at the quarantine', async () => {
       const { lock } = await removalLock();
       await writeFile(join(slotPath, 'untracked.txt'), 'work in progress\n');
       const quarantine = await quarantineSlot(repo, slotPath);
@@ -225,7 +225,7 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).toContain(quarantine);
     });
 
-    it.skip('stops between entries once the fence closes and leaves the restored quarantine for recovery', async () => {
+    it('stops between entries once the fence closes and leaves the restored quarantine for recovery', async () => {
       const { lock, env } = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       const removal = removeQuarantinedSlot(
@@ -242,20 +242,20 @@ describe('slot removal', () => {
       expect(existsSync(slotPath)).toBe(false);
     });
 
-    it.skip('treats a lock that is no longer the maximum generation as lost', async () => {
+    it('treats a lock that is no longer the maximum generation as lost', async () => {
       const { lock } = await removalLock();
       await expect(requireCurrentSlotLock(lock)).resolves.toBeUndefined();
       writeGeneration(slotRoot, 1, lock.generation + 1, { owner: ownerFile() });
       await expect(requireCurrentSlotLock(lock)).rejects.toThrow(/generation/);
     });
 
-    it.skip('treats a released lock as lost', async () => {
+    it('treats a released lock as lost', async () => {
       const { lock } = await removalLock();
       await lock.release();
       await expect(requireCurrentSlotLock(lock)).rejects.toThrow(/released/);
     });
 
-    it.skip('treats a closed fence as a shutdown', async () => {
+    it('treats a closed fence as a shutdown', async () => {
       const { lock, env } = await removalLock();
       void env.shutdown.shutdownAndExit(0, 'completed');
       await expect(requireCurrentSlotLock(lock)).rejects.toThrow(ShutdownError);
@@ -263,7 +263,7 @@ describe('slot removal', () => {
   });
 
   describe('residue', () => {
-    it.skip('lists quarantines and holding areas per ordinal, ignoring other entries', async () => {
+    it('lists quarantines and holding areas per ordinal, ignoring other entries', async () => {
       const first = `${join(slotRoot, '1')}.deleting-11111111-1111-4111-8111-111111111111`;
       const third = `${join(slotRoot, '3')}.deleting-33333333-3333-4333-8333-333333333333`;
       await mkdir(first);
@@ -277,11 +277,11 @@ describe('slot removal', () => {
       ]);
     });
 
-    it.skip('finds no residue in a slot root without removal leftovers', async () => {
+    it('finds no residue in a slot root without removal leftovers', async () => {
       await expect(findSlotResidue(slotRoot)).resolves.toEqual([]);
     });
 
-    it.skip('moves a lone quarantine back to its absent slot path', async () => {
+    it('moves a lone quarantine back to its absent slot path', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       const { lock } = await removalLock();
       await expect(recoverSlotResidueLocked({ repoRoot: repo, slotPath, lock })).resolves.toEqual([
@@ -291,7 +291,7 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).toContain(slotPath);
     });
 
-    it.skip('reports a lone quarantine stranded when the slot path exists', async () => {
+    it('reports a lone quarantine stranded when the slot path exists', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       await mkdir(slotPath);
       const { lock } = await removalLock();
@@ -302,7 +302,7 @@ describe('slot removal', () => {
       expect(await readdir(slotPath)).toEqual([]);
     });
 
-    it.skip('finishes a committed removal and prunes the vanished quarantine', async () => {
+    it('finishes a committed removal and prunes the vanished quarantine', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       let reached = false;
       void removeQuarantinedCheckout(
@@ -328,7 +328,7 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).not.toContain(quarantine);
     });
 
-    it.skip('restores an interrupted removal and moves it back to its absent slot path', async () => {
+    it('restores an interrupted removal and moves it back to its absent slot path', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       let reached = false;
       void removeQuarantinedCheckout(
@@ -352,7 +352,7 @@ describe('slot removal', () => {
       expect(git(slotPath, 'status', '--porcelain')).toBe('');
     });
 
-    it.skip('prunes git’s record of a quarantine that vanished without a holding area', async () => {
+    it('prunes git’s record of a quarantine that vanished without a holding area', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       await rm(quarantine, { recursive: true, force: true });
       const { lock } = await removalLock();
@@ -362,7 +362,7 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).not.toContain(quarantine);
     });
 
-    it.skip('keeps a holding area it cannot account for and reports the failure', async () => {
+    it('keeps a holding area it cannot account for and reports the failure', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       let reached = false;
       void removeQuarantinedCheckout(
@@ -387,7 +387,7 @@ describe('slot removal', () => {
       expect(await readdir(`${quarantine}.held`)).toContain('manifest.json');
     });
 
-    it.skip('recovers a slot under a free lock and releases it', async () => {
+    it('recovers a slot under a free lock and releases it', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       const env = lockEnvironment(fakeWorld());
       await expect(recoverSlotResidue(slotRoot, locker(env), { repoRoot: repo })).resolves.toEqual([
@@ -397,7 +397,7 @@ describe('slot removal', () => {
       expect(existsSync(join(slotRoot, '.locks', '1', generations.at(-1)!, 'released.json'))).toBe(true);
     });
 
-    it.skip('skips a slot whose lock is held and leaves its residue untouched', async () => {
+    it('skips a slot whose lock is held and leaves its residue untouched', async () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       writeGeneration(slotRoot, 1, 1, { owner: ownerFile() });
       const world = fakeWorld();
@@ -450,7 +450,7 @@ describe('slot removal', () => {
       };
     }
 
-    it.skip('finds processes whose cwd or open file is inside the slot, and nothing beside it', async () => {
+    it('finds processes whose cwd or open file is inside the slot, and nothing beside it', async () => {
       const probe = await findSlotOccupants(slotPath, {
         platform: 'linux',
         proc: proc({
@@ -470,7 +470,7 @@ describe('slot removal', () => {
       });
     });
 
-    it.skip('skips processes the OS hides or that exited, counting only the hidden ones', async () => {
+    it('skips processes the OS hides or that exited, counting only the hidden ones', async () => {
       await expect(
         findSlotOccupants(slotPath, {
           platform: 'linux',
@@ -479,13 +479,13 @@ describe('slot removal', () => {
       ).resolves.toEqual({ occupants: [], unprobed: 2 });
     });
 
-    it.skip('throws on any other errno', async () => {
+    it('throws on any other errno', async () => {
       await expect(
         findSlotOccupants(slotPath, { platform: 'linux', proc: proc({ 30: { fail: 'ENOTDIR' } }) })
       ).rejects.toThrow(OccupantProbeError);
     });
 
-    it.skip('throws when /proc itself is unreadable', async () => {
+    it('throws when /proc itself is unreadable', async () => {
       await expect(
         findSlotOccupants(slotPath, {
           platform: 'linux',
@@ -500,25 +500,26 @@ describe('slot removal', () => {
       ).rejects.toThrow(OccupantProbeError);
     });
 
-    it.runIf(process.platform === 'linux')
-      .skip('finds no occupant of an empty slot among the host’s real processes', async () => {
+    it.runIf(process.platform === 'linux')(
+      'finds no occupant of an empty slot among the host’s real processes',
+      async () => {
         const probe = await findSlotOccupants(slotPath);
         expect(probe.occupants).toEqual([]);
         expect(probe.unprobed).toBeGreaterThanOrEqual(0);
-      });
+      }
+    );
 
-    it.runIf(process.platform === 'linux')
-      .skip('finds a real process whose cwd is inside the slot', async () => {
-        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
-          cwd: slotPath,
-          detached: true,
-          stdio: 'ignore'
-        });
-        children.push(child);
-        await new Promise((resolve) => child.once('spawn', resolve));
-        const probe = await findSlotOccupants(slotPath);
-        expect(probe.occupants).toContainEqual({ pid: child.pid, command: expect.any(String) });
+    it.runIf(process.platform === 'linux')('finds a real process whose cwd is inside the slot', async () => {
+      const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+        cwd: slotPath,
+        detached: true,
+        stdio: 'ignore'
       });
+      children.push(child);
+      await new Promise((resolve) => child.once('spawn', resolve));
+      const probe = await findSlotOccupants(slotPath);
+      expect(probe.occupants).toContainEqual({ pid: child.pid, command: expect.any(String) });
+    });
 
     /**
      * An `lsof` stand-in returning one canned result and recording its argv.
@@ -539,7 +540,7 @@ describe('slot removal', () => {
       };
     }
 
-    it.skip('parses lsof process records on macOS', async () => {
+    it('parses lsof process records on macOS', async () => {
       const { runCommand, calls } = lsof({ stdout: 'p123\ncnode\np456\ncgit\n' });
       await expect(findSlotOccupants(slotPath, { platform: 'darwin', runCommand })).resolves.toEqual({
         occupants: [
@@ -551,7 +552,7 @@ describe('slot removal', () => {
       expect(calls).toEqual([{ file: 'lsof', args: ['-n', '-P', '-w', '-F', 'pc', '+D', slotPath] }]);
     });
 
-    it.skip.each([
+    it.each([
       ['empty', ''],
       ['warning-only', 'lsof: WARNING: can’t stat() fuse file system /run/user/1000/doc\n']
     ])('treats lsof exit 1 with %s output as no occupants', async (_kind, stderr) => {
@@ -562,7 +563,7 @@ describe('slot removal', () => {
       });
     });
 
-    it.skip.each([
+    it.each([
       ['exit 1 with a process record', { exitCode: 1, stdout: 'p123\ncnode\n' }],
       ['exit 2', { exitCode: 2, stderr: 'lsof: illegal option\n' }],
       ['a timeout', { exitCode: null, timedOut: true }],
@@ -573,19 +574,19 @@ describe('slot removal', () => {
       await expect(findSlotOccupants(slotPath, { platform: 'darwin', runCommand })).rejects.toThrow(OccupantProbeError);
     });
 
-    it.skip('reports no occupants on Windows, where the OS refuses the removal itself', async () => {
+    it('reports no occupants on Windows, where the OS refuses the removal itself', async () => {
       await expect(findSlotOccupants(slotPath, { platform: 'win32' })).resolves.toEqual({ occupants: [], unprobed: 0 });
     });
   });
 
   describe('fsmonitor', () => {
-    it.skip('asks git to stop the daemon with fsmonitor disabled for the call itself', async () => {
+    it('asks git to stop the daemon with fsmonitor disabled for the call itself', async () => {
       const { git: runner, calls } = cannedGit({});
       await stopSlotFsmonitor(slotPath, { git: runner });
       expect(calls).toEqual([['-c', 'core.fsmonitor=false', 'fsmonitor--daemon', 'stop']]);
     });
 
-    it.skip.each([
+    it.each([
       'fsmonitor-daemon is not running',
       'fatal: fsmonitor--daemon not supported on this platform',
       "git: 'fsmonitor--daemon' is not a git command. See 'git --help'."
@@ -594,7 +595,7 @@ describe('slot removal', () => {
       await expect(stopSlotFsmonitor(slotPath, { git: runner })).resolves.toBeUndefined();
     });
 
-    it.skip.each([
+    it.each([
       ['another failure', { exitCode: 128, stderr: 'fatal: not a git repository' }],
       ['a timeout', { exitCode: null, timedOut: true }]
     ])('throws a slot git error on %s', async (_kind, result) => {
@@ -602,17 +603,18 @@ describe('slot removal', () => {
       await expect(stopSlotFsmonitor(slotPath, { git: runner })).rejects.toMatchObject({ name: 'SlotGitError' });
     });
 
-    it.runIf(process.platform === 'linux')
-      .skip('succeeds against real git where the daemon is unsupported', async () => {
-        await expect(stopSlotFsmonitor(slotPath)).resolves.toBeUndefined();
-      });
+    it.runIf(process.platform === 'linux')('succeeds against real git where the daemon is unsupported', async () => {
+      await expect(stopSlotFsmonitor(slotPath)).resolves.toBeUndefined();
+    });
 
-    it.runIf(process.platform === 'darwin' || process.platform === 'win32')
-      .skip('stops a running daemon before the occupant probe', async () => {
+    it.runIf(process.platform === 'darwin' || process.platform === 'win32')(
+      'stops a running daemon before the occupant probe',
+      async () => {
         git(slotPath, 'fsmonitor--daemon', 'start');
         await stopSlotFsmonitor(slotPath);
         expect(() => git(slotPath, 'fsmonitor--daemon', 'status')).toThrow();
         await expect(findSlotOccupants(slotPath)).resolves.toMatchObject({ occupants: [] });
-      });
+      }
+    );
   });
 });
