@@ -54,6 +54,49 @@ export class ShutdownError extends Error {
   }
 }
 
+/** Seams of one shutdown coordinator; the process-wide one uses the defaults. */
+export interface ShutdownCoordinatorOptions {
+  /** Ends the process; defaults to `process.exit`. */
+  readonly exit?: (code: number) => void;
+  /** Overall hook budget; defaults to {@link SHUTDOWN_BUDGET_MS}. */
+  readonly budgetMs?: number;
+}
+
+/** One single-flight shutdown: its fence signal, hook registry and exit. */
+export interface ShutdownCoordinator {
+  /** Aborted the moment shutdown starts, before the first hook runs. */
+  readonly signal: AbortSignal;
+  /**
+   * Registers a hook; see {@link registerShutdownHook}.
+   * @param hook - Work to finish before exit.
+   * @returns Removes the hook; a no-op once shutdown has begun.
+   */
+  register(hook: ShutdownHook): () => void;
+  /**
+   * Sets how hook failures are reported and what runs before exit.
+   * @param configuration - Hook error reporter and finalizer.
+   */
+  configure(configuration: ShutdownConfiguration): void;
+  /**
+   * Shuts down once; see {@link shutdownAndExit}.
+   * @param code - Exit code.
+   * @param reason - Why the process is exiting; passed to every hook.
+   * @returns The shared shutdown promise.
+   */
+  shutdownAndExit(code: number, reason: ShutdownReason): Promise<never>;
+}
+
+/**
+ * Creates a single-flight shutdown coordinator.
+ * @param options - Exit function and hook budget.
+ * @returns A coordinator with its own fence signal and hooks.
+ * @throws {Error} Always: not implemented yet.
+ */
+export function createShutdownCoordinator(options: ShutdownCoordinatorOptions = {}): ShutdownCoordinator {
+  void options;
+  throw new Error('Not Implemented');
+}
+
 const controller = new AbortController();
 
 /** Aborted the moment shutdown starts, before the first hook runs. */
@@ -97,5 +140,15 @@ export function configureShutdown(configuration: ShutdownConfiguration): void {
 export function shutdownAndExit(code: number, reason: ShutdownReason): Promise<never> {
   void code;
   void reason;
+  throw new Error('Not Implemented');
+}
+
+/**
+ * Installs `SIGTERM` and `SIGINT` handlers that shut down with `128 + signo`.
+ * They stay installed for the whole shutdown, so a repeated signal never
+ * falls back to its default action. Installing twice is a no-op.
+ * @throws {Error} Always: not implemented yet.
+ */
+export function installShutdownSignalHandlers(): void {
   throw new Error('Not Implemented');
 }

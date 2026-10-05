@@ -154,9 +154,13 @@ export {
 export { executeCommand } from './runtime.js';
 export {
   configureShutdown,
+  createShutdownCoordinator,
+  installShutdownSignalHandlers,
   registerShutdownHook,
   SHUTDOWN_BUDGET_MS,
   type ShutdownConfiguration,
+  type ShutdownCoordinator,
+  type ShutdownCoordinatorOptions,
   ShutdownError,
   type ShutdownHook,
   type ShutdownReason,

@@ -22,8 +22,8 @@
  */
 import type { ChildProcess } from 'node:child_process';
 import { z } from 'zod';
-import type { GitChildEvent } from './bounded-git.js';
-import { ShutdownError } from './config/runtime-shutdown.js';
+import type { BoundedGitRunner, GitChildEvent } from './bounded-git.js';
+import { type ShutdownCoordinator, ShutdownError } from './config/runtime-shutdown.js';
 import type { IdentityProbe, ProcessDomain, ProcessIdentityService } from './process-identity.js';
 
 export { ShutdownError };
@@ -279,12 +279,34 @@ export async function createSlotJudgeContext(
   throw new Error('Not Implemented');
 }
 
+/** File operations the lock uses; injectable to reproduce scanner errors. */
+export interface SlotLockFileSystem {
+  readonly readFile: (path: string) => Promise<string>;
+  readonly rename: (from: string, to: string) => Promise<void>;
+}
+
+/** Everything a lock depends on outside its directory; each part is injectable for tests. */
+export interface SlotLockEnvironment {
+  /** Identity service; defaults to the host's. */
+  readonly identity: ProcessIdentityService;
+  /** Shutdown fence and hook registry; defaults to the runtime's. */
+  readonly shutdown: Pick<ShutdownCoordinator, 'signal' | 'register'>;
+  /** Slot git runner whose in-flight calls the hook aborts; defaults to the host's. */
+  readonly git: Pick<BoundedGitRunner, 'abortAll'>;
+  /** File operations; default to `node:fs/promises`. */
+  readonly fs: SlotLockFileSystem;
+  /** Budget for transient rename errors; defaults to {@link LOCK_RENAME_BUDGET_MS}. */
+  readonly renameBudgetMs: number;
+  /** Budget of one on-demand identity probe. */
+  readonly probeTimeoutMs: number;
+}
+
 /** Options of a read or acquire. */
 export interface SlotLockReadOptions {
   /** Shared judgement context; created for this call when absent. */
   readonly context?: SlotJudgeContext;
-  /** Identity service; defaults to the host's. */
-  readonly identity?: ProcessIdentityService;
+  /** Overrides for the lock's environment. */
+  readonly environment?: Partial<SlotLockEnvironment>;
 }
 
 /**
@@ -470,6 +492,40 @@ export async function acquireSlotLock(
   void slotRoot;
   void ordinal;
   void options;
+  throw new Error('Not Implemented');
+}
+
+/** Outcome of publishing one generation (acquire steps 4 and 5). */
+export type PublishGenerationResult =
+  | { readonly status: 'published'; readonly generation: number }
+  /** The destination existed: another acquirer created it. */
+  | { readonly status: 'taken'; readonly generation: number }
+  /** A higher generation appeared; ours was released at once. */
+  | { readonly status: 'backed_off'; readonly generation: number; readonly higher: number }
+  | { readonly status: 'unavailable'; readonly generation: number; readonly detail: string };
+
+/**
+ * Publishes generation `judged + 1` whole by renaming a private temp directory
+ * holding its files, then verifies no higher generation exists. The building
+ * block of {@link acquireSlotLock}, exported for crash-point and stress tests.
+ * @param lockDir - The ordinal's `.locks/<n>` directory.
+ * @param judged - The generation the caller judged free.
+ * @param files - Contents of the new generation.
+ * @param files.owner - Its `owner.json`.
+ * @param files.creating - The creation intent carried from the judged generation, or null.
+ * @param environment - File operations and rename budget.
+ * @returns Whether this caller now holds the new maximum.
+ */
+export async function publishGeneration(
+  lockDir: string,
+  judged: number,
+  files: { readonly owner: SlotLockOwner; readonly creating: SlotCreationIntent | null },
+  environment: Partial<Pick<SlotLockEnvironment, 'fs' | 'renameBudgetMs'>> = {}
+): Promise<PublishGenerationResult> {
+  void lockDir;
+  void judged;
+  void files;
+  void environment;
   throw new Error('Not Implemented');
 }
 

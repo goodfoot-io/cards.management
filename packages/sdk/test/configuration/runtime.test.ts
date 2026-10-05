@@ -431,7 +431,7 @@ describe('executeCommand', () => {
       expect.objectContaining({
         type: 'execution.interactiveHandoff',
         causationId: 'switch-command-1',
-        payload: { worktreeProtocol: 2, continuation: { kind: 'inline', value: '{"sessionId":"claude-session-1"}' } }
+        payload: { launchProtocol: 2, continuation: { kind: 'inline', value: '{"sessionId":"claude-session-1"}' } }
       })
     );
     expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SWITCH_TO_INTERACTIVE);

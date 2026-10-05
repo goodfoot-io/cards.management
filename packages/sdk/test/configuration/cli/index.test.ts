@@ -8,7 +8,7 @@
 
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { build, main } from '../../../src/config/cli/index.js';
 
@@ -379,6 +379,52 @@ describe('build', () => {
         // When sourcePath is not provided, handlers are not compiled
         // Commands use placeholder format in settings.json
         expect(result.compiledHandlers).toEqual([]);
+      }
+    });
+  });
+
+  describe('worktree maintenance', () => {
+    it.skip('compiles the worktreeMaintenance root command into its own settings entry', async () => {
+      const factories = join(__dirname, '../../../src/config/factories/index.ts').replace(/\\/g, '/');
+      const dir = join(FIXTURES_DIR, 'maintenance');
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(
+        join(dir, 'maintenance.ts'),
+        `import { defineWorktreeMaintenance } from '${factories}';
+export default defineWorktreeMaintenance({}, async (input, context) => {
+  context.report({ mode: input.mode });
+});
+`
+      );
+      writeFileSync(
+        join(dir, 'settings.config.ts'),
+        `import maintenance from './maintenance.js';
+export default {
+  environments: { default: { version: 1, actions: [] } },
+  worktreeMaintenance: maintenance
+};
+`
+      );
+      const outdir = join(dir, 'output');
+      const result = await build({ config: join(dir, 'settings.config.ts'), outdir });
+
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.compiledHandlers).toHaveLength(1);
+        const settings = JSON.parse(readFileSync(result.settingsPath, 'utf-8'));
+        const compiled = basename(result.compiledHandlers[0]!);
+        expect(settings.worktreeMaintenance.command.command).toContain(compiled);
+        expect(settings.environments.default.actions).toEqual([]);
+        expect(readFileSync(result.compiledHandlers[0]!, 'utf-8')).toContain('executeCommand');
+      }
+    });
+
+    it.skip('omits the entry when the configuration has no worktreeMaintenance', async () => {
+      const outdir = join(FIXTURES_DIR, 'output-no-maintenance');
+      const result = await build({ config: join(FIXTURES_DIR, 'valid.config.ts'), outdir });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(JSON.parse(readFileSync(result.settingsPath, 'utf-8'))).not.toHaveProperty('worktreeMaintenance');
       }
     });
   });

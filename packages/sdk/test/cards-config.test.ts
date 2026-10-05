@@ -4,12 +4,17 @@
  * @summary Tests Cards config directory resolution
  */
 
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   CARDS_DIR_NAME,
   generateRepoId,
   resolveGlobalCardsConfigDir,
+  resolveMainRepoRoot,
+  resolveSlotRoot,
   resolveWorktreeDir,
   resolveWorktreesRoot
 } from '../src/cards-config.js';
@@ -132,5 +137,49 @@ describe('resolveWorktreeDir', () => {
 
     expect(resolveWorktreesRoot()).toBe('/tmp/cards-worktrees');
     expect(resolveWorktreeDir(repoRoot, ref)).toBe(path.join('/tmp/cards-worktrees', generateRepoId(repoRoot), ref));
+  });
+});
+
+describe('resolveSlotRoot', () => {
+  const GIT_ENV = {
+    ...process.env,
+    GIT_CONFIG_NOSYSTEM: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_AUTHOR_NAME: 'Test',
+    GIT_AUTHOR_EMAIL: 'test@example.com',
+    GIT_COMMITTER_NAME: 'Test',
+    GIT_COMMITTER_EMAIL: 'test@example.com'
+  };
+
+  it.skip('derives the same slot root from a linked worktree as from the main repository [R12]', async () => {
+    const dir = realpathSync(mkdtempSync(path.join(tmpdir(), 'cards-slot-root-')));
+    try {
+      process.env['CARDS_WORKTREES_DIR'] = path.join(dir, 'worktrees');
+      const main = path.join(dir, 'main');
+      const linked = path.join(dir, 'linked');
+      const git = (cwd: string, ...args: string[]): void => {
+        execFileSync('git', args, { cwd, env: GIT_ENV, stdio: 'ignore' });
+      };
+      execFileSync('git', ['init', '--quiet', main], { env: GIT_ENV, stdio: 'ignore' });
+      git(main, 'commit', '--allow-empty', '--quiet', '-m', 'root');
+      git(main, 'worktree', 'add', '--quiet', '-b', 'side', linked);
+
+      expect(await resolveMainRepoRoot(linked)).toBe(main);
+      const expected = resolveWorktreeDir(main, 'cards/main-734');
+      expect(await resolveSlotRoot(main, 'main-734')).toBe(expected);
+      expect(await resolveSlotRoot(linked, 'main-734')).toBe(expected);
+      expect(expected).not.toBe(resolveWorktreeDir(linked, 'cards/main-734'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it.skip('throws when the workspace has no .git marker', async () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'cards-slot-root-'));
+    try {
+      await expect(resolveSlotRoot(dir, 'main-734')).rejects.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

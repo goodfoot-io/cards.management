@@ -135,7 +135,7 @@ export type SessionExecFile = (
     readonly killSignal: NodeJS.Signals;
     readonly env: NodeJS.ProcessEnv;
   },
-  callback: (error: Error | null, stdout: string) => void
+  callback: (error: Error | null, stdout: string, stderr?: string) => void
 ) => { readonly pid?: number; kill(signal?: NodeJS.Signals): boolean } | undefined;
 
 /** Default elapsed-time ceiling for one process-identity helper attempt. */
@@ -771,6 +771,16 @@ export interface ProcessIdentityReaders {
 
 /** Process identity operations bound to one set of OS readers. */
 export interface ProcessIdentityService {
+  /** Operating system whose rules this service applies. */
+  readonly platform: NodeJS.Platform;
+  /** This process's PID. */
+  readonly pid: number;
+  /**
+   * Reads every visible process, in one CIM call on Windows.
+   * @param timeoutMs - Budget for the whole roster.
+   * @returns Every readable identity, or `unknown` when enumeration failed.
+   */
+  enumerate(timeoutMs: number): Promise<readonly ProcessIdentity[] | 'unknown'>;
   /**
    * Reads one process's identity.
    * @param pid - Process to read.
