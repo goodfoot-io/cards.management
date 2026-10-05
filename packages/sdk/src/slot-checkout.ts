@@ -6,7 +6,9 @@
  * @summary Slot checkout materialization and card binding
  */
 
-import type { CreateWorktreeResult, WorktreeGitRunner } from './worktree.js';
+import { compiledHookScriptPaths } from './git-hooks.js';
+import { type CreateWorktreeResult, provisionWorktreeCheckout, type WorktreeGitRunner } from './worktree.js';
+import { provisionCardWorktree } from './worktreeForCard.js';
 
 /** Inputs of {@link provisionSlotCheckout}. */
 export interface ProvisionSlotCheckoutOptions {
@@ -45,6 +47,29 @@ export interface ProvisionedSlotCheckout {
  * @throws {ShutdownError} When the fence closed between writes; the creation intent drives rollback.
  */
 export async function provisionSlotCheckout(options: ProvisionSlotCheckoutOptions): Promise<ProvisionedSlotCheckout> {
-  void options;
-  throw new Error('Not Implemented');
+  const { checkpoint } = options;
+  // Async so a closed fence rejects the call instead of throwing out of a caller's promise chain.
+  const runGit: WorktreeGitRunner = async (cwd, args, input) => {
+    checkpoint();
+    return options.runGit(cwd, args, input);
+  };
+  checkpoint();
+  const checkout = await provisionWorktreeCheckout({
+    sourceRoot: options.sourceRoot,
+    repoRoot: options.repoRoot,
+    worktreeDir: options.worktreePath,
+    ref: options.branch,
+    runGit,
+    checkpoint
+  });
+  checkpoint();
+  const branchName = await provisionCardWorktree(options.worktreePath, {
+    cardId: options.cardId,
+    parentBranch: options.parentBranch,
+    compiledScriptPaths: compiledHookScriptPaths(options.extensionPath),
+    sharedHooksDir: options.sharedHooksDir,
+    runGit,
+    checkpoint
+  });
+  return { checkout, branchName };
 }

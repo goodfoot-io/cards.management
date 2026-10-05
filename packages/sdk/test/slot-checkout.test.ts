@@ -36,7 +36,7 @@ function git(cwd: string, ...args: string[]): string {
 const runGit: WorktreeGitRunner = (cwd, args, input) =>
   new Promise((resolve, reject) => {
     const child = execFile('git', [...args], { cwd, env: GIT_ENV, encoding: 'utf8' }, (error, stdout, stderr) => {
-      if (error) reject(Object.assign(error, { stderr }));
+      if (error) reject(Object.assign(error, { stderr, exitCode: typeof error.code === 'number' ? error.code : null }));
       else resolve(stdout);
     });
     if (input !== undefined) child.stdin?.end(input);
@@ -59,7 +59,7 @@ describe('slot checkout provisioning', () => {
     await mkdir(repo);
     await mkdir(join(extensionPath, 'dist', 'git-hooks'), { recursive: true });
     for (const hook of ['pre-commit', 'post-commit', 'post-rewrite'])
-      await writeFile(join(extensionPath, 'dist', 'git-hooks', `${hook}.mjs`), 'export {};\n');
+      await writeFile(join(extensionPath, 'dist', 'git-hooks', `${hook}.mjs`), `// ${hook} from the extension\n`);
     git(repo, 'init', '-q', '-b', 'main');
     await writeFile(join(repo, 'tracked.txt'), 'tracked\n');
     git(repo, 'add', 'tracked.txt');
@@ -92,7 +92,7 @@ describe('slot checkout provisioning', () => {
     };
   }
 
-  it.skip('binds a fresh slot to its card with shared hooks, excludes and the parent branch', async () => {
+  it('binds a fresh slot to its card with shared hooks, excludes and the parent branch', async () => {
     const provisioned = await provisionSlotCheckout(options());
     expect(provisioned.branchName).toBe('slot-1');
     expect(provisioned.checkout).toMatchObject({ branch: 'slot-1', worktree: worktreePath });
@@ -103,14 +103,13 @@ describe('slot checkout provisioning', () => {
     expect(git(worktreePath, 'status', '--porcelain', '--untracked-files=all')).toBe('');
   });
 
-  it.skip('points the shared dispatchers at the extension’s compiled hook scripts', async () => {
+  it('installs the extension’s compiled hook scripts beside the shared dispatchers', async () => {
     await provisionSlotCheckout(options());
-    expect(await readFile(join(sharedHooksDir, 'pre-commit'), 'utf8')).toContain(
-      join(extensionPath, 'dist', 'git-hooks', 'pre-commit.mjs')
-    );
+    for (const hook of ['pre-commit', 'post-commit', 'post-rewrite'])
+      expect(await readFile(join(sharedHooksDir, `${hook}.mjs`), 'utf8')).toBe(`// ${hook} from the extension\n`);
   });
 
-  it.skip('writes nothing once the fence is already closed', async () => {
+  it('writes nothing once the fence is already closed', async () => {
     let gitCalls = 0;
     await expect(
       provisionSlotCheckout(
@@ -130,7 +129,7 @@ describe('slot checkout provisioning', () => {
     expect(() => git(worktreePath, 'config', 'branch.slot-1.cardsParent')).toThrow();
   });
 
-  it.skip('stops before card binding once the fence closes during materialization, running no further git', async () => {
+  it('stops before card binding once the fence closes during materialization, running no further git', async () => {
     let closed = false;
     let gitAfterClose = 0;
     const provisioning = provisionSlotCheckout(

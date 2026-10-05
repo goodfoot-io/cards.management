@@ -242,6 +242,8 @@ export interface CardWorktreeProvisioningOptions {
   readonly compiledScriptPaths: Record<string, string>;
   readonly sharedHooksDir: string;
   readonly runGit: WorktreeGitRunner;
+  /** Throws to stop binding; called before each write. */
+  readonly checkpoint?: () => void;
 }
 
 /**
@@ -255,6 +257,7 @@ export async function provisionCardWorktree(
   options: CardWorktreeProvisioningOptions
 ): Promise<string> {
   const branchName = await provisionCardWorktreeDisk(worktreeDir, options);
+  options.checkpoint?.();
   await gitConfigWithRetry(
     ['-C', worktreeDir, 'config', `branch.${branchName}.cardsParent`, options.parentBranch],
     8,
@@ -297,6 +300,7 @@ async function provisionCardWorktreeDisk(
   const sharedHooksDir = options.sharedHooksDir ?? cardsSharedHooksDir();
   const originalHookPathFile = join(worktreeDir, '.cards', 'CARD_ORIGINAL_HOOK_PATH');
 
+  options.checkpoint?.();
   // 1. Write .cards/CARD_ID first — this mkdir -p's .cards, which the hooks-path
   //    snapshot below writes into. Cheap (one mkdir + small write).
   await perf.measure('outfit:writeCardBoundFile', () => writeCardBoundFile(worktreeDir, cardId));
@@ -307,6 +311,7 @@ async function provisionCardWorktreeDisk(
   // concurrently instead of serially. The branch name is resolved here too so it
   // is ready for the API phase. The ordered git-config writes (steps below) are
   // the only part that must stay sequential.
+  options.checkpoint?.();
   const tasks = [
     // 2. Snapshot the pre-existing hooks dir — GUARDED. If the snapshot already
     //    exists, a previous outfit already captured the user's original hooks
@@ -356,9 +361,11 @@ async function provisionCardWorktreeDisk(
   //   (MUST precede the --worktree write, D9), then point this worktree at the
   //   shared dispatcher dir. Retried on config-lock contention: createWorktree's
   //   settle phase writes the same repo key concurrently on the early path.
+  options.checkpoint?.();
   await perf.measure('outfit:config:worktreeConfig', () =>
     gitConfigWithRetry(['-C', repoRoot, 'config', 'extensions.worktreeConfig', 'true'], 8, runGit)
   );
+  options.checkpoint?.();
   await perf.measure('outfit:config:hooksPath', () =>
     gitConfigWithRetry(['-C', worktreeDir, 'config', '--worktree', 'core.hooksPath', sharedHooksDir], 8, runGit)
   );
