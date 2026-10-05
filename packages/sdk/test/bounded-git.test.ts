@@ -84,7 +84,7 @@ async function readPid(path: string, timeoutMs = 10_000): Promise<number> {
 }
 
 describe.runIf(POSIX)('POSIX deadline', () => {
-  it.skip("leaves no descendant of a timed-out post-checkout hook alive, and spares the caller's group", async () => {
+  it("leaves no descendant of a timed-out post-checkout hook alive, and spares the caller's group", async () => {
     const pidFile = join(dir, 'hook.pid');
     const repo = makeRepo({ 'post-checkout': `echo $$ > ${JSON.stringify(pidFile)}\nexec sleep 30` });
     const sibling = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
@@ -154,7 +154,7 @@ process.kill(process.pid, 'SIGKILL');
     }
   });
 
-  it.skip("completes git's own cleanup of index.lock when a smudge filter times out", async () => {
+  it("completes git's own cleanup of index.lock when a smudge filter times out", async () => {
     const repo = join(dir, 'repo');
     mkdirSync(repo);
     git(repo, 'init', '-q', '-b', 'main');
@@ -175,7 +175,7 @@ process.kill(process.pid, 'SIGKILL');
     expect(existsSync(join(repo, '.git', 'index.lock'))).toBe(false);
   });
 
-  it.skip('does not SIGKILL a descendant whose PID was reused during the grace period', async () => {
+  it('does not SIGKILL a descendant whose PID was reused during the grace period', async () => {
     const pidFile = join(dir, 'hook.pid');
     const repo = makeRepo({ 'post-checkout': `echo $$ > ${JSON.stringify(pidFile)}\nexec sleep 30` });
     const fakePid = 2_147_000_001;
@@ -212,27 +212,29 @@ process.kill(process.pid, 'SIGKILL');
 });
 
 describe('abort and fence', () => {
-  it.runIf(POSIX)
-    .skip('abortAll ends every in-flight call within its grace period', async () => {
-      const repo = makeRepo({ 'post-checkout': 'exec sleep 30' });
-      const second = join(dir, 'second');
-      git(repo, 'worktree', 'add', '-q', second, 'other');
-      const runner = createBoundedGit();
-      const calls = [
-        runner.run(repo, ['checkout', '-q', 'other'], { timeoutMs: 60_000 }),
-        runner.run(second, ['checkout', '-q', 'main'], { timeoutMs: 60_000 })
-      ];
-      await new Promise((resolveWait) => setTimeout(resolveWait, 500));
+  it.runIf(POSIX)('abortAll ends every in-flight call within its grace period', async () => {
+    const repo = makeRepo();
+    const second = join(dir, 'second');
+    git(repo, 'worktree', 'add', '-q', '-b', 'side', second, 'other');
+    // Installed after the worktree exists, so only the two calls below run it.
+    writeFileSync(join(dir, 'hooks', 'post-checkout'), '#!/bin/sh\nexec sleep 30\n');
+    chmodSync(join(dir, 'hooks', 'post-checkout'), 0o755);
+    const runner = createBoundedGit();
+    const calls = [
+      runner.run(repo, ['checkout', '-q', 'other'], { timeoutMs: 60_000 }),
+      runner.run(second, ['checkout', '-q', '--detach', 'main'], { timeoutMs: 60_000 })
+    ];
+    await new Promise((resolveWait) => setTimeout(resolveWait, 500));
 
-      const started = Date.now();
-      await runner.abortAll({ graceMs: 500 });
-      const results = await Promise.all(calls);
+    const started = Date.now();
+    await runner.abortAll({ graceMs: 500 });
+    const results = await Promise.all(calls);
 
-      expect(Date.now() - started).toBeLessThan(5_000);
-      for (const result of results) expect(result.aborted).toBe(true);
-    });
+    expect(Date.now() - started).toBeLessThan(5_000);
+    for (const result of results) expect(result.aborted).toBe(true);
+  });
 
-  it.skip('rejects with ShutdownError without spawning once the shutdown signal has aborted', async () => {
+  it('rejects with ShutdownError without spawning once the shutdown signal has aborted', async () => {
     const controller = new AbortController();
     controller.abort();
     const events: GitChildEvent[] = [];
@@ -244,7 +246,7 @@ describe('abort and fence', () => {
     expect(events).toEqual([]);
   });
 
-  it.skip('returns the output of a call that finishes in time', async () => {
+  it('returns the output of a call that finishes in time', async () => {
     const repo = makeRepo();
     const result = await createBoundedGit().run(repo, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 10_000 });
     expect(result).toMatchObject({ exitCode: 0, stdout: 'main\n', timedOut: false, aborted: false });
@@ -252,7 +254,7 @@ describe('abort and fence', () => {
 });
 
 describe.runIf(process.platform === 'win32')('Windows deadline [R14]', () => {
-  it.skip('a timed-out worktree add with a hook child leaves no tree, and record saw pending first', async () => {
+  it('a timed-out worktree add with a hook child leaves no tree, and record saw pending first', async () => {
     const pidFile = join(dir, 'hook.pid');
     const repo = makeRepo({ 'post-checkout': `echo $$ > "${pidFile.replace(/\\/g, '/')}"\nsleep 30` });
     const events: GitChildEvent[] = [];

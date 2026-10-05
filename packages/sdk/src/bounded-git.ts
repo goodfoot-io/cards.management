@@ -14,8 +14,9 @@
  * @summary Deadline-bounded slot git that stays in the recorded group and stops at the shutdown fence
  * @module
  */
-import { ShutdownError } from './config/runtime-shutdown.js';
-import type { ProcessIdentity } from './process-identity.js';
+import { spawn } from 'node:child_process';
+import { ShutdownError, shutdownSignal } from './config/runtime-shutdown.js';
+import { type IdentityProbe, type ProcessIdentity, processIdentity, runBoundedCommand } from './process-identity.js';
 
 export { ShutdownError };
 
@@ -67,6 +68,12 @@ export interface GitBoundedResult {
 export interface BoundedGitPlatform {
   readonly platform: NodeJS.Platform;
   /**
+   * Reads one process's full identity, for the `identified` event.
+   * @param pid - Process to read.
+   * @returns Its identity, `null` when absent, or `unknown`.
+   */
+  readonly identify: (pid: number) => Promise<IdentityProbe>;
+  /**
    * Lists the live descendants of a process, by parent PID, with their start identities.
    * @param pid - Root of the tree.
    * @returns The descendants found, root excluded.
@@ -106,15 +113,211 @@ export interface BoundedGitRunner {
   abortAll(options: { readonly graceMs: number }): Promise<void>;
 }
 
+/** Budget of each process-identity read the runner makes. */
+const PROBE_TIMEOUT_MS = 2_000;
+
+/** How long `taskkill` may take before the runner stops waiting on it. */
+const TASKKILL_TIMEOUT_MS = 10_000;
+
+/** How long buffered output may trail git's exit before the pipes are closed. */
+const DRAIN_MS = 100;
+
+/**
+ * The host's OS boundaries.
+ * @returns Boundaries over the process-wide identity service, `process.kill` and `taskkill`.
+ */
+function hostPlatform(): BoundedGitPlatform {
+  const identity = processIdentity();
+  return {
+    platform: process.platform,
+    identify: (pid) => identity.identify(pid, PROBE_TIMEOUT_MS),
+    descendants: async (root) => {
+      const roster = await identity.enumerate(PROBE_TIMEOUT_MS);
+      if (roster === 'unknown') return [];
+      const found: GitDescendant[] = [];
+      const parents = new Set([root]);
+      // Walk to a fixed point: a roster is not ordered parent-first.
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const entry of roster) {
+          if (parents.has(entry.parentPid) && !parents.has(entry.pid) && entry.pid !== root) {
+            parents.add(entry.pid);
+            found.push({ pid: entry.pid, startIdentity: entry.startIdentity });
+            grew = true;
+          }
+        }
+      }
+      return found;
+    },
+    startIdentity: async (pid) => {
+      const probe = await identity.identify(pid, PROBE_TIMEOUT_MS);
+      return probe === null || probe === 'unknown' ? probe : probe.startIdentity;
+    },
+    kill: (pid, signal) => {
+      process.kill(pid, signal);
+    },
+    killTree: async (pid) => {
+      await runBoundedCommand('taskkill', ['/PID', String(pid), '/T', '/F'], { timeoutMs: TASKKILL_TIMEOUT_MS });
+    },
+    shutdownSignal
+  };
+}
+
+/** One git call still running. */
+interface InFlight {
+  /** Ends git's tree; `aborted` marks the call as stopped by {@link BoundedGitRunner.abortAll}. */
+  stop(graceMs: number, aborted: boolean): Promise<void>;
+  readonly settled: Promise<unknown>;
+}
+
 /**
  * Creates a runner over the given OS boundaries.
  * @param platform - Overrides for any OS boundary; defaults are the host's.
  * @returns A runner with its own in-flight set.
- * @throws {Error} Always: not implemented yet.
  */
 export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): BoundedGitRunner {
-  void platform;
-  throw new Error('Not Implemented');
+  const os: BoundedGitPlatform = { ...hostPlatform(), ...platform };
+  const inFlight = new Set<InFlight>();
+
+  const signal = (pid: number, name: NodeJS.Signals): void => {
+    try {
+      os.kill(pid, name);
+    } catch {
+      // ESRCH: already gone. EPERM: not ours to end.
+    }
+  };
+
+  return {
+    run(cwd, args, options) {
+      if (os.shutdownSignal.aborted) return Promise.reject(new ShutdownError());
+      const graceMs = options.graceMs ?? DEFAULT_GIT_GRACE_MS;
+      return new Promise<GitBoundedResult>((resolve, reject) => {
+        // Not detached: git and everything it forks stay in the group a slot lock records.
+        const child = spawn('git', [...args], {
+          cwd,
+          env: { ...process.env, ...options.env },
+          stdio: [options.input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+          windowsHide: true
+        });
+        const pid = child.pid;
+        const stdout: Buffer[] = [];
+        const stderr: Buffer[] = [];
+        child.stdout?.on('data', (chunk: Buffer) => stdout.push(chunk));
+        child.stderr?.on('data', (chunk: Buffer) => stderr.push(chunk));
+        if (options.input !== undefined) {
+          child.stdin?.on('error', () => {});
+          child.stdin?.end(options.input);
+        }
+
+        let exited = false;
+        let timedOut = false;
+        let aborted = false;
+        let stopping: Promise<void> | undefined;
+        let markExited: () => void = () => {};
+        const exitedPromise = new Promise<void>((resolveExit) => {
+          markExited = resolveExit;
+        });
+        const identified =
+          pid === undefined || options.record === undefined
+            ? Promise.resolve()
+            : (() => {
+                options.record({ kind: 'spawned', pid });
+                return os.identify(pid).then(
+                  (probe) => {
+                    options.record?.({
+                      kind: 'identified',
+                      pid,
+                      identity: probe === null || probe === 'unknown' ? 'unknown' : probe
+                    });
+                  },
+                  () => options.record?.({ kind: 'identified', pid, identity: 'unknown' })
+                );
+              })();
+
+        const stopTree = async (grace: number): Promise<void> => {
+          if (pid === undefined || exited) return;
+          if (os.platform === 'win32') {
+            // A console git.exe can only be ended forcefully [R14].
+            await os.killTree(pid).catch(() => {});
+            return;
+          }
+          // Enumerate before signalling: once git dies its children are reparented.
+          const tree = await os.descendants(pid).catch(() => [] as readonly GitDescendant[]);
+          if (!exited) child.kill('SIGTERM');
+          for (const member of tree) signal(member.pid, 'SIGTERM');
+          await new Promise<void>((resolveGrace) => {
+            const timer = setTimeout(resolveGrace, grace);
+            void exitedPromise.then(() => {
+              if (tree.length === 0) {
+                clearTimeout(timer);
+                resolveGrace();
+              }
+            });
+          });
+          for (const member of tree) {
+            // A PID whose start identity changed was reused; it is no longer git's.
+            if ((await os.startIdentity(member.pid).catch(() => 'unknown' as const)) === member.startIdentity)
+              signal(member.pid, 'SIGKILL');
+          }
+          // Git itself is this call's unreaped child, so its PID cannot have been reused.
+          if (!exited) child.kill('SIGKILL');
+        };
+
+        const entry: InFlight = {
+          stop(grace, byAbort) {
+            if (byAbort) aborted = true;
+            stopping ??= stopTree(grace);
+            return stopping;
+          },
+          settled: exitedPromise
+        };
+        inFlight.add(entry);
+        const timer = setTimeout(() => {
+          timedOut = true;
+          void entry.stop(graceMs, false);
+        }, options.timeoutMs);
+
+        child.once('error', (error) => {
+          if (pid !== undefined) return;
+          clearTimeout(timer);
+          inFlight.delete(entry);
+          markExited();
+          reject(error);
+        });
+        child.once('exit', (code) => {
+          exited = true;
+          clearTimeout(timer);
+          markExited();
+          // An escaped descendant may hold git's pipes open; settle on git's exit.
+          const drained = new Promise<void>((resolveDrain) => {
+            const drainTimer = setTimeout(resolveDrain, DRAIN_MS);
+            child.once('close', () => {
+              clearTimeout(drainTimer);
+              resolveDrain();
+            });
+          });
+          void Promise.all([drained, identified, stopping]).then(() => {
+            child.stdout?.destroy();
+            child.stderr?.destroy();
+            inFlight.delete(entry);
+            if (pid !== undefined) options.record?.({ kind: 'exited', pid });
+            resolve({
+              exitCode: code,
+              stdout: Buffer.concat(stdout).toString('utf8'),
+              stderr: Buffer.concat(stderr).toString('utf8'),
+              timedOut,
+              aborted
+            });
+          });
+        });
+      });
+    },
+    async abortAll(options) {
+      const calls = [...inFlight];
+      await Promise.all(calls.map((call) => call.stop(options.graceMs, true)));
+      await Promise.all(calls.map((call) => call.settled));
+    }
+  };
 }
 
 let defaultRunner: BoundedGitRunner | undefined;
