@@ -370,9 +370,12 @@ export {
   type RuntimeCredentialFile,
   runtimeCredentialFileSchema
 } from './types/runtime-credential-file.js';
-export type {
-  InvalidBranchEntry,
-  WorktreeCleanupDecision,
-  WorktreeCleanupPreview,
-  WorktreeCleanupReason
+export {
+  type InvalidBranchEntry,
+  type WorktreeCleanupDecision,
+  type WorktreeCleanupPreview,
+  type WorktreeCleanupReason,
+  type WorktreeMaintenanceStageFailure,
+  type WorktreeUnknownLocks,
+  worktreeCleanupPreviewSchema
 } from './types/worktree-slots.js';
