@@ -1,9 +1,9 @@
 /**
  * The slot lifecycle across real handler processes: a handler killed at each
  * step of a create leaves nothing a start pass and `prepare-delete` cannot
- * settle; the wrapper's `SIGTERM` burst during a reattach never frees the slot
- * while the dying handler's group lives and never lets git start after the
- * fence; a burst before the agent spawn spawns nothing; and the slot layer's
+ * settle; the wrapper's `SIGTERM` burst during a reattach or a start pass's
+ * removal never frees the slot while the dying handler's group lives and never
+ * lets git start after the fence; a burst before the agent spawn spawns nothing; and the slot layer's
  * shutdown hook runs before the runtime's other hooks and the exit.
  *
  * Each handler is a detached `tsx` child (see `helpers/slot-handler.ts`), so it
@@ -15,7 +15,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { chmod, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -26,6 +26,7 @@ import { readSlotLock, readSlotLockSnapshot } from '@cards.management/sdk/slot-l
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { acquireSlot, cleanupCardSlots, openSlotSession } from '../src/lib/worktrees/index.js';
 import {
+  abandonSlotLock,
   createFixtureLayer,
   createSlotFixture,
   FakeSlotClient,
@@ -300,8 +301,7 @@ describe('a handler killed at each create step', () => {
     });
   }
 
-  // TODO(S2): unskip once the SDK's verified removal merges; the finished slot is removed as eligible.
-  it.skip('removes the complete clean slot after a SIGKILL between addBranch and the intent clear', async () => {
+  it('removes the complete clean slot after a SIGKILL between addBranch and the intent clear', async () => {
     const handler = startHandler('exec-killed', 'after-add-branch');
     await handler.waitFor((event) => event.event === 'stopped' && event.step === 'after-add-branch');
 
@@ -383,8 +383,52 @@ describe('the wrapper stop burst racing a competing launch', () => {
     await next.lock.release();
   });
 
-  // TODO(S2): the burst during an end pass's removal, after quarantine and before `update-ref -d`, needs the SDK's verified removal.
-  it.skip('keeps a slot under removal held until the dying group is gone', () => {});
+  for (const stop of ['removal-quarantined', 'removal-ref'] as const) {
+    it(`keeps a slot under removal held until the dying group is gone, then prepare-delete finishes it (${stop})`, async () => {
+      const sibling = await acquireSlot(fx.input('exec-killed'), {
+        client: fx.client,
+        logger: new Logger(),
+        layer: fx.layer
+      });
+      const dying = startHandler('exec-dying', stop);
+      await dying.waitFor((event) => event.event === 'acquired');
+      await abandonSlotLock(sibling.lock);
+      await writeFile(join(fx.scratch, 'exec-dying.events.go'), '');
+      await dying.waitFor((event) => event.event === 'stopped' && event.step === stop);
+
+      const freedWhileAlive: string[] = [];
+      let polling = true;
+      const poller = (async () => {
+        while (polling) {
+          const state = await readSlotLock(fx.slotRoot, sibling.ordinal);
+          if (state.state === 'free' && dying.groupAlive()) freedWhileAlive.push(new Date().toISOString());
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      })();
+      await stopLikeTheWrapper(dying);
+      polling = false;
+      await poller;
+
+      expect(freedWhileAlive).toEqual([]);
+      const events = await dying.events();
+      expect(events).toContainEqual({ event: 'fence' });
+      expect(events.filter((event) => event.event === 'git' && event.fencedAtCall && !event.refused)).toEqual([]);
+      const left = await readSlotLockSnapshot(fx.slotRoot, sibling.ordinal);
+      if (left === null || 'unreadable' in left) throw new Error('No readable generation');
+      expect(left.owner.executionId).toBe('exec-dying');
+      expect(left.released).toBeNull();
+
+      await fx.client.reload();
+      const deletion = await cleanupCardSlots(fx.cleanupContext(), { requester: null, mode: 'prepare-delete' });
+
+      expect(deletion.ok).toBe(true);
+      expect(await oidOf(sibling.branch)).toBeNull();
+      expect(await worktreePaths()).toEqual([fx.repoRoot]);
+      expect(await exists(sibling.worktreePath)).toBe(false);
+      expect((await readdir(fx.slotRoot)).filter((name) => name.includes('.deleting-'))).toEqual([]);
+      expect(fx.client.registrations.size).toBe(0);
+    });
+  }
 });
 
 describe('shutdown hook order', () => {

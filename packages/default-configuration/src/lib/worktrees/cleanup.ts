@@ -42,12 +42,6 @@ export const SLOT_CLEANUP_MAINTENANCE_BUDGET_MS = 270_000;
 /** Budget of a pass's batched identity read, and of its one retry; cleanup is off the launch path. */
 const CLEANUP_JUDGE_TIMEOUT_MS = 15_000;
 
-/**
- * The reported reason for a slot an interrupted creation left in an uncertain state.
- * TODO(S2): `creation_residue` joins `WorktreeCleanupReason` with the S2 merge; report it directly then.
- */
-const CREATION_RESIDUE_REASON: WorktreeCleanupReason = 'unusable_checkout';
-
 /** Where and for whom a pass runs. */
 export interface SlotCleanupContext {
   readonly client: SlotClient;
@@ -339,7 +333,6 @@ export async function cleanupCardSlots(
     previous: SlotLockPrevious,
     ordinal: number
   ): Promise<Pick<WorktreeCleanupDecision, 'reason' | 'detail' | 'outcome'>> => {
-    const checkpoint = (): void => lock.checkpoint();
     const before = (await discoverSlots(git, client, place)).slots.find((slot) => slot.ordinal === ordinal);
     const recovery = await recoverSlot(
       lock,
@@ -353,12 +346,8 @@ export async function cleanupCardSlots(
     );
     if (recovery.unsettled !== null)
       return {
-        reason:
-          recovery.unsettled.reason === 'creation_residue'
-            ? CREATION_RESIDUE_REASON
-            : recovery.unsettled.reason === 'removal_restored'
-              ? 'removal_restored'
-              : 'quarantine_stranded',
+        // A holding area that could not be recovered has no reason of its own; its manifest is kept.
+        reason: recovery.unsettled.reason === 'recovery_failed' ? 'cleanup_failed' : recovery.unsettled.reason,
         detail: recovery.unsettled.detail,
         outcome: 'preserved'
       };
@@ -372,10 +361,13 @@ export async function cleanupCardSlots(
       return { reason: verdict.reason, detail: verdict.detail, outcome: 'preserved' };
     let detail = verdict.detail;
     if (slot.directoryExists) {
-      await removal.stopSlotFsmonitor(slot.path, { checkpoint });
+      const removalGit = { git: git.removalRunner((event) => lock.recordGit(event)) };
+      lock.checkpoint();
+      await removal.stopSlotFsmonitor(slot.path, removalGit);
       let probe: Awaited<ReturnType<typeof removal.findSlotOccupants>>;
       try {
-        probe = await removal.findSlotOccupants(slot.path, { checkpoint });
+        lock.checkpoint();
+        probe = await removal.findSlotOccupants(slot.path);
       } catch (error) {
         return { reason: 'in_use', detail: `the occupant probe failed: ${describe(error)}`, outcome: 'preserved' };
       }
@@ -383,10 +375,10 @@ export async function cleanupCardSlots(
         return { reason: 'in_use', detail: describeOccupants(probe.occupants, previous), outcome: 'preserved' };
       if (probe.unprobed > 0) detail = `${detail}; ${probe.unprobed} processes could not be probed`;
       lock.checkpoint();
-      const quarantine = await removal.quarantineSlot(repoRoot, slot.path, { checkpoint });
+      const quarantine = await removal.quarantineSlot(repoRoot, slot.path, removalGit);
       const removed = await removal.removeQuarantinedSlot(
         { repoRoot, slotPath: slot.path, quarantine, lock },
-        { checkpoint }
+        removalGit
       );
       if (removed.status === 'refused') return { reason: removed.reason, detail: removed.detail, outcome: 'preserved' };
     } else if (slot.entry !== null) {

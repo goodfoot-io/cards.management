@@ -1,7 +1,8 @@
 /**
  * `acquireSlot` against real repositories and real slot locks: LIFO reuse,
  * usability refusals, reattach, recreate, create, ordinal reservation, the
- * create-only ref, in-process rollback, handoff and legacy owners.
+ * create-only ref, in-process rollback, handoff and legacy owners, and the
+ * SDK provisioning the slot git runner drives.
  *
  * @summary Slot acquisition acceptance tests
  * @module
@@ -11,6 +12,7 @@ import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Logger } from '@cards.management/sdk';
 import { acquireSlotLock, readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
+import { captureOriginalHooksPath } from '@cards.management/sdk/worktree';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { type AcquiredSlot, acquireSlot, describeSkippedSlots } from '../src/lib/worktrees/index.js';
 import { abandonSlotLock, createSlotFixture, type SlotFixture } from './helpers/slot-fixture.js';
@@ -69,6 +71,25 @@ async function oidOf(branch: string): Promise<string | null> {
 }
 
 describe('acquireSlot', () => {
+  it('binds a created slot to its card through the SDK provisioning and the slot git runner', async () => {
+    const slot = await acquire('exec-1');
+
+    expect((await readFile(join(slot.worktreePath, '.cards', 'CARD_ID'), 'utf8')).trim()).toBe(fx.cardId);
+    expect(await fx.git(['config', '--worktree', 'core.hooksPath'], slot.worktreePath)).toBe(fx.layer.sharedHooksDir);
+    expect(await fx.git(['config', `branch.${slot.branch}.cardsParent`])).toBe('main');
+    expect(await fx.git(['status', '--porcelain', '--untracked-files=all'], slot.worktreePath)).toBe('');
+    await slot.lock.release();
+  });
+
+  it('rejects a failed slot git call with its numeric exit code, so an unset config key reads as unset', async () => {
+    const runGit = fx.layer.git.provisioningRunner({});
+
+    const failure = await runGit(fx.repoRoot, ['config', 'core.hooksPath']).catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ exitCode: 1 });
+    expect(await captureOriginalHooksPath(fx.repoRoot, runGit)).toBe(join(fx.repoRoot, '.git', 'hooks'));
+  });
+
   it('creates, registers and provisions ordinal 1 for a card without slots, and clears its intent', async () => {
     const slot = await acquire('exec-1');
 

@@ -163,8 +163,7 @@ describe('openSlotSession', () => {
     }
   });
 
-  // TODO(S2): unskip once the SDK's verified removal merges.
-  it.skip('removes the merged sibling a killed interactive session left, in the start pass', async () => {
+  it('removes the merged sibling a killed interactive session left, in the start pass', async () => {
     const sibling = await acquireSlot(fx.input('exec-killed'), {
       client: fx.client,
       logger: new Logger(),

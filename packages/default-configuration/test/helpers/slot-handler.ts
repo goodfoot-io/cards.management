@@ -2,7 +2,8 @@
  * A coding-agent handler reduced to its slot lifecycle, run as its own process
  * by the handler-process tests: it installs the runtime's signal handlers,
  * opens a slot session against a fixture repository, spawns a stand-in agent
- * and completes. A configured stop point parks it mid-lifecycle so the test
+ * and completes; at a removal stop it instead runs the session's start
+ * cleanup pass once the test creates `<eventsPath>.go`. A configured stop point parks it mid-lifecycle so the test
  * can kill it or send the wrapper's `SIGTERM` burst. Everything it does is
  * appended to an event log the test reads.
  *
@@ -14,7 +15,7 @@
  */
 
 import { spawn } from 'node:child_process';
-import { appendFileSync } from 'node:fs';
+import { appendFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { Logger } from '@cards.management/sdk';
 import {
@@ -44,7 +45,11 @@ export type SlotHandlerStop =
   /** After the session opened, until the shutdown fence closes; then it tries to spawn the agent. */
   | 'before-spawn'
   /** After the agent spawned. */
-  | 'after-spawn';
+  | 'after-spawn'
+  /** In the start pass's removal of a sibling: after `worktree move` to quarantine, before the proof's `status`. */
+  | 'removal-quarantined'
+  /** In the start pass's removal of a sibling: after the quarantine is gone, before `update-ref -d`. */
+  | 'removal-ref';
 
 /** What the handler runs. */
 export interface SlotHandlerConfig {
@@ -104,9 +109,12 @@ if (config.stopAt === 'add-branch') client.beforeAddBranch = () => park('add-bra
 if (config.stopAt === 'after-add-branch') client.afterAddBranch = () => park('after-add-branch');
 
 const hooks: SlotLayerHooks = {
-  beforeGit: async (args) => {
+  beforeGit: async (args, cwd) => {
     if (config.stopAt === 'intent' && args[0] === 'update-ref') await park('intent');
     if (config.stopAt === 'update-ref' && args[0] === 'worktree' && args[1] === 'add') await park('update-ref');
+    if (config.stopAt === 'removal-quarantined' && args[0] === 'status' && cwd.includes('.deleting-'))
+      await park('removal-quarantined');
+    if (config.stopAt === 'removal-ref' && args[0] === 'update-ref' && args[1] === '-d') await park('removal-ref');
   },
   beforeProvision: config.stopAt === 'provision' ? () => park('provision') : null,
   afterGit: (args, call) => log({ event: 'git', args, ...call })
@@ -140,6 +148,14 @@ log({
   generation: session.slot.lock.generation,
   outcome: session.slot.outcome
 });
+
+if (config.stopAt === 'removal-quarantined' || config.stopAt === 'removal-ref') {
+  // The test abandons the sibling only after this handler took its own slot, then lets the pass start.
+  while (!existsSync(`${config.eventsPath}.go`)) await new Promise((resolve) => setTimeout(resolve, 20));
+  // The start pass parks inside the sibling's removal; finish awaits it.
+  session.beginCleanup();
+  await session.finish();
+}
 
 if (config.stopAt === 'before-spawn') {
   log({ event: 'stopped', step: 'before-spawn' });

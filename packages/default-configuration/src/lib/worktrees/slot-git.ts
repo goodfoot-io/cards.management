@@ -9,6 +9,7 @@
 
 import type { BoundedGitRunner, GitBoundedResult, GitChildEvent } from '@cards.management/sdk/bounded-git';
 import type { WorktreeGitRunner } from '@cards.management/sdk/worktree';
+import type { SlotRemovalGit } from '@cards.management/sdk/worktree-removal';
 
 /** Deadline of a read-only slot git call. */
 export const SLOT_GIT_READ_TIMEOUT_MS = 30_000;
@@ -80,6 +81,13 @@ export interface SlotGit {
    * @returns A runner that throws on failure.
    */
   provisioningRunner(options: SlotGitCallOptions): WorktreeGitRunner;
+  /**
+   * Adapts the underlying bounded runner to the SDK removal steps, which add
+   * the fsmonitor override and the deadline themselves.
+   * @param record - The holding lock's `recordGit`.
+   * @returns A runner that records every call's git children into the lock.
+   */
+  removalRunner(record: (event: GitChildEvent) => void): SlotRemovalGit;
 }
 
 /**
@@ -103,6 +111,7 @@ export function createSlotGit(runner: Pick<BoundedGitRunner, 'run'>): SlotGit {
     run,
     text,
     provisioningRunner: (options) => (cwd, args, input) =>
-      text(cwd, args, { ...options, ...(input === undefined ? {} : { input }) })
+      text(cwd, args, { ...options, ...(input === undefined ? {} : { input }) }),
+    removalRunner: (record) => ({ run: (cwd, args, options) => runner.run(cwd, args, { ...options, record }) })
   };
 }

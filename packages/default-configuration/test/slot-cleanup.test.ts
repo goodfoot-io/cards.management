@@ -7,8 +7,9 @@
  * @module
  */
 
+import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -233,8 +234,7 @@ describe('cleanupCardSlots preservation', () => {
 });
 
 describe('cleanupCardSlots removal', () => {
-  // TODO(S2): unskip once the SDK's verified removal (quarantineSlot, removeQuarantinedSlot) merges.
-  it.skip('removes a merged clean slot: checkout, ref and registration', async () => {
+  it('removes a merged clean slot: checkout, ref and registration', async () => {
     const slot = await finishedSlot('exec-1');
 
     const result = await pass();
@@ -245,8 +245,7 @@ describe('cleanupCardSlots removal', () => {
     expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
   });
 
-  // TODO(S2): unskip once the SDK's verified removal merges.
-  it.skip('removes an unregistered clean merged slot without calling removeBranch', async () => {
+  it('removes an unregistered clean merged slot without calling removeBranch', async () => {
     const slot = await finishedSlot('exec-1');
     fx.client.registrations.delete(slot.branch);
 
@@ -254,8 +253,7 @@ describe('cleanupCardSlots removal', () => {
     expect(fx.client.calls.filter((call) => call.startsWith('removeBranch'))).toEqual([]);
   });
 
-  // TODO(S2): unskip once the SDK's occupant probe merges.
-  it.skip('refuses a slot with an occupant as in_use', async () => {
+  it('refuses a slot with an occupant as in_use', async () => {
     const slot = await finishedSlot('exec-1');
     const { spawn } = await import('node:child_process');
     const occupant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: slot.worktreePath });
@@ -266,15 +264,15 @@ describe('cleanupCardSlots removal', () => {
     }
   });
 
-  // TODO(S2): unskip once the SDK's residue recovery merges.
-  it.skip('recovers residue under the lock', async () => {
+  it('recovers residue under the lock', async () => {
     const slot = await finishedSlot('exec-1');
-    await fx.git(['worktree', 'move', slot.worktreePath, `${slot.worktreePath}.deleting-test`]);
+    const quarantine = `${slot.worktreePath}.deleting-${randomUUID()}`;
+    await fx.git(['worktree', 'move', slot.worktreePath, quarantine]);
 
     const result = await pass();
 
     expect(decisionOf(result, slot.branch).outcome).toBe('removed');
-    expect(await readdir(fx.slotRoot)).not.toContain('1.deleting-test');
+    expect(await readdir(fx.slotRoot)).not.toContain(basename(quarantine));
   });
 });
 

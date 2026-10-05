@@ -1,8 +1,8 @@
 /**
  * A real workspace repository, a slot root under a temporary worktrees
  * directory, an in-memory Cards client and a slot layer with its own shutdown
- * coordinator, for slot-layer tests. Git and locks are real; only the Cards
- * API and the S3 provisioning step are stand-ins.
+ * coordinator, for slot-layer tests. Git, locks, provisioning and removal are
+ * real; only the Cards API is a stand-in.
  *
  * @summary Real-repository fixture for worktree slot tests
  * @module
@@ -10,7 +10,7 @@
 
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -33,7 +33,7 @@ import type { SlotLock } from '@cards.management/sdk/slot-lock';
 import type { SlotActionInput, SlotCleanupContext, SlotClient, SlotLayer } from '../../src/lib/worktrees/index.js';
 import { defaultSlotLayer } from '../../src/lib/worktrees/index.js';
 import type { ProvisionSlotCheckoutOptions } from '../../src/lib/worktrees/seams.js';
-import { interimSlotRemoval } from '../../src/lib/worktrees/seams.js';
+import { defaultSlotSeams } from '../../src/lib/worktrees/seams.js';
 import { createSlotGit } from '../../src/lib/worktrees/slot-git.js';
 
 const run = promisify(execFile);
@@ -207,13 +207,13 @@ export interface SlotLayerHooks {
 
 /**
  * Builds the slot layer fixtures use: the host layer with git routed through
- * {@link SlotLayerHooks.beforeGit}, provisioning that only records its calls,
- * and the interim removal seam.
+ * {@link SlotLayerHooks.beforeGit}, and the SDK's provisioning (recorded and
+ * interceptable first) and verified removal, whose git also runs through it.
  * @param scratch - The fixture's scratch directory.
  * @param hooks - Interception points, read at each call.
  * @param provisioned - Receives every provisioning call.
  * @param shutdown - The coordinator slot locks fence on; the process's own when omitted.
- * @returns A layer whose git, provisioning and removal are the fixture's.
+ * @returns A layer whose git and provisioning are intercepted by the fixture.
  */
 export function createFixtureLayer(
   scratch: string,
@@ -242,10 +242,9 @@ export function createFixtureLayer(
         options.checkpoint();
         await hooks.beforeProvision?.(options);
         provisioned.push(options);
-        return { checkout: options.worktreePath, branchName: options.branch };
+        return defaultSlotSeams.provisionSlotCheckout(options);
       },
-      // TODO(S2): bind the SDK's verified removal once it merges.
-      removal: interimSlotRemoval
+      removal: defaultSlotSeams.removal
     },
     ...(shutdown === undefined ? {} : { lockEnvironment: { shutdown } }),
     sharedHooksDir: join(scratch, 'workspace-hooks')
@@ -265,7 +264,7 @@ export interface SlotFixture {
   /** This test's shutdown coordinator; its exit only records the code. */
   readonly shutdown: ShutdownCoordinator;
   readonly layer: SlotLayer;
-  /** Provisioning calls made through the layer's S3 seam. */
+  /** Provisioning calls made through the layer's seam. */
   readonly provisioned: ProvisionSlotCheckoutOptions[];
   /** Runs before every provisioning call; a throw fails it. */
   beforeProvision: ((options: ProvisionSlotCheckoutOptions) => Promise<void>) | null;
@@ -296,8 +295,8 @@ export interface SlotFixture {
 
 /**
  * Creates a fixture: a repository with one commit on `main`, a temporary
- * `CARDS_WORKTREES_DIR`, a fake client and a layer whose provisioning only
- * records its calls.
+ * `CARDS_WORKTREES_DIR`, a scratch extension with compiled hook scripts, a
+ * fake client and a layer whose provisioning is recorded.
  * @param cardId - Card the slots belong to.
  * @returns A ready fixture; call `dispose` after the test.
  */
@@ -313,6 +312,11 @@ export async function createSlotFixture(cardId = 'card-1'): Promise<SlotFixture>
   };
   await run('git', ['init', '-q', '-b', 'main', repoRoot]);
   await git(['commit', '-q', '--allow-empty', '-m', 'initial']);
+  // Provisioning installs the extension's compiled hook scripts beside the shared dispatchers.
+  const hookScripts = join(scratch, 'extension', 'dist', 'git-hooks');
+  await mkdir(hookScripts, { recursive: true });
+  for (const hook of ['pre-commit', 'post-commit', 'post-rewrite'])
+    await writeFile(join(hookScripts, `${hook}.mjs`), `// ${hook} from the fixture extension\n`);
 
   const client = new FakeSlotClient(cardId);
   const shutdown = createShutdownCoordinator({ exit: () => {} });
