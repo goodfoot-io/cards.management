@@ -17,6 +17,16 @@ export {
   type SlotClient,
   type SlotHandoffData
 } from './acquire.js';
+export {
+  cleanupCardSlots,
+  SLOT_CLEANUP_MAINTENANCE_BUDGET_MS,
+  SLOT_CLEANUP_PASS_BUDGET_MS,
+  type SlotCleanupContext,
+  type SlotCleanupMode,
+  type SlotCleanupOptions,
+  type SlotCleanupResult,
+  type SlotCleanupStage
+} from './cleanup.js';
 export { type CreationRecovery, recoverCreationIntent, rollbackCreation } from './intent.js';
 export { defaultSlotLayer, type SlotLayer } from './layer.js';
 export type {

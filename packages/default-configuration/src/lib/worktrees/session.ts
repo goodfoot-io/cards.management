@@ -17,6 +17,7 @@ import {
   type SlotClient,
   type SlotHandoffData
 } from './acquire.js';
+import type { SlotCleanupResult } from './cleanup.js';
 import type { SlotLayer } from './layer.js';
 
 /** What the switch callback returns to the runtime for the successor. */
@@ -45,6 +46,18 @@ export interface SlotSession {
   offerHandoff(sessionId: string): Promise<SwitchToInteractiveData>;
   /** Whether the session was switched to interactive. */
   readonly switched: boolean;
+  /**
+   * Starts the start pass over the card's other slots, concurrently with the
+   * agent's start, with its failure handling attached at once. Its decisions
+   * are logged and never change the action's outcome.
+   */
+  beginCleanup(): void;
+  /**
+   * Awaits the start pass, then runs the end pass sparing this slot unless
+   * the session was switched. Never rejects, and never releases the lock.
+   * @returns The end pass's result, or null when the switch latch skipped it.
+   */
+  finish(): Promise<SlotCleanupResult | null>;
 }
 
 /** Options of {@link openSlotSession}. */
@@ -88,6 +101,12 @@ export async function openSlotSession(input: SlotActionInput, options: OpenSlotS
         sessionId,
         slot: { ordinal: slot.ordinal, branch: slot.branch, worktreePath: slot.worktreePath, generation, token }
       };
+    },
+    beginCleanup() {
+      throw new Error('Not Implemented');
+    },
+    async finish() {
+      throw new Error('Not Implemented');
     }
   };
 }

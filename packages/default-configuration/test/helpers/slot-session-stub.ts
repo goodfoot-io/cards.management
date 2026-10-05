@@ -56,6 +56,8 @@ export const openSlotSessionStub = vi.fn(async (): Promise<SlotSession> => {
       };
       offeredHandoffs.push(handoff);
       return handoff;
-    }
+    },
+    beginCleanup: () => {},
+    finish: async () => null
   };
 });
