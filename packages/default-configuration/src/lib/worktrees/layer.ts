@@ -10,7 +10,7 @@
 import { runGitBounded } from '@cards.management/sdk/bounded-git';
 import type { SlotLockEnvironment } from '@cards.management/sdk/slot-lock';
 import { defaultSlotSeams, type SlotSeams, slotSharedHooksDir } from './seams.js';
-import { createSlotGit, type SlotGit } from './slot-git.js';
+import { createSlotGit, SLOT_GIT_CHECKOUT_TIMEOUT_MS, type SlotGit } from './slot-git.js';
 
 /** Dependencies of the slot layer. */
 export interface SlotLayer {
@@ -21,6 +21,8 @@ export interface SlotLayer {
   /** Shared hook dispatcher directory every slot checkout points at. */
   readonly sharedHooksDir: string;
   readonly platform: NodeJS.Platform;
+  /** Deadline of each checkout-populating git call: `worktree add` and the provisioning steps. */
+  readonly checkoutTimeoutMs: number;
   /** Budget of the first batched identity read of a pass. */
   readonly judgeTimeoutMs: number;
   /** Budget of its single retry. */
@@ -38,6 +40,7 @@ export function defaultSlotLayer(): SlotLayer {
     seams: defaultSlotSeams,
     sharedHooksDir: slotSharedHooksDir(),
     platform: process.platform,
+    checkoutTimeoutMs: SLOT_GIT_CHECKOUT_TIMEOUT_MS,
     judgeTimeoutMs: 5_000,
     judgeRetryTimeoutMs: 10_000
   };

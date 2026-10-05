@@ -32,7 +32,6 @@ import { type CreationContext, rollbackCreation } from './intent.js';
 import { defaultSlotLayer, type SlotLayer } from './layer.js';
 import { recoverSlot } from './recovery.js';
 import { type RegistrationClient, registerSlot } from './registration.js';
-import { SLOT_GIT_CHECKOUT_TIMEOUT_MS } from './slot-git.js';
 
 /** The client calls acquisition needs. */
 export type SlotClient = RegistrationClient & Pick<CardsClient, 'getCard' | 'getExecutionStatus'>;
@@ -289,7 +288,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
       }
       lock.checkpoint();
       await git.text(repoRoot, ['worktree', 'add', ...(staleEntry ? ['--force'] : []), intent.path, intent.branch], {
-        timeoutMs: SLOT_GIT_CHECKOUT_TIMEOUT_MS,
+        timeoutMs: layer.checkoutTimeoutMs,
         record: (event) => lock.recordGit(event)
       });
       lock.checkpoint();
@@ -303,7 +302,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
         extensionPath: input.extensionPath,
         sharedHooksDir: layer.sharedHooksDir,
         runGit: git.provisioningRunner({
-          timeoutMs: SLOT_GIT_CHECKOUT_TIMEOUT_MS,
+          timeoutMs: layer.checkoutTimeoutMs,
           record: (event) => lock.recordGit(event)
         }),
         checkpoint: () => lock.checkpoint()

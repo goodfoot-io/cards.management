@@ -376,9 +376,15 @@ describe('the wrapper stop burst racing a competing launch', () => {
     const events = await dying.events();
     expect(events).toContainEqual({ event: 'spawn-refused' });
     expect(events.filter((event) => event.event === 'spawned')).toEqual([]);
+    // No slot operation was in flight, so the slot hook released the generation [G1].
+    if (acquired.event !== 'acquired') throw new Error('No acquisition logged');
+    const left = await readSlotLockSnapshot(fx.slotRoot, acquired.ordinal);
+    if (left === null || 'unreadable' in left) throw new Error('No readable generation');
+    expect(left.generation).toBe(acquired.generation);
+    expect(left.released).not.toBeNull();
     await fx.client.reload();
     const next = await acquireSlot(fx.input('exec-2'), { client: fx.client, logger: new Logger(), layer: fx.layer });
-    expect(next.ordinal).toBe(acquired.event === 'acquired' ? acquired.ordinal : -1);
+    expect(next.ordinal).toBe(acquired.ordinal);
     expect(next.outcome).toBe('reused');
     await next.lock.release();
   });

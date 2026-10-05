@@ -14,7 +14,7 @@ import type { SlotRemovalGit } from '@cards.management/sdk/worktree-removal';
 /** Deadline of a read-only slot git call. */
 export const SLOT_GIT_READ_TIMEOUT_MS = 30_000;
 
-/** Deadline of a checkout-populating call (`worktree add`, provisioning steps). */
+/** Default deadline of a checkout-populating call (`worktree add`, provisioning steps); see `SlotLayer.checkoutTimeoutMs`. */
 export const SLOT_GIT_CHECKOUT_TIMEOUT_MS = 600_000;
 
 /** Options of one slot git call. */

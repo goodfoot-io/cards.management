@@ -8,9 +8,10 @@
  * @module
  */
 
-import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Logger } from '@cards.management/sdk';
+import { isProcessAbsent } from '@cards.management/sdk/process-identity';
 import { acquireSlotLock, readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import { captureOriginalHooksPath } from '@cards.management/sdk/worktree';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -319,6 +320,60 @@ describe('acquireSlot', () => {
 
     expect(await exists(path)).toBe(false);
     expect(await oidOf('cards/card-1/1')).toBeNull();
+  });
+
+  describe('a worktree add that outlives its deadline', () => {
+    /**
+     * Acquires with a short checkout deadline and asserts the create was rolled back.
+     * @param pidFile - Where the stalled process wrote its PID.
+     */
+    async function expectTimedOutCreateRolledBack(pidFile: string): Promise<void> {
+      await expect(
+        acquireSlot(fx.input('exec-1'), {
+          client: fx.client,
+          logger: new Logger(),
+          layer: { ...fx.layer, checkoutTimeoutMs: 1_500 }
+        })
+      ).rejects.toThrow('timed out');
+
+      const path = join(fx.slotRoot, '1');
+      expect(await exists(path)).toBe(false);
+      expect(await fx.git(['worktree', 'list', '--porcelain'])).not.toContain(path);
+      expect(await oidOf('cards/card-1/1')).toBeNull();
+      expect(fx.client.registrations.size).toBe(0);
+      const left = await snapshotOf(1);
+      expect(left.creating).toBeNull();
+      expect(left.released).not.toBeNull();
+      // The stalled process was in git's tree, so the deadline ended it.
+      const stalled = Number((await readFile(pidFile, 'utf8')).trim());
+      expect(stalled).toBeGreaterThan(1);
+      // Its new parent may take a moment to reap it.
+      const deadline = Date.now() + 5_000;
+      while (!isProcessAbsent(stalled) && Date.now() < deadline)
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(isProcessAbsent(stalled)).toBe(true);
+    }
+
+    it('rolls back a create whose smudge filter stalls the checkout', async () => {
+      const pidFile = join(fx.scratch, 'smudge.pid');
+      await writeFile(join(fx.repoRoot, '.gitattributes'), '*.slow filter=slow\n');
+      await writeFile(join(fx.repoRoot, 'data.slow'), 'content\n');
+      await fx.git(['add', '.gitattributes', 'data.slow']);
+      await fx.git(['commit', '-q', '-m', 'slow file']);
+      await fx.git(['config', 'filter.slow.clean', 'cat']);
+      await fx.git(['config', 'filter.slow.smudge', `sh -c 'echo $$ > "${pidFile}"; exec sleep 600'`]);
+
+      await expectTimedOutCreateRolledBack(pidFile);
+    });
+
+    it('rolls back a create whose post-checkout hook waits on a process it backgrounded', async () => {
+      const pidFile = join(fx.scratch, 'hook.pid');
+      const hook = join(fx.repoRoot, '.git', 'hooks', 'post-checkout');
+      await writeFile(hook, `#!/bin/sh\nsleep 600 &\necho $! > "${pidFile}"\nwait\n`);
+      await chmod(hook, 0o755);
+
+      await expectTimedOutCreateRolledBack(pidFile);
+    });
   });
 
   it('uses the main repository slot root when REPO_ROOT is a linked worktree', async () => {

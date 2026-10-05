@@ -8,17 +8,19 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
+import { OccupantProbeError } from '@cards.management/sdk/worktree-removal';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type AcquiredSlot,
   acquireSlot,
   cleanupCardSlots,
   type SlotCleanupOptions,
-  type SlotCleanupResult
+  type SlotCleanupResult,
+  type SlotLayer
 } from '../src/lib/worktrees/index.js';
 import { createSlotFixture, type SlotFixture } from './helpers/slot-fixture.js';
 
@@ -59,6 +61,18 @@ async function finishedSlot(executionId: string): Promise<AcquiredSlot> {
  */
 function pass(options: Partial<SlotCleanupOptions> = {}): Promise<SlotCleanupResult> {
   return cleanupCardSlots(fx.cleanupContext(), { requester: null, mode: 'cleanup', ...options });
+}
+
+/**
+ * Whether a path exists.
+ * @param path - Path to test.
+ * @returns True when it exists.
+ */
+async function exists(path: string): Promise<boolean> {
+  return stat(path).then(
+    () => true,
+    () => false
+  );
 }
 
 /**
@@ -262,6 +276,74 @@ describe('cleanupCardSlots removal', () => {
     } finally {
       occupant.kill('SIGKILL');
     }
+  });
+
+  it('preserves a slot as in_use when the occupant probe itself fails', async () => {
+    const slot = await finishedSlot('exec-1');
+    const removal = fx.layer.seams.removal;
+    const layer: SlotLayer = {
+      ...fx.layer,
+      seams: {
+        ...fx.layer.seams,
+        removal: {
+          ...removal,
+          findSlotOccupants: () => Promise.reject(new OccupantProbeError('injected probe failure'))
+        }
+      }
+    };
+
+    const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode: 'cleanup' });
+
+    const decision = decisionOf(result, slot.branch);
+    expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
+    expect(decision.detail).toContain('injected probe failure');
+    expect(await exists(slot.worktreePath)).toBe(true);
+    expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
+    expect(fx.client.registrations.has(slot.branch)).toBe(true);
+  });
+
+  it('restores a slot whose held content changes during removal and reports it removal_restored', async () => {
+    await writeFile(join(fx.repoRoot, 'notes.txt'), 'notes\n');
+    await fx.git(['add', 'notes.txt']);
+    await fx.git(['commit', '-q', '-m', 'notes']);
+    const slot = await finishedSlot('exec-1');
+    const removal = fx.layer.seams.removal;
+    let wrote = false;
+    const layer: SlotLayer = {
+      ...fx.layer,
+      seams: {
+        ...fx.layer.seams,
+        removal: {
+          ...removal,
+          removeQuarantinedSlot: (target, options) =>
+            removal.removeQuarantinedSlot(target, {
+              ...options,
+              // The Git marker is taken last, so every other entry is already held: write into the held notes.
+              checkpoint: async (entryPath) => {
+                if (wrote || basename(entryPath) !== '.git') return;
+                const holding = `${target.quarantine}.held`;
+                for (const name of await readdir(holding)) {
+                  if (!/^\d+$/.test(name)) continue;
+                  const held = join(holding, name);
+                  if ((await readFile(held, 'utf8')) !== 'notes\n') continue;
+                  await writeFile(held, 'notes\nlate write\n');
+                  wrote = true;
+                }
+              }
+            })
+        }
+      }
+    };
+
+    const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode: 'cleanup' });
+
+    expect(wrote).toBe(true);
+    expect(decisionOf(result, slot.branch)).toMatchObject({ reason: 'removal_restored', outcome: 'preserved' });
+    expect(await readFile(join(slot.worktreePath, 'notes.txt'), 'utf8')).toBe('notes\nlate write\n');
+    expect((await readdir(fx.slotRoot)).filter((name) => name.includes('.deleting-'))).toEqual([]);
+    expect(await fx.git(['worktree', 'list', '--porcelain'])).toContain(slot.worktreePath);
+    expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
+    expect(fx.client.registrations.has(slot.branch)).toBe(true);
   });
 
   it('recovers residue under the lock', async () => {
