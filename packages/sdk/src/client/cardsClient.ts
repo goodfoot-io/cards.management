@@ -941,6 +941,9 @@ export class CardsClient {
         if (exchange.status === 409 && rootCommandErrorCode(exchange.body) === 'command_unconfigured') {
           throw fail('unconfigured', `the configuration has no ${command} command`);
         }
+        if (exchange.status === 409 && rootCommandErrorCode(exchange.body) === 'card_deleting') {
+          throw fail('rejected', 'the card is being deleted');
+        }
         if (ROOT_COMMAND_REJECTIONS.has(exchange.status))
           throw fail('rejected', `launch refused with ${exchange.status}`);
         const parsed = publicActionLaunchResponseSchema.safeParse(exchange.body);

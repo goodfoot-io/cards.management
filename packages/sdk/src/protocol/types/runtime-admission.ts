@@ -82,7 +82,9 @@ export type AdmissionRejectionReason =
   | 'revoked'
   | 'retention-exhausted'
   | 'reload-window'
-  | 'upgrade-cli-sdk';
+  | 'upgrade-cli-sdk'
+  /** The card is being deleted, so its delete fence refuses every fresh admission. */
+  | 'card_deleting';
 
 /**
  * Why the authority cannot answer definitively. A client must never treat any

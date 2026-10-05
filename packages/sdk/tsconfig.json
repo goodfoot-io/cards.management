@@ -18,6 +18,6 @@
     "incremental": true,
     "tsBuildInfoFile": "./tsconfig.tsbuildinfo"
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"],
+  "include": ["src/**/*.ts", "test/**/*.ts", "bench/**/*.ts"],
   "exclude": ["node_modules"]
 }

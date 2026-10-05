@@ -30,7 +30,8 @@ const MAX_RESPONSE_BYTES = MAX_COMMAND_REPORT_BYTES + 64 * 1024;
 const HTTP_REJECTIONS = new Set<RuntimeActionHttpRejectionReason>([
   'authentication-failed',
   'invalid-request',
-  'not-found'
+  'not-found',
+  'card-deleting'
 ]);
 const TRANSPORT_UNCERTAINTIES = new Set<RuntimeActionTransportUncertaintyReason>([
   'discovery-unavailable',
@@ -46,6 +47,20 @@ function isHttpRejection(value: unknown): value is RuntimeActionHttpRejectionRea
 
 function isTransportUncertainty(value: unknown): value is RuntimeActionTransportUncertaintyReason {
   return typeof value === 'string' && TRANSPORT_UNCERTAINTIES.has(value as RuntimeActionTransportUncertaintyReason);
+}
+
+/**
+ * Whether a 409 body is the server's refusal of a card that is being deleted:
+ * the launch route's rejected record
+ * `{ disposition: 'rejected', reason: 'card_deleting', execution: null }`, or an
+ * error body carrying `{ code: 'card_deleting' }`.
+ * @param body - The parsed 409 body.
+ * @returns True for the card-deleting refusal.
+ */
+function isCardDeletingRefusal(body: unknown): boolean {
+  if (typeof body !== 'object' || body === null) return false;
+  const { code, reason } = body as { code?: unknown; reason?: unknown };
+  return code === 'card_deleting' || reason === 'card_deleting';
 }
 
 const rejectionReasonSchema = z.enum([
@@ -222,7 +237,12 @@ export interface RuntimeActionClientOptions {
 }
 
 /** HTTP-level failures that settle a request without granting retry permission. */
-export type RuntimeActionHttpRejectionReason = 'authentication-failed' | 'invalid-request' | 'not-found';
+export type RuntimeActionHttpRejectionReason =
+  | 'authentication-failed'
+  | 'invalid-request'
+  | 'not-found'
+  /** The server refused the launch with a 409 rejected record whose reason is `card_deleting`: the card is being deleted. */
+  | 'card-deleting';
 
 /** Failures for which the durable server outcome is unknown. */
 export type RuntimeActionTransportUncertaintyReason =
@@ -351,6 +371,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
       if (response.status === 503 && typeof body === 'object' && body !== null && 'error' in body) {
         return 'server-unavailable';
       }
+      if (response.status === 409 && isCardDeletingRefusal(body)) return 'card-deleting';
       if ((response.status < 200 || response.status >= 300) && ![404, 409, 503].includes(response.status)) {
         return 'invalid-response';
       }

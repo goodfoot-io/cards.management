@@ -66,7 +66,11 @@ export class WorktreeSettlementCleanupError extends Error {
 
 const execFileAsync = promisify(execFile);
 
-/** Git executor supplied by the owner process, including exact optional stdin bytes. */
+/**
+ * Git executor supplied by the owner process, including exact optional stdin bytes.
+ * Resolves with standard output; a non-zero exit rejects with an error carrying the numeric `exitCode`,
+ * which callers read to tell an unset config key (exit 1) from a failure.
+ */
 export type WorktreeGitRunner = (cwd: string, args: readonly string[], input?: string) => Promise<string>;
 
 /** Existing-checkout materialization without Git registration or card registration. */
@@ -76,6 +80,8 @@ export interface WorktreeCheckoutProvisioningOptions {
   readonly worktreeDir: string;
   readonly ref: string;
   readonly runGit: WorktreeGitRunner;
+  /** Throws to stop materialization; called before it starts and between its write waves. */
+  readonly checkpoint?: () => void;
 }
 
 /**
@@ -578,6 +584,7 @@ async function settleWorktreeCheckout(
   }
 ): Promise<CreateWorktreeResult> {
   const { sourceRoot, repoRoot, worktreeDir, ref, runGit } = options;
+  options.checkpoint?.();
   const perf = createWorktreePerf();
   const ignoredPromise = options.ignoredPromise ?? discoverIgnoredPaths(sourceRoot, runGit);
   const reroutedPromise = options.reroutedPromise ?? enumerateReroutedNodeModules({ sourceRoot, repoRoot });
@@ -678,12 +685,14 @@ async function settleWorktreeCheckout(
       return { policy, shareCandidates };
     });
 
+    options.checkpoint?.();
     // Wave 2: symlink the share-only ignored paths (node_modules excluded
     // above and rerouted concurrently, .cards copied in wave 1).
     await perf.measure('settle:symlinkIgnoredPaths', () =>
       symlinkIgnoredPaths({ sourceRoot, worktreeDir, ignored: shareCandidates })
     );
 
+    options.checkpoint?.();
     // Wave 3: applyWorktreeInclude runs after symlinkIgnoredPaths — the copy
     // and share sets are disjoint (the policy prevents any ignored ancestor
     // symlink above a copied descendant), and the exclude-file content write

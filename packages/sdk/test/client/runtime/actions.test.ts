@@ -149,6 +149,23 @@ describe('runtime action HTTP client', () => {
     });
   });
 
+  it.each([
+    ['code', { code: 'card_deleting', error: 'card is being deleted' }],
+    ['the rejected record', { disposition: 'rejected', reason: 'card_deleting', execution: null }]
+  ])('maps a 409 card-deleting refusal carried in %s to a typed rejection', async (_field, body) => {
+    await listen((_request, response) => {
+      response.writeHead(409, { 'content-type': 'application/json' });
+      response.end(JSON.stringify(body));
+    });
+
+    await expect(client?.launch('main-672', REQUEST)).resolves.toEqual({
+      status: 'rejected',
+      reason: 'card-deleting',
+      requestId: 'request-1',
+      messageId: 'message-1'
+    });
+  });
+
   it('retrieves a completed result by URL-encoded caller request ID', async () => {
     await listen((_request, response) => {
       response.writeHead(200, { 'content-type': 'application/json' });
