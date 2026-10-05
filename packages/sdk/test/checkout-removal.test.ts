@@ -106,7 +106,7 @@ describe('verified checkout content removal', () => {
     while (!reached()) await new Promise((resolve) => setTimeout(resolve, 5));
   }
 
-  it.skip('removes every entry, its holding area, and the checkout root, moving the Git marker last', async () => {
+  it('removes every entry, its holding area, and the checkout root, moving the Git marker last', async () => {
     const visited: string[] = [];
     await remove({
       checkpoint: async (entry) => {
@@ -119,7 +119,7 @@ describe('verified checkout content removal', () => {
     expect(visited.indexOf('src/nested')).toBeLessThan(visited.indexOf('src'));
   });
 
-  it.skip('refuses and restores every entry when a write lands on a path before it is held', async () => {
+  it('refuses and restores every entry when a write lands on a path before it is held', async () => {
     const before = await contents();
     const removal = remove({
       checkpoint: async (entry) => {
@@ -134,7 +134,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('catches a same-size write that restores the modification time through the unforgeable change time', async () => {
+  it('catches a same-size write that restores the modification time through the unforgeable change time', async () => {
     await age();
     const removal = remove({
       checkpoint: async (entry) => {
@@ -147,7 +147,7 @@ describe('verified checkout content removal', () => {
     expect(await readFile(join(root, 'data.txt'), 'utf8')).toBe('COMMITTED DATA\n');
   });
 
-  it.skip('restores from the manifest when a descriptor write reaches an already held file after the root is gone', async () => {
+  it('restores from the manifest when a descriptor write reaches an already held file after the root is gone', async () => {
     await age();
     const handle = await open(join(root, 'data.txt'), 'r+');
     try {
@@ -167,7 +167,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('keeps an atomic replacement in place and leaves no orphaned sibling', async () => {
+  it('keeps an atomic replacement in place and leaves no orphaned sibling', async () => {
     const removal = remove({
       checkpoint: async (entry) => {
         if (entry !== join(root, 'src')) return;
@@ -181,7 +181,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('keeps a divergent held entry under a recovery name when its vacated path was recreated', async () => {
+  it('keeps a divergent held entry under a recovery name when its vacated path was recreated', async () => {
     const handle = await open(join(root, 'data.txt'), 'r+');
     try {
       const removal = remove({
@@ -202,7 +202,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('refuses a new file created inside an already emptied directory', async () => {
+  it('refuses a new file created inside an already emptied directory', async () => {
     const removal = remove({
       checkpoint: async (entry) => {
         if (entry === join(root, 'src', 'nested')) await writeFile(join(entry, 'new.txt'), 'new\n');
@@ -213,7 +213,7 @@ describe('verified checkout content removal', () => {
     expect(await readFile(join(root, 'src', 'nested', 'deep.txt'), 'utf8')).toBe('deep\n');
   });
 
-  it.skip('restores every entry and rethrows when the owner fence is lost', async () => {
+  it('restores every entry and rethrows when the owner fence is lost', async () => {
     const before = await contents();
     let calls = 0;
     const removal = remove({
@@ -226,34 +226,29 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.runIf(POSIX)
-    .skip('removes FIFOs and sockets by identity', async () => {
-      execFileSync('mkfifo', [join(root, 'src', 'pipe')]);
-      const server = createServer();
-      servers.push(server);
-      await new Promise<void>((resolve) => server.listen(join(root, 'sock'), resolve));
-      await remove();
-      expect(await readdir(parent)).toEqual([]);
-    });
+  it.runIf(POSIX)('removes FIFOs and sockets by identity', async () => {
+    execFileSync('mkfifo', [join(root, 'src', 'pipe')]);
+    const server = createServer();
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(join(root, 'sock'), resolve));
+    await remove();
+    expect(await readdir(parent)).toEqual([]);
+  });
 
-  it.runIf(POSIX)
-    .skip('refuses a special file replaced by another of the same kind', async () => {
-      execFileSync('mkfifo', [join(root, 'pipe')]);
-      const removal = remove({
-        checkpoint: async (entry) => {
-          if (entry !== join(root, 'pipe')) return;
-          await rm(entry);
-          execFileSync('mkfifo', [entry]);
-        }
-      });
-      await expect(removal).rejects.toThrow(CheckoutContentChangedError);
-      expect((await lstat(join(root, 'pipe'))).isFIFO()).toBe(true);
+  it.runIf(POSIX)('refuses a special file replaced by another of the same kind', async () => {
+    execFileSync('mkfifo', [join(root, 'pipe')]);
+    const removal = remove({
+      checkpoint: async (entry) => {
+        if (entry !== join(root, 'pipe')) return;
+        await rm(entry);
+        execFileSync('mkfifo', [entry]);
+      }
     });
+    await expect(removal).rejects.toThrow(CheckoutContentChangedError);
+    expect((await lstat(join(root, 'pipe'))).isFIFO()).toBe(true);
+  });
 
-  it.skip.each([
-    'EBUSY',
-    'EPERM'
-  ])('reports a %s rename as a blocked operation and restores the checkout', async (code) => {
+  it.each(['EBUSY', 'EPERM'])('reports a %s rename as a blocked operation and restores the checkout', async (code) => {
     const before = await contents();
     const removal = remove({
       filesystem: {
@@ -269,7 +264,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('reports an EBUSY directory removal as a blocked operation, not a content change', async () => {
+  it('reports an EBUSY directory removal as a blocked operation, not a content change', async () => {
     const before = await contents();
     const removal = remove({
       filesystem: {
@@ -283,7 +278,7 @@ describe('verified checkout content removal', () => {
     expect(await contents()).toEqual(before);
   });
 
-  it.skip('restores by exclusive copy when the filesystem cannot hard link', async () => {
+  it('restores by exclusive copy when the filesystem cannot hard link', async () => {
     const before = await contents();
     const removal = remove({
       checkpoint: async (entry) => {
@@ -300,7 +295,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('restores an interrupted removal from its manifest after the owner died mid-take', async () => {
+  it('restores an interrupted removal from its manifest after the owner died mid-take', async () => {
     const before = await contents();
     let taken = 0;
     let reached = false;
@@ -323,7 +318,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('clears a holding area that an interrupted removal created before writing its manifest', async () => {
+  it('clears a holding area that an interrupted removal created before writing its manifest', async () => {
     let reached = false;
     void remove({
       checkpoint: async (entry) => {
@@ -337,7 +332,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('finishes a committed removal interrupted while unlinking verified entries', async () => {
+  it('finishes a committed removal interrupted while unlinking verified entries', async () => {
     let reached = false;
     void remove({
       filesystem: {
@@ -352,7 +347,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([]);
   });
 
-  it.skip('restores a committed removal whose held entry changed before recovery', async () => {
+  it('restores a committed removal whose held entry changed before recovery', async () => {
     let reached = false;
     void remove({
       filesystem: {
@@ -373,7 +368,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(parent)).toEqual([basename(root)]);
   });
 
-  it.skip('refuses to recover a holding area with entries its manifest does not record', async () => {
+  it('refuses to recover a holding area with entries its manifest does not record', async () => {
     let reached = false;
     void remove({
       checkpoint: async (entry) => {
@@ -388,7 +383,7 @@ describe('verified checkout content removal', () => {
     expect(await readdir(holding)).toContain('manifest.json');
   });
 
-  it.skip('refuses a committed removal whose held file was rewritten with its size and modification time restored', async () => {
+  it('refuses a committed removal whose held file was rewritten with its size and modification time restored', async () => {
     await age();
     let reached = false;
     void remove({
@@ -410,8 +405,9 @@ describe('verified checkout content removal', () => {
     expect(await readFile(join(root, 'data.txt'), 'utf8')).toBe('COMMITTED DATA\n');
   });
 
-  it.runIf(POSIX && process.getuid?.() !== 0)
-    .skip('reports an unreadable directory found by the snapshot as blocked and moves nothing', async () => {
+  it.runIf(POSIX && process.getuid?.() !== 0)(
+    'reports an unreadable directory found by the snapshot as blocked and moves nothing',
+    async () => {
       const before = await contents();
       await chmod(join(root, 'src', 'nested'), 0o000);
       try {
@@ -423,45 +419,46 @@ describe('verified checkout content removal', () => {
       }
       expect(await contents()).toEqual(before);
       expect(await readdir(parent)).toEqual([basename(root)]);
-    });
+    }
+  );
 
-  it.runIf(POSIX)
-    .skip('restores directory and copied file modes regardless of the process umask', async () => {
-      await chmod(join(root, 'src'), 0o755);
-      await chmod(join(root, 'src', 'nested'), 0o751);
-      await chmod(join(root, 'data.txt'), 0o644);
-      await chmod(join(root, 'src', 'index.ts'), 0o640);
-      const previous = process.umask(0o077);
-      try {
-        const removal = remove({
-          checkpoint: async (entry) => {
-            if (entry === join(root, '.git')) throw new Error('interrupted');
-          },
-          filesystem: {
-            link: async () => {
-              throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
-            }
+  it.runIf(POSIX)('restores directory and copied file modes regardless of the process umask', async () => {
+    await chmod(join(root, 'src'), 0o755);
+    await chmod(join(root, 'src', 'nested'), 0o751);
+    await chmod(join(root, 'data.txt'), 0o644);
+    await chmod(join(root, 'src', 'index.ts'), 0o640);
+    const previous = process.umask(0o077);
+    try {
+      const removal = remove({
+        checkpoint: async (entry) => {
+          if (entry === join(root, '.git')) throw new Error('interrupted');
+        },
+        filesystem: {
+          link: async () => {
+            throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
           }
-        });
-        await expect(removal).rejects.toThrow('interrupted');
-      } finally {
-        process.umask(previous);
-      }
-      expect((await lstat(join(root, 'src'))).mode & 0o777).toBe(0o755);
-      expect((await lstat(join(root, 'src', 'nested'))).mode & 0o777).toBe(0o751);
-      expect((await lstat(join(root, 'data.txt'))).mode & 0o777).toBe(0o644);
-      expect((await lstat(join(root, 'src', 'index.ts'))).mode & 0o777).toBe(0o640);
-    });
+        }
+      });
+      await expect(removal).rejects.toThrow('interrupted');
+    } finally {
+      process.umask(previous);
+    }
+    expect((await lstat(join(root, 'src'))).mode & 0o777).toBe(0o755);
+    expect((await lstat(join(root, 'src', 'nested'))).mode & 0o777).toBe(0o751);
+    expect((await lstat(join(root, 'data.txt'))).mode & 0o777).toBe(0o644);
+    expect((await lstat(join(root, 'src', 'index.ts'))).mode & 0o777).toBe(0o640);
+  });
 
-  it.skip('records a content hash for every regular file under the hash witness', async () => {
+  it('records a content hash for every regular file under the hash witness', async () => {
     await age();
     const files = (await snapshotCheckout(root, 0n, 'hash')).filter((entry) => entry.kind === 'file');
     expect(files.length).toBeGreaterThan(0);
     for (const entry of files) expect(entry.sha256).toMatch(/^[0-9a-f]{64}$/);
-    expect((await snapshotCheckout(root, 0n, 'ctime')).some((entry) => entry.sha256 !== undefined)).toBe(false);
+    const now = BigInt(Date.now()) * 1_000_000n;
+    expect((await snapshotCheckout(root, now, 'ctime')).some((entry) => entry.sha256 !== undefined)).toBe(false);
   });
 
-  it.skip('refuses a same-size rewrite with its modification time restored through the hash witness', async () => {
+  it('refuses a same-size rewrite with its modification time restored through the hash witness', async () => {
     await age();
     const removal = remove({
       witness: 'hash',
@@ -475,8 +472,9 @@ describe('verified checkout content removal', () => {
     expect(await readFile(join(root, 'data.txt'), 'utf8')).toBe('COMMITTED DATA\n');
   });
 
-  it.runIf(POSIX)
-    .skip('ignores a change-time-only update under the hash witness, where change time is settable', async () => {
+  it.runIf(POSIX)(
+    'ignores a change-time-only update under the hash witness, where change time is settable',
+    async () => {
       await age();
       await remove({
         witness: 'hash',
@@ -488,9 +486,10 @@ describe('verified checkout content removal', () => {
         }
       });
       expect(await readdir(parent)).toEqual([]);
-    });
+    }
+  );
 
-  it.skip('records the witness in the manifest', async () => {
+  it('records the witness in the manifest', async () => {
     let reached = false;
     void remove({
       witness: 'hash',
@@ -507,13 +506,13 @@ describe('verified checkout content removal', () => {
 });
 
 describe('checkout witness resolution', () => {
-  it.skip('uses the hash witness on Windows whatever the volume', async () => {
+  it('uses the hash witness on Windows whatever the volume', async () => {
     await expect(resolveCheckoutWitness(tmpdir(), { platform: 'win32', statfsType: async () => 0xef53 })).resolves.toBe(
       'hash'
     );
   });
 
-  it.skip.each([
+  it.each([
     ['MSDOS', 0x4d44],
     ['exFAT', 0x2011bab0],
     ['NFS', 0x6969],
@@ -526,23 +525,23 @@ describe('checkout witness resolution', () => {
     );
   });
 
-  it.skip('uses the change-time witness on a Linux ext4 volume', async () => {
+  it('uses the change-time witness on a Linux ext4 volume', async () => {
     await expect(resolveCheckoutWitness(tmpdir(), { platform: 'linux', statfsType: async () => 0xef53 })).resolves.toBe(
       'ctime'
     );
   });
 
-  it.skip('fails closed to the hash witness when a Linux volume type is unreadable', async () => {
+  it('fails closed to the hash witness when a Linux volume type is unreadable', async () => {
     await expect(resolveCheckoutWitness(tmpdir(), { platform: 'linux', statfsType: async () => null })).resolves.toBe(
       'hash'
     );
   });
 
-  it.skip('uses the change-time witness on macOS', async () => {
+  it('uses the change-time witness on macOS', async () => {
     await expect(resolveCheckoutWitness(tmpdir(), { platform: 'darwin' })).resolves.toBe('ctime');
   });
 
-  it.skip('resolves a witness for the real temporary volume', async () => {
+  it('resolves a witness for the real temporary volume', async () => {
     await expect(resolveCheckoutWitness(tmpdir())).resolves.toMatch(/^(ctime|hash)$/);
   });
 });
