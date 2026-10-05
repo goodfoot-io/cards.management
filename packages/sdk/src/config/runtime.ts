@@ -37,6 +37,7 @@
 
 import { createHash } from 'node:crypto';
 import { mkdir, open, readFile, rename } from 'node:fs/promises';
+import { constants as osConstants } from 'node:os';
 import path from 'node:path';
 import { resolveGlobalCardsConfigDir } from '../cards-config.js';
 import { discoverApiInfo } from '../client/api-discovery.js';
@@ -52,7 +53,12 @@ import { extractActionInput, extractCardsAssistantInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
 import type { ActionContext, ActionInput, CardsAssistantContext, CardsAssistantInput } from './inputs.js';
 import { Logger } from './logger.js';
-import { registerShutdownHook } from './runtime-shutdown.js';
+import {
+  configureShutdown,
+  installShutdownSignalHandlers,
+  registerShutdownHook,
+  shutdownAndExit
+} from './runtime-shutdown.js';
 
 /**
  * Logger for the handler runtime process.
@@ -184,24 +190,6 @@ function getErrorMessage(error: unknown): string {
 }
 
 /**
- * Cleans up logger state and terminates the process.
- *
- * This function never returns. It clears the logger's context, closes
- * open file handles to flush pending writes, and exits with the specified
- * code.
- *
- * @param exitCode - The exit code to pass to `process.exit()`
- * @returns Never returns; process terminates
- *
- * @internal
- */
-function cleanupAndExit(exitCode: number): never {
-  logger.clearContext();
-  logger.close();
-  process.exit(exitCode);
-}
-
-/**
  * Handles errors during environment variable extraction.
  *
  * Environment extraction can fail if required variables are missing or
@@ -209,15 +197,15 @@ function cleanupAndExit(exitCode: number): never {
  * cleanup before exit.
  *
  * @param error - The error thrown during extraction
- * @returns Never returns; process terminates with error code
+ * @returns Settles only when `process.exit` is mocked
  *
  * @internal
  */
-function handleEnvExtractionError(error: unknown): never {
+function handleEnvExtractionError(error: unknown): Promise<never> {
   const message = getErrorMessage(error);
   logger.error(`Failed to extract input from environment: ${message}`);
   writeError(`Handler failed: ${message}`);
-  cleanupAndExit(EXIT_CODES.ERROR);
+  return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
 }
 
 /**
@@ -228,15 +216,15 @@ function handleEnvExtractionError(error: unknown): never {
  * execution wrapper captures) and logs a structured error event.
  *
  * @param error - The error thrown or rejection reason from the handler
- * @returns Never returns; process terminates with error code
+ * @returns Settles only when `process.exit` is mocked
  *
  * @internal
  */
-function handleHandlerError(error: unknown): never {
+function handleHandlerError(error: unknown): Promise<never> {
   const errorOutput = error instanceof Error ? (error.stack ?? error.message) : String(error);
   process.stderr.write(`${errorOutput}\n`);
   logger.error(`Handler error: ${getErrorMessage(error)}`);
-  cleanupAndExit(EXIT_CODES.ERROR);
+  return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
 }
 
 // ============================================================================
@@ -286,6 +274,14 @@ function handleHandlerError(error: unknown): never {
 export async function executeCommand(command: AnyCommand): Promise<void> {
   // Let the child CLI settle after terminal closure before reporting the handler outcome.
   process.on('SIGHUP', () => {});
+  configureShutdown({
+    onHookError: (error) => logger.error(`Shutdown hook failed: ${getErrorMessage(error)}`),
+    finalize: () => {
+      logger.clearContext();
+      logger.close();
+    }
+  });
+  installShutdownSignalHandlers();
 
   try {
     // Dispatch on factoryType BEFORE env extraction. Cards-assistant commands
@@ -310,7 +306,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
         return handleHandlerError(error);
       }
 
-      cleanupAndExit(EXIT_CODES.SUCCESS);
+      return shutdownAndExit(EXIT_CODES.SUCCESS, 'completed');
     } else if (command.factoryType === 'worktree-maintenance') {
       await executeRootCommand(command);
     } else {
@@ -507,12 +503,12 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
       }
 
       await runtimeClient.stop();
-      cleanupAndExit(EXIT_CODES.SUCCESS);
+      return shutdownAndExit(EXIT_CODES.SUCCESS, 'completed');
     }
   } catch (error) {
     // Unexpected error - try to clean up and exit
     logger.error(`Unexpected runtime error: ${getErrorMessage(error)}`);
-    cleanupAndExit(EXIT_CODES.ERROR);
+    return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
   }
 }
 
@@ -553,9 +549,8 @@ function toPromise<T>(result: T | Promise<T>): Promise<T> {
 /**
  * Handles an authenticated durable cancel command.
  *
- * If a cancel callback was registered, it is invoked. Otherwise, SIGTERM
- * is sent to the current process as a fallback. After the callback completes
- * (or immediately if no callback), the process exits successfully — the
+ * If a cancel callback was registered, it is invoked, and after it completes
+ * the process exits successfully through the shutdown hooks — the
  * user-initiated stop is an expected shutdown, not a handler error. Exiting
  * with `EXIT_CODES.ERROR` here propagates through the wrapper as a non-zero
  * exit, which the VS Code terminal surfaces as `terminated with exit code: 1`
@@ -565,8 +560,13 @@ function toPromise<T>(result: T | Promise<T>): Promise<T> {
  * successful exit — once cancellation has been requested the runtime's job
  * is to wind down promptly, not to escalate cleanup failures.
  *
+ * Without a callback the handler shuts down with `128 + SIGTERM`, the code the
+ * installed `SIGTERM` handler would exit with, so cancellation ends it exactly
+ * as the wrapper's own stop signal does.
+ *
  * @param callback - The registered cancel callback, if any
  * @param recordObserved - Persists terminal evidence before process termination.
+ * @returns Settles only when `process.exit` is mocked.
  * @internal
  */
 async function handleCancelCommand(
@@ -575,8 +575,8 @@ async function handleCancelCommand(
 ): Promise<void> {
   if (!callback) {
     await recordObserved();
-    process.kill(process.pid, 'SIGTERM');
-    return;
+    // Without a callback, cancellation ends the handler as the wrapper's SIGTERM would.
+    return shutdownAndExit(128 + osConstants.signals.SIGTERM, 'cancel');
   }
 
   try {
@@ -586,7 +586,7 @@ async function handleCancelCommand(
     logger.error(`onCancel callback error: ${getErrorMessage(error)}`);
   }
   await recordObserved();
-  cleanupAndExit(EXIT_CODES.SUCCESS);
+  return shutdownAndExit(EXIT_CODES.SUCCESS, 'cancel');
 }
 
 /**
@@ -599,6 +599,7 @@ async function handleCancelCommand(
  * @param command - Correlated switch command whose identity fences the handoff.
  * @param sendDurable - Authenticated sender for the continuation result.
  * @param recordObserved - Persists terminal evidence before process termination.
+ * @returns Resolves at once when no callback was registered; otherwise settles only when `process.exit` is mocked.
  * @internal
  */
 async function handleSwitchToInteractiveCommand(
@@ -625,10 +626,12 @@ async function handleSwitchToInteractiveCommand(
       command.messageId
     );
     await recordObserved();
-    cleanupAndExit(accepted ? EXIT_CODES.SWITCH_TO_INTERACTIVE : EXIT_CODES.ERROR);
+    return accepted
+      ? shutdownAndExit(EXIT_CODES.SWITCH_TO_INTERACTIVE, 'switch')
+      : shutdownAndExit(EXIT_CODES.ERROR, 'failed');
   } catch (error) {
     logger.error(`switchToInteractive callback error: ${getErrorMessage(error)}`);
     await recordObserved();
-    cleanupAndExit(EXIT_CODES.ERROR);
+    return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
   }
 }

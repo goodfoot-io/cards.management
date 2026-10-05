@@ -19,6 +19,8 @@
  * @module
  */
 
+import { constants as osConstants } from 'node:os';
+
 /** Why the handler process is shutting down. */
 export type ShutdownReason = 'completed' | 'failed' | 'cancel' | 'switch' | 'signal';
 
@@ -90,17 +92,91 @@ export interface ShutdownCoordinator {
  * Creates a single-flight shutdown coordinator.
  * @param options - Exit function and hook budget.
  * @returns A coordinator with its own fence signal and hooks.
- * @throws {Error} Always: not implemented yet.
  */
 export function createShutdownCoordinator(options: ShutdownCoordinatorOptions = {}): ShutdownCoordinator {
-  void options;
-  throw new Error('Not Implemented');
+  const exit = options.exit ?? ((code: number) => process.exit(code));
+  const budgetMs = options.budgetMs ?? SHUTDOWN_BUDGET_MS;
+  const controller = new AbortController();
+  const hooks: ShutdownHook[] = [];
+  let configuration: ShutdownConfiguration = {};
+  let shutdown: Promise<never> | undefined;
+
+  const report = (error: unknown): void => {
+    try {
+      if (configuration.onHookError !== undefined) configuration.onHookError(error);
+      else process.stderr.write(`Shutdown hook failed: ${error instanceof Error ? error.message : String(error)}\n`);
+    } catch {
+      // A failing reporter must not stop the exit.
+    }
+  };
+
+  const runHooks = async (reason: ShutdownReason): Promise<void> => {
+    const deadline = Date.now() + budgetMs;
+    // Snapshot: a hook registered from here on is accepted but never runs.
+    for (const hook of hooks.splice(0).reverse()) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        report(new Error(`Shutdown budget of ${budgetMs} ms exhausted before a hook ran`));
+        return;
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const overrun = new Promise<'overrun'>((resolveOverrun) => {
+        timer = setTimeout(() => resolveOverrun('overrun'), remaining);
+      });
+      try {
+        const outcome = await Promise.race([
+          Promise.resolve()
+            .then(() => hook(reason))
+            .then(() => 'done' as const),
+          overrun
+        ]);
+        if (outcome === 'overrun') {
+          report(new Error(`Shutdown hook overran the ${budgetMs} ms budget`));
+          return;
+        }
+      } catch (error) {
+        report(error);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  };
+
+  return {
+    signal: controller.signal,
+    register(hook) {
+      if (controller.signal.aborted) return () => {};
+      hooks.push(hook);
+      return () => {
+        const index = hooks.indexOf(hook);
+        if (index !== -1 && !controller.signal.aborted) hooks.splice(index, 1);
+      };
+    },
+    configure(next) {
+      configuration = next;
+    },
+    shutdownAndExit(code, reason) {
+      if (shutdown !== undefined) return shutdown;
+      controller.abort();
+      shutdown = runHooks(reason).then(() => {
+        try {
+          configuration.finalize?.();
+        } catch (error) {
+          report(error);
+        }
+        exit(code);
+        // Reached only when the exit function returns, as a test's does.
+        return undefined as never;
+      });
+      return shutdown;
+    }
+  };
 }
 
-const controller = new AbortController();
+const coordinator = createShutdownCoordinator();
 
 /** Aborted the moment shutdown starts, before the first hook runs. */
-export const shutdownSignal: AbortSignal = controller.signal;
+export const shutdownSignal: AbortSignal = coordinator.signal;
 
 /**
  * Registers a hook to run when the handler shuts down.
@@ -111,22 +187,18 @@ export const shutdownSignal: AbortSignal = controller.signal;
  *
  * @param hook - Work to finish before exit.
  * @returns Removes the hook; a no-op once shutdown has begun.
- * @throws {Error} Always: not implemented yet.
  */
 export function registerShutdownHook(hook: ShutdownHook): () => void {
-  void hook;
-  throw new Error('Not Implemented');
+  return coordinator.register(hook);
 }
 
 /**
  * Sets how hook failures are reported and what runs before `process.exit`.
  *
  * @param configuration - Hook error reporter and finalizer.
- * @throws {Error} Always: not implemented yet.
  */
 export function configureShutdown(configuration: ShutdownConfiguration): void {
-  void configuration;
-  throw new Error('Not Implemented');
+  coordinator.configure(configuration);
 }
 
 /**
@@ -135,20 +207,34 @@ export function configureShutdown(configuration: ShutdownConfiguration): void {
  * @param code - Exit code passed to `process.exit`.
  * @param reason - Why the handler is exiting; passed to every hook.
  * @returns A promise that settles only when `process.exit` is mocked; every call shares it.
- * @throws {Error} Always: not implemented yet.
  */
 export function shutdownAndExit(code: number, reason: ShutdownReason): Promise<never> {
-  void code;
-  void reason;
-  throw new Error('Not Implemented');
+  return coordinator.shutdownAndExit(code, reason);
 }
+
+/**
+ * The process-wide coordinator behind {@link shutdownAndExit}, for the runtime
+ * and the slot layer's default environment.
+ *
+ * @returns The coordinator every module-level export delegates to.
+ */
+export function processShutdownCoordinator(): ShutdownCoordinator {
+  return coordinator;
+}
+
+let signalHandlersInstalled = false;
 
 /**
  * Installs `SIGTERM` and `SIGINT` handlers that shut down with `128 + signo`.
  * They stay installed for the whole shutdown, so a repeated signal never
  * falls back to its default action. Installing twice is a no-op.
- * @throws {Error} Always: not implemented yet.
  */
 export function installShutdownSignalHandlers(): void {
-  throw new Error('Not Implemented');
+  if (signalHandlersInstalled) return;
+  signalHandlersInstalled = true;
+  for (const name of ['SIGTERM', 'SIGINT'] as const) {
+    process.on(name, () => {
+      void shutdownAndExit(128 + osConstants.signals[name], 'signal');
+    });
+  }
 }

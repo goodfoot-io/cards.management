@@ -12,6 +12,7 @@ import { join, resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBoundedGit, type GitChildEvent, ShutdownError } from '../src/bounded-git.js';
 import { createProcessIdentity } from '../src/process-identity.js';
+import { TSX_IMPORT } from './helpers/tsx.js';
 
 const POSIX = process.platform !== 'win32';
 const SOURCE = resolve(__dirname, '../src');
@@ -126,7 +127,7 @@ await createBoundedGit().run(${JSON.stringify(repo)}, ['checkout', '-q', 'other'
 process.kill(process.pid, 'SIGKILL');
 `
     );
-    const handler = spawn(process.execPath, ['--import=tsx', script], {
+    const handler = spawn(process.execPath, [TSX_IMPORT, script], {
       stdio: 'ignore',
       detached: true,
       env: { ...process.env, ...GIT_ENV }

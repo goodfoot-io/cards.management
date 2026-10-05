@@ -51,6 +51,7 @@ import {
   WINDOWS_DOMAIN,
   writeGeneration
 } from './helpers/slot-lock-fixtures.js';
+import { TSX_IMPORT } from './helpers/tsx.js';
 
 const POSIX = process.platform !== 'win32';
 const SOURCE = resolve(__dirname, '../src');
@@ -378,7 +379,7 @@ if (${JSON.stringify(point)} === 'during-gc') await rename(join(${JSON.stringify
 process.kill(process.pid, 'SIGKILL');
 `
     );
-    const child = spawn(process.execPath, ['--import=tsx', script], { stdio: 'ignore' });
+    const child = spawn(process.execPath, [TSX_IMPORT, script], { stdio: 'ignore' });
     children.push(child);
     const signal = await new Promise<string | null>((resolveExit) =>
       child.once('exit', (_code, sig) => resolveExit(sig))
@@ -1112,10 +1113,10 @@ process.stdout.write(JSON.stringify({ released, elapsed: Date.now() - started })
 process.exit(0);
 `
       );
-      const root = spawn('/bin/sh', ['-c', `"$NODE_BIN" --import=tsx ${JSON.stringify(script)}; true`], {
+      const root = spawn('/bin/sh', ['-c', `"$NODE_BIN" "$TSX_IMPORT" ${JSON.stringify(script)}; true`], {
         detached: true,
         stdio: ['ignore', 'pipe', 'ignore'],
-        env: { ...process.env, NODE_BIN: process.execPath }
+        env: { ...process.env, NODE_BIN: process.execPath, TSX_IMPORT }
       });
       children.push(root);
       let output = '';

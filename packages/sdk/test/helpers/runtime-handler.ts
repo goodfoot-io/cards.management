@@ -12,6 +12,7 @@ import { writeRuntimeCredentialFile } from '../../src/client/runtime/index.js';
 import type { RuntimeCredentialFile } from '../../src/protocol/index.js';
 import { FakeRuntimeServer } from '../client/runtime/fakeServer.js';
 import { TEST_OWNERSHIP, TEST_SCOPE } from '../client/runtime/index.js';
+import { TSX_IMPORT } from './tsx.js';
 
 /** Absolute path of the SDK sources, for handler scripts to import. */
 export const SDK_SOURCE = resolve(__dirname, '../../src');
@@ -25,12 +26,48 @@ export const HANDLER_CREDENTIAL: RuntimeCredentialFile = {
   ownership: TEST_OWNERSHIP,
   credentials: [
     {
+      credentialId: 'wrapper-credential',
+      requestId: 'req-1',
+      executionId: 'exec-1',
+      role: 'runtime-wrapper',
+      producerId: 'wrapper-1',
+      secret: 'wrapper-credential-secret',
+      issuedAt: 1
+    },
+    {
       credentialId: 'agent-credential',
       requestId: 'req-1',
       executionId: 'exec-1',
       role: 'agent-handler',
       producerId: 'agent-1',
-      secret: 'agent-secret',
+      secret: 'agent-credential-secret',
+      issuedAt: 1
+    },
+    {
+      credentialId: 'hook-credential',
+      requestId: 'req-1',
+      executionId: 'exec-1',
+      role: 'agent-hook',
+      producerId: 'hook-1',
+      secret: 'hook-credential-secret',
+      issuedAt: 1
+    },
+    {
+      credentialId: 'watcher-credential',
+      requestId: 'req-1',
+      executionId: 'exec-1',
+      role: 'watcher',
+      producerId: 'watcher-1',
+      secret: 'watcher-credential-secret',
+      issuedAt: 1
+    },
+    {
+      credentialId: 'cli-credential',
+      requestId: 'req-1',
+      executionId: 'exec-1',
+      role: 'cli',
+      producerId: 'cli-1',
+      secret: 'cli-credential-secret',
       issuedAt: 1
     }
   ]
@@ -99,7 +136,7 @@ export async function startHandlerHarness(): Promise<HandlerHarness> {
     start(source, extra = {}) {
       const script = join(dir, `handler-${scripts++}.mts`);
       writeFileSync(script, source);
-      const child = spawn(process.execPath, ['--import=tsx', script], {
+      const child = spawn(process.execPath, [TSX_IMPORT, script], {
         cwd: dir,
         stdio: 'ignore',
         env: { ...env, ...extra }

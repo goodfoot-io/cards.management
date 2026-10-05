@@ -46,12 +46,16 @@ vi.mock('../../src/client/runtime/index.js', () => ({
   )
 }));
 
-import { executeCommand, logger } from '../../src/config/runtime.js';
+type RuntimeModule = typeof import('../../src/config/runtime.js');
+
+const SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const;
 
 describe('executeCommand', () => {
   const originalEnv = { ...process.env };
   let exitSpy: ReturnType<typeof vi.spyOn>;
   let cardsHome: string;
+  let executeCommand: RuntimeModule['executeCommand'];
+  let signalListeners: Map<NodeJS.Signals, readonly unknown[]>;
 
   function commandJournalFile(messageId: string): string {
     return path.join(
@@ -76,7 +80,13 @@ describe('executeCommand', () => {
     runtime.start.mockClear();
     runtime.stop.mockClear();
     exitSpy = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    vi.spyOn(logger, 'close').mockImplementation(() => undefined);
+    // Shutdown is single-flight per process; each test loads a fresh runtime so
+    // its exit path runs instead of sharing the previous test's shutdown.
+    vi.resetModules();
+    signalListeners = new Map(SIGNALS.map((signal) => [signal, process.listeners(signal)]));
+    const runtimeModule: RuntimeModule = await import('../../src/config/runtime.js');
+    executeCommand = runtimeModule.executeCommand;
+    vi.spyOn(runtimeModule.logger, 'close').mockImplementation(() => undefined);
     Object.assign(process.env, {
       [CARDS_ENV_VARS.CARD_ID]: 'card-123',
       [CARDS_ENV_VARS.ACTION_NAME]: 'Test Action',
@@ -95,6 +105,12 @@ describe('executeCommand', () => {
   });
 
   afterEach(async () => {
+    for (const signal of SIGNALS) {
+      const before = signalListeners.get(signal) ?? [];
+      for (const listener of process.listeners(signal)) {
+        if (!before.includes(listener)) process.removeListener(signal, listener as NodeJS.SignalsListener);
+      }
+    }
     vi.restoreAllMocks();
     process.env = { ...originalEnv };
     await rm(cardsHome, { recursive: true, force: true });

@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createProcessIdentity } from '../src/process-identity.js';
 import { publishGeneration, readSlotLock } from '../src/slot-lock.js';
 import { ownerFile, writeGeneration } from './helpers/slot-lock-fixtures.js';
+import { TSX_IMPORT } from './helpers/tsx.js';
 
 const POSIX = process.platform !== 'win32';
 const SOURCE = resolve(__dirname, '../src');
@@ -34,7 +35,7 @@ afterEach(() => {
 });
 
 function forkWorker(script: string, args: string[]): ChildProcess {
-  const worker = fork(script, args, { execArgv: ['--import=tsx'], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
+  const worker = fork(script, args, { execArgv: [TSX_IMPORT], stdio: ['ignore', 'ignore', 'inherit', 'ipc'] });
   children.push(worker);
   return worker;
 }
@@ -242,9 +243,9 @@ describe.runIf(POSIX)('liveness [L3] [L4]', () => {
 describe.runIf(POSIX)('action group [L4b]', () => {
   const shells = ['/bin/sh', '/bin/dash', '/bin/bash', '/bin/zsh'].filter((shell) => existsSync(shell));
   const shapes = {
-    simple: '"$NODE_BIN" --import=tsx ./handler.mts',
-    andList: 'cd . && "$NODE_BIN" --import=tsx ./handler.mts',
-    trailing: '"$NODE_BIN" --import=tsx ./handler.mts; true'
+    simple: '"$NODE_BIN" "$TSX_IMPORT" ./handler.mts',
+    andList: 'cd . && "$NODE_BIN" "$TSX_IMPORT" ./handler.mts',
+    trailing: '"$NODE_BIN" "$TSX_IMPORT" ./handler.mts; true'
   };
 
   it.skip.each(
@@ -276,7 +277,7 @@ process.exit(0);
       detached: true,
       cwd: base,
       stdio: ['ignore', 'pipe', 'ignore'],
-      env: { ...process.env, NODE_BIN: process.execPath }
+      env: { ...process.env, NODE_BIN: process.execPath, TSX_IMPORT }
     });
     children.push(root);
     let output = '';

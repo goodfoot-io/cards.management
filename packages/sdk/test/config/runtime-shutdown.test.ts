@@ -17,11 +17,12 @@ import {
   type ShutdownReason
 } from '../../src/config/runtime-shutdown.js';
 import { type HandlerHarness, SDK_SOURCE, startHandlerHarness } from '../helpers/runtime-handler.js';
+import { TSX_IMPORT } from '../helpers/tsx.js';
 
 const POSIX = process.platform !== 'win32';
 
 describe('shutdown coordinator', () => {
-  it.skip('aborts the fence before the first hook and runs hooks in reverse order, then exits', async () => {
+  it('aborts the fence before the first hook and runs hooks in reverse order, then exits', async () => {
     const events: string[] = [];
     const coordinator = createShutdownCoordinator({ exit: (code) => events.push(`exit:${code}`) });
     coordinator.configure({ finalize: () => events.push('finalize') });
@@ -40,7 +41,7 @@ describe('shutdown coordinator', () => {
     expect(events).toEqual(['second:completed:true', 'first:completed:true', 'finalize', 'exit:3']);
   });
 
-  it.skip('reports a throwing hook and still runs the rest and exits', async () => {
+  it('reports a throwing hook and still runs the rest and exits', async () => {
     const events: string[] = [];
     const errors: unknown[] = [];
     const coordinator = createShutdownCoordinator({ exit: (code) => events.push(`exit:${code}`) });
@@ -59,7 +60,7 @@ describe('shutdown coordinator', () => {
     expect(errors).toHaveLength(1);
   });
 
-  it.skip('cuts an overrunning hook off at the budget and exits', async () => {
+  it('cuts an overrunning hook off at the budget and exits', async () => {
     const events: string[] = [];
     const errors: unknown[] = [];
     const coordinator = createShutdownCoordinator({ exit: (code) => events.push(`exit:${code}`), budgetMs: 200 });
@@ -78,7 +79,7 @@ describe('shutdown coordinator', () => {
     expect(errors).toHaveLength(1);
   });
 
-  it.skip('is single-flight: a second call during the hooks shares the promise and changes nothing', async () => {
+  it('is single-flight: a second call during the hooks shares the promise and changes nothing', async () => {
     const reasons: ShutdownReason[] = [];
     const exits: number[] = [];
     const coordinator = createShutdownCoordinator({ exit: (code) => exits.push(code) });
@@ -102,7 +103,7 @@ describe('shutdown coordinator', () => {
     expect(exits).toEqual([0]);
   });
 
-  it.skip('accepts a registration after shutdown began and never runs it', async () => {
+  it('accepts a registration after shutdown began and never runs it', async () => {
     const events: string[] = [];
     const coordinator = createShutdownCoordinator({ exit: (code) => events.push(`exit:${code}`) });
     let releaseHook = (): void => {};
@@ -123,7 +124,7 @@ describe('shutdown coordinator', () => {
     expect(events).toEqual(['exit:0']);
   });
 
-  it.skip('removes an unregistered hook', async () => {
+  it('removes an unregistered hook', async () => {
     const events: string[] = [];
     const coordinator = createShutdownCoordinator({ exit: (code) => events.push(`exit:${code}`) });
     const unregister = coordinator.register(async () => {
@@ -136,7 +137,7 @@ describe('shutdown coordinator', () => {
     expect(events).toEqual(['exit:0']);
   });
 
-  it.skip('uses a three second default budget', () => {
+  it('uses a three second default budget', () => {
     expect(SHUTDOWN_BUDGET_MS).toBe(3_000);
   });
 });
@@ -192,7 +193,7 @@ const command = Object.assign(async () => {
 await executeCommand(command);
 `
     );
-    const child = spawn(process.execPath, ['--import=tsx', script], {
+    const child = spawn(process.execPath, [TSX_IMPORT, script], {
       cwd: dir,
       stdio: 'ignore',
       env: {
@@ -210,25 +211,25 @@ await executeCommand(command);
     return { child, log, exited };
   }
 
-  it.skip('runs the hooks in reverse order before exiting 0 on completion', async () => {
+  it('runs the hooks in reverse order before exiting 0 on completion', async () => {
     const handler = startHandler('complete');
     expect(await handler.exited).toEqual({ code: 0, signal: null });
     expect(lines(handler.log)).toEqual(['ready', 'second:completed', 'first:completed:true']);
   });
 
-  it.skip('runs the hooks before exiting 1 on failure', async () => {
+  it('runs the hooks before exiting 1 on failure', async () => {
     const handler = startHandler('fail');
     expect(await handler.exited).toEqual({ code: 1, signal: null });
     expect(lines(handler.log)).toEqual(['ready', 'second:failed', 'first:failed:true']);
   });
 
-  it.skip('exits despite a throwing hook', async () => {
+  it('exits despite a throwing hook', async () => {
     const handler = startHandler('complete', 'throw');
     expect(await handler.exited).toEqual({ code: 0, signal: null });
     expect(lines(handler.log)).toEqual(['ready', 'second:completed', 'first:completed:true']);
   });
 
-  it.skip('exits within the budget despite a hanging hook', async () => {
+  it('exits within the budget despite a hanging hook', async () => {
     const handler = startHandler('complete', 'hang');
     await waitFor(() => lines(handler.log).includes('ready'), 20_000);
     const started = Date.now();
@@ -236,39 +237,36 @@ await executeCommand(command);
     expect(Date.now() - started).toBeLessThan(SHUTDOWN_BUDGET_MS + 2_000);
   });
 
-  it.runIf(POSIX)
-    .skip('runs the hooks on SIGTERM and exits 143', async () => {
-      const handler = startHandler('wait');
-      await waitFor(() => lines(handler.log).includes('ready'), 20_000);
+  it.runIf(POSIX)('runs the hooks on SIGTERM and exits 143', async () => {
+    const handler = startHandler('wait');
+    await waitFor(() => lines(handler.log).includes('ready'), 20_000);
+    handler.child.kill('SIGTERM');
+    expect(await handler.exited).toEqual({ code: 143, signal: null });
+    expect(lines(handler.log)).toEqual(['ready', 'second:signal', 'first:signal:true']);
+  });
+
+  it.runIf(POSIX)('runs the hooks on SIGINT and exits 130', async () => {
+    const handler = startHandler('wait');
+    await waitFor(() => lines(handler.log).includes('ready'), 20_000);
+    handler.child.kill('SIGINT');
+    expect(await handler.exited).toEqual({ code: 130, signal: null });
+    expect(lines(handler.log)).toEqual(['ready', 'second:signal', 'first:signal:true']);
+  });
+
+  it.runIf(POSIX)('runs each hook once and exits once under 50 SIGTERMs sent 25 ms apart', async () => {
+    const handler = startHandler('wait', 'slow');
+    await waitFor(() => lines(handler.log).includes('ready'), 20_000);
+    let exited = false;
+    void handler.exited.then(() => {
+      exited = true;
+    });
+    for (let sent = 0; sent < 50 && !exited; sent++) {
       handler.child.kill('SIGTERM');
-      expect(await handler.exited).toEqual({ code: 143, signal: null });
-      expect(lines(handler.log)).toEqual(['ready', 'second:signal', 'first:signal:true']);
-    });
-
-  it.runIf(POSIX)
-    .skip('runs the hooks on SIGINT and exits 130', async () => {
-      const handler = startHandler('wait');
-      await waitFor(() => lines(handler.log).includes('ready'), 20_000);
-      handler.child.kill('SIGINT');
-      expect(await handler.exited).toEqual({ code: 130, signal: null });
-      expect(lines(handler.log)).toEqual(['ready', 'second:signal', 'first:signal:true']);
-    });
-
-  it.runIf(POSIX)
-    .skip('runs each hook once and exits once under 50 SIGTERMs sent 25 ms apart', async () => {
-      const handler = startHandler('wait', 'slow');
-      await waitFor(() => lines(handler.log).includes('ready'), 20_000);
-      let exited = false;
-      void handler.exited.then(() => {
-        exited = true;
-      });
-      for (let sent = 0; sent < 50 && !exited; sent++) {
-        handler.child.kill('SIGTERM');
-        await new Promise((resolveWait) => setTimeout(resolveWait, 25));
-      }
-      expect(await handler.exited).toEqual({ code: 143, signal: null });
-      expect(lines(handler.log)).toEqual(['ready', 'second:signal', 'first:signal:true']);
-    });
+      await new Promise((resolveWait) => setTimeout(resolveWait, 25));
+    }
+    expect(await handler.exited).toEqual({ code: 143, signal: null });
+    expect(lines(handler.log)).toEqual(['ready', 'second:signal', 'first:signal:true']);
+  });
 });
 
 describe('switch path', () => {
@@ -282,7 +280,7 @@ describe('switch path', () => {
     await harness.dispose();
   });
 
-  it.skip('runs the hooks in reverse order before exiting with the switch code', async () => {
+  it('runs the hooks in reverse order before exiting with the switch code', async () => {
     const log = join(harness.dir, 'events.log');
     const run = harness.start(
       `
