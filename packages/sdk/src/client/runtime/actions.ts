@@ -51,14 +51,16 @@ function isTransportUncertainty(value: unknown): value is RuntimeActionTransport
 
 /**
  * Whether a 409 body is the server's refusal of a card that is being deleted:
- * `{ code: 'card_deleting' }`, or `reason` on a body that is not a launch record.
+ * the launch route's rejected record
+ * `{ disposition: 'rejected', reason: 'card_deleting', execution: null }`, or an
+ * error body carrying `{ code: 'card_deleting' }`.
  * @param body - The parsed 409 body.
  * @returns True for the card-deleting refusal.
  */
 function isCardDeletingRefusal(body: unknown): boolean {
   if (typeof body !== 'object' || body === null) return false;
-  const { code, reason, disposition } = body as { code?: unknown; reason?: unknown; disposition?: unknown };
-  return code === 'card_deleting' || (disposition === undefined && reason === 'card_deleting');
+  const { code, reason } = body as { code?: unknown; reason?: unknown };
+  return code === 'card_deleting' || reason === 'card_deleting';
 }
 
 const rejectionReasonSchema = z.enum([
@@ -239,7 +241,7 @@ export type RuntimeActionHttpRejectionReason =
   | 'authentication-failed'
   | 'invalid-request'
   | 'not-found'
-  /** The server refused the launch with 409 `{ reason: 'card_deleting' }`: the card is being deleted. */
+  /** The server refused the launch with a 409 rejected record whose reason is `card_deleting`: the card is being deleted. */
   | 'card-deleting';
 
 /** Failures for which the durable server outcome is unknown. */

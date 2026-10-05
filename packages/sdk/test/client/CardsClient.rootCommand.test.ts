@@ -216,8 +216,11 @@ describe('runRootCommand', () => {
     expect(error.cause).toBe('unconfigured');
   });
 
-  it('fails with rejected when the card is being deleted', async () => {
-    const client = await serve(() => [409, { error: 'card is being deleted', code: 'card_deleting' }]);
+  it.each([
+    ['the rejected record', { disposition: 'rejected', reason: 'card_deleting', execution: null }],
+    ['an error code', { error: 'card is being deleted', code: 'card_deleting' }]
+  ])('fails with rejected when the card is being deleted, carried in %s', async (_form, body) => {
+    const client = await serve(() => [409, body]);
     const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
     expect(error.cause).toBe('rejected');
   });

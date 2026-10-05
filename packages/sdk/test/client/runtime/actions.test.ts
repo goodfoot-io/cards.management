@@ -151,7 +151,7 @@ describe('runtime action HTTP client', () => {
 
   it.each([
     ['code', { code: 'card_deleting', error: 'card is being deleted' }],
-    ['reason', { reason: 'card_deleting', error: 'card is being deleted' }]
+    ['the rejected record', { disposition: 'rejected', reason: 'card_deleting', execution: null }]
   ])('maps a 409 card-deleting refusal carried in %s to a typed rejection', async (_field, body) => {
     await listen((_request, response) => {
       response.writeHead(409, { 'content-type': 'application/json' });
