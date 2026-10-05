@@ -29,6 +29,11 @@ import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AntigravitySessionFailureError } from '../src/lib/antigravity-session.js';
+import { openSlotSessionStub } from './helpers/slot-session-stub.js';
+
+vi.mock('../src/lib/worktrees/index.js', async () => ({
+  openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
+}));
 
 vi.mock('../src/lib/antigravity-termination.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/antigravity-termination.js')>();
@@ -267,10 +272,6 @@ afterEach(() => {
  */
 function createMockContext(): ActionContext {
   return {
-    assignWorktree: vi.fn(async () => ({
-      branch: 'cards/card-123/1',
-      worktreePath: WORKTREE_PATH
-    })),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -398,7 +399,7 @@ describe('background launch outcome — real agy captures', () => {
     child.emit('close', 0);
     await expect(promise).resolves.toBeUndefined();
 
-    const assignment = vi.mocked(context.assignWorktree);
+    const assignment = openSlotSessionStub;
     expect(assignment).toHaveBeenCalledOnce();
     const agentLaunch = vi.mocked(spawn).mock.calls.findIndex(([command]) => command === 'agy');
     expect(agentLaunch).toBeGreaterThanOrEqual(0);

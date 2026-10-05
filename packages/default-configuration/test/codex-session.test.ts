@@ -35,6 +35,10 @@ const TEST_CODEX_PLUGIN_VERSIONS = {
   runtime: 'runtime-test-version'
 } as const;
 
+vi.mock('../src/lib/worktrees/index.js', async () => ({
+  openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
+}));
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so existing spawn('claude'/'codex', ...)
@@ -603,10 +607,6 @@ describe('codex-session library', () => {
 
     function createMockContext(): ActionContext {
       return {
-        assignWorktree: async () => ({
-          branch: 'cards/card-123/1',
-          worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
-        }),
         logger: new Logger(),
         cwd: process.cwd(),
         onCancel: vi.fn(),

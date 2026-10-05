@@ -2,7 +2,7 @@
  * Shared session utilities for Claude Code action workflows.
  *
  * Provides reusable building blocks for actions that spawn the `claude` CLI:
- * plugin settings construction, CLI arg building, authenticated worktree assignment. Both the `launch` and `interview` actions consume these
+ * plugin settings construction, CLI arg building, worktree slot acquisition. Both the `launch` and `interview` actions consume these
  * utilities.
  *
  * @summary Shared session utilities for Claude Code action workflows
@@ -20,6 +20,7 @@ export { resolveClaudeConfigDir, updateMarketplaceRegistration };
 
 import { createClaudeTerminationController } from './claude-termination.js';
 import { spawnAgentCli } from './spawn-cli.js';
+import { openSlotSession } from './worktrees/index.js';
 
 const execFileAsync = execFileNoWindowAsync;
 
@@ -239,30 +240,6 @@ export async function resolveBaseBranch(workspacePath: string, client?: CardsCli
 }
 
 /**
- * Requests the owner-provisioned checkout and reads its committed parent metadata.
- * @param input - Card whose authenticated execution requests a slot.
- * @param client - Read-only branch metadata client.
- * @param context - Authenticated runtime assignment callback.
- * @returns Fully provisioned checkout, branch and committed parent branch.
- * @throws When assignment is refused or its committed registration is unavailable.
- */
-export async function resolveAssignedWorktree(
-  input: Pick<ActionInput, 'cardId'>,
-  client: Pick<CardsClient, 'getBranches'>,
-  context: Pick<ActionContext, 'assignWorktree'>
-): Promise<{ worktreePath: string; branchName: string; parentBranch: string }> {
-  const assigned = await context.assignWorktree();
-  const { branches } = await client.getBranches(input.cardId);
-  const registration = branches.find((branch) => branch.name === assigned.branch);
-  if (
-    registration === undefined ||
-    (registration.worktree !== undefined && registration.worktree !== assigned.worktreePath)
-  )
-    throw new Error(`Assigned checkout '${assigned.branch}' has no matching committed registration`);
-  return { worktreePath: assigned.worktreePath, branchName: assigned.branch, parentBranch: registration.parentBranch };
-}
-
-/**
  * Options for {@link spawnClaudeSession}.
  *
  * Actions provide the variable parts (prompt, session identity, switch-to-
@@ -344,9 +321,8 @@ export async function spawnClaudeSession(
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
 
-  const worktreeResult = await resolveAssignedWorktree(input, client, context);
-
-  const { worktreePath: cwd, branchName, parentBranch } = worktreeResult;
+  const session = await openSlotSession(input, { client, logger: context.logger });
+  const { worktreePath: cwd, branch: branchName, parentBranch } = session.slot;
   context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
   const marketplacePath = resolveMarketplacePath();
@@ -359,38 +335,40 @@ export async function spawnClaudeSession(
   const isInteractive = input.executionMode === 'interactive';
   const cliExecutable = await resolveCliExecutable();
 
-  const child: ChildProcess = spawnAgentCli(cliExecutable, args, {
-    cwd,
-    stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
-    // Background mode: the handler running this is console-less (spawned from the
-    // GUI extension host via pipes), so cross-spawn's `cmd.exe /c claude.cmd` hop
-    // would pop a console window under stock node on win32. No stdio fd is
-    // inherited here, so `windowsHide: true` is honored by libuv. The interactive
-    // path inherits stdio and must NOT set it — R2: libuv ignores windowsHide
-    // when any fd is inherited, and the correct fix there is the console-subsystem
-    // interpreter switch, not this option.
-    ...(isInteractive ? {} : { windowsHide: true }),
-    env: {
-      ...process.env,
-      WORKSPACE_PATH: cwd,
-      CLAUDE_CODE_TASK_LIST_ID: `cards-extension-${input.cardId}`,
-      CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
-      CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
-      CLAUDE_CODE_ENABLE_AWAY_SUMMARY: '1',
-      BASE_BRANCH: baseBranch,
-      PARENT_BRANCH: parentBranch,
-      WORKSPACE_BRANCH: branchName,
-      // Claude's own print-mode background-task wait ceiling defaults to 600s
-      // and otherwise fires before Cards decides the session is done, killing
-      // agent-team work still in flight (main-678). Cards — not Claude — owns
-      // a background action's lifetime via cancellation, shutdown, or natural
-      // completion, so force this print-only setting to unlimited on every
-      // background child, overriding any finite value inherited from the
-      // parent env. Interactive sessions must not acquire this override.
-      ...(isInteractive ? {} : { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' }),
-      ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
-    }
-  });
+  const child: ChildProcess = await session.spawnAgent(() =>
+    spawnAgentCli(cliExecutable, args, {
+      cwd,
+      stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
+      // Background mode: the handler running this is console-less (spawned from the
+      // GUI extension host via pipes), so cross-spawn's `cmd.exe /c claude.cmd` hop
+      // would pop a console window under stock node on win32. No stdio fd is
+      // inherited here, so `windowsHide: true` is honored by libuv. The interactive
+      // path inherits stdio and must NOT set it — R2: libuv ignores windowsHide
+      // when any fd is inherited, and the correct fix there is the console-subsystem
+      // interpreter switch, not this option.
+      ...(isInteractive ? {} : { windowsHide: true }),
+      env: {
+        ...process.env,
+        WORKSPACE_PATH: cwd,
+        CLAUDE_CODE_TASK_LIST_ID: `cards-extension-${input.cardId}`,
+        CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
+        CLAUDE_CODE_ADDITIONAL_DIRECTORIES_CLAUDE_MD: '1',
+        CLAUDE_CODE_ENABLE_AWAY_SUMMARY: '1',
+        BASE_BRANCH: baseBranch,
+        PARENT_BRANCH: parentBranch,
+        WORKSPACE_BRANCH: branchName,
+        // Claude's own print-mode background-task wait ceiling defaults to 600s
+        // and otherwise fires before Cards decides the session is done, killing
+        // agent-team work still in flight (main-678). Cards — not Claude — owns
+        // a background action's lifetime via cancellation, shutdown, or natural
+        // completion, so force this print-only setting to unlimited on every
+        // background child, overriding any finite value inherited from the
+        // parent env. Interactive sessions must not acquire this override.
+        ...(isInteractive ? {} : { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: '0' }),
+        ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
+      }
+    })
+  );
 
   const termination = createClaudeTerminationController(child, {
     gracefulTimeoutMs: 5_000,
@@ -410,10 +388,12 @@ export async function spawnClaudeSession(
   });
 
   if (supportsSwitchToInteractive) {
-    context.onSwitchToInteractive(() => {
+    context.onSwitchToInteractive(async () => {
       context.logger.info('Switching to interactive mode', { sessionId });
+      // The handoff latch is set before the agent is stopped, so no exit path can release the slot [F10].
+      const handoff = await session.offerHandoff(sessionId);
       child.kill('SIGTERM');
-      return { sessionId };
+      return handoff;
     });
   }
 

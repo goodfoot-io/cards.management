@@ -15,6 +15,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * @summary Tests for shared claude-session utilities
  */
 
+vi.mock('../src/lib/worktrees/index.js', async () => ({
+  openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
+}));
+
 vi.mock('../src/lib/claude-termination.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/claude-termination.js')>();
   const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
@@ -187,10 +191,6 @@ function createMockContext(): ActionContext {
   return {
     logger: new Logger(),
     cwd: process.cwd(),
-    assignWorktree: async () => ({
-      branch: 'cards/card-123/1',
-      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
-    }),
     onCancel: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
@@ -786,9 +786,19 @@ describe('claude-session shared utilities', () => {
 
       expect(context.onSwitchToInteractive).toHaveBeenCalledWith(expect.any(Function));
 
-      const switchCallback = vi.mocked(context.onSwitchToInteractive).mock.calls[0]![0] as () => unknown;
-      const result = switchCallback();
-      expect(result).toEqual({ sessionId: 'session-123' });
+      const switchCallback = vi.mocked(context.onSwitchToInteractive).mock.calls[0]![0] as () => Promise<unknown>;
+      const result = await switchCallback();
+      expect(result).toEqual({
+        sessionId: 'session-123',
+        slot: {
+          ordinal: 1,
+          branch: 'cards/card-123/1',
+          worktreePath: '/test/workspace/.worktrees/cards/card-123/1',
+          generation: 1,
+          token: 'stub'
+        }
+      });
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
 
       child.emit('close', null);
       await promise;

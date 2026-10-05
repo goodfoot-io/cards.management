@@ -45,6 +45,11 @@ import {
   resolveAntigravitySettingsPath,
   resolveDefaultAntigravityHome
 } from '../src/lib/antigravity-workspace-trust.js';
+import { useStubSlot } from './helpers/slot-session-stub.js';
+
+vi.mock('../src/lib/worktrees/index.js', async () => ({
+  openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
+}));
 
 vi.mock('../src/lib/antigravity-termination.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/antigravity-termination.js')>();
@@ -199,7 +204,6 @@ function createMockChild(): ChildProcess {
  */
 function createMockContext(): ActionContext {
   return {
-    assignWorktree: async () => ({ branch: 'cards/card-123/1', worktreePath: checkoutPath }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -408,6 +412,7 @@ beforeEach(async () => {
   await workspace.create();
   repoRoot = workspace.getPath();
   checkoutPath = await workspace.createWorktree(WORKTREE_BRANCH);
+  useStubSlot({ branch: WORKTREE_BRANCH, worktreePath: checkoutPath });
 
   antigravityHome = join(scratchDir, 'antigravity-cli');
   settingsPath = join(antigravityHome, 'settings.json');

@@ -19,10 +19,11 @@ import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
 import { parse as parseToml, stringify as stringifyToml } from 'smol-toml';
 import { applyCodexConfig } from './applyCodexConfig.js';
-import { resolveAssignedWorktree, resolveBaseBranch, resolveMarketplacePath } from './claude-session.js';
+import { resolveBaseBranch, resolveMarketplacePath } from './claude-session.js';
 import { buildPluginHooksState, type HooksJson, type HookTrustEntry } from './codex-hook-trust.js';
 import { createCodexTerminationController } from './codex-termination.js';
 import { spawnAgentCli } from './spawn-cli.js';
+import { openSlotSession } from './worktrees/index.js';
 
 /**
  * Options for {@link spawnCodexSession}.
@@ -911,7 +912,8 @@ export async function spawnCodexSession(
   }
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
-  const { worktreePath: cwd, branchName, parentBranch } = await resolveAssignedWorktree(input, client, context);
+  const session = await openSlotSession(input, { client, logger: context.logger });
+  const { worktreePath: cwd, branch: branchName, parentBranch } = session.slot;
 
   context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
@@ -935,24 +937,26 @@ export async function spawnCodexSession(
   const args = buildCodexArgs(rawPrompt, cwd, input.cardRepoPath, developerInstructions, input.executionMode);
   const isInteractive = input.executionMode === 'interactive';
 
-  const child: ChildProcess = spawnAgentCli('codex', args, {
-    cwd,
-    // `codex exec` is the CLI's non-interactive automation surface. Background
-    // actions have no terminal reader, so discard stdin/stdout and retain stderr
-    // for progress and diagnostics; interactive sessions keep direct terminal
-    // control. Hide the console-less Windows cross-spawn shell hop.
-    stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
-    ...(isInteractive ? {} : { windowsHide: true }),
-    env: {
-      ...process.env,
-      CODEX_HOME: codexHome,
-      WORKSPACE_PATH: cwd,
-      BASE_BRANCH: baseBranch,
-      PARENT_BRANCH: parentBranch,
-      WORKSPACE_BRANCH: branchName,
-      ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
-    }
-  });
+  const child: ChildProcess = await session.spawnAgent(() =>
+    spawnAgentCli('codex', args, {
+      cwd,
+      // `codex exec` is the CLI's non-interactive automation surface. Background
+      // actions have no terminal reader, so discard stdin/stdout and retain stderr
+      // for progress and diagnostics; interactive sessions keep direct terminal
+      // control. Hide the console-less Windows cross-spawn shell hop.
+      stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
+      ...(isInteractive ? {} : { windowsHide: true }),
+      env: {
+        ...process.env,
+        CODEX_HOME: codexHome,
+        WORKSPACE_PATH: cwd,
+        BASE_BRANCH: baseBranch,
+        PARENT_BRANCH: parentBranch,
+        WORKSPACE_BRANCH: branchName,
+        ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
+      }
+    })
+  );
 
   const termination = createCodexTerminationController(child, {
     gracefulTimeoutMs: 5_000,

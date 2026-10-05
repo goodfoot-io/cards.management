@@ -19,6 +19,10 @@ import { Logger } from '@cards.management/sdk/config';
 import { flushMicrotasks } from '@cards.management/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('../src/lib/worktrees/index.js', async () => ({
+  openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
+}));
+
 vi.mock('../src/lib/antigravity-termination.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../src/lib/antigravity-termination.js')>();
   const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
@@ -244,10 +248,6 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
-    assignWorktree: async () => ({
-      branch: 'cards/card-123/1',
-      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
-    }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),

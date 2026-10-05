@@ -33,8 +33,9 @@ import {
 } from '@cards.management/sdk/transcript-sync';
 import { createAntigravityTerminationController } from './antigravity-termination.js';
 import { prepareAntigravityWorkspaceTrust, resolveAntigravitySettingsPath } from './antigravity-workspace-trust.js';
-import { errorMessage, resolveAssignedWorktree, resolveBaseBranch } from './claude-session.js';
+import { errorMessage, resolveBaseBranch } from './claude-session.js';
 import { spawnAgentCli } from './spawn-cli.js';
+import { openSlotSession } from './worktrees/index.js';
 
 /**
  * Options for {@link spawnAntigravitySession}.
@@ -302,7 +303,8 @@ export async function spawnAntigravitySession(
   }
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
-  const { worktreePath: cwd, branchName, parentBranch } = await resolveAssignedWorktree(input, client, context);
+  const session = await openSlotSession(input, { client, logger: context.logger });
+  const { worktreePath: cwd, branch: branchName, parentBranch } = session.slot;
 
   context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
@@ -348,28 +350,30 @@ export async function spawnAntigravitySession(
     effort: options.effort ?? process.env[CARDS_AGENT_EFFORT_ENV_VAR]
   });
 
-  const child: ChildProcess = spawnAgentCli('agy', args, {
-    cwd,
-    // Interactive actions inherit stdio so the user gets direct terminal
-    // control (terminal-owned `-i`). Background runs are console-less: stdout
-    // is ignored — the parser that read the stream-json transcript is gone and
-    // nothing consumed the buffer, so the run is judged by exit status, the
-    // latched stderr notice, and the hook-failure marker — while stderr stays
-    // piped as the diagnostic channel. windowsHide keeps the cross-spawn
-    // cmd.exe hop invisible on win32 — libuv ignores it when any fd is
-    // inherited, so the interactive path must not set it.
-    stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
-    ...(isInteractive ? {} : { windowsHide: true }),
-    env: {
-      ...process.env,
-      WORKSPACE_PATH: cwd,
-      BASE_BRANCH: baseBranch,
-      PARENT_BRANCH: parentBranch,
-      WORKSPACE_BRANCH: branchName,
-      ANTIGRAVITY_SESSION_ID: sessionId,
-      ...(suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
-    }
-  });
+  const child: ChildProcess = await session.spawnAgent(() =>
+    spawnAgentCli('agy', args, {
+      cwd,
+      // Interactive actions inherit stdio so the user gets direct terminal
+      // control (terminal-owned `-i`). Background runs are console-less: stdout
+      // is ignored — the parser that read the stream-json transcript is gone and
+      // nothing consumed the buffer, so the run is judged by exit status, the
+      // latched stderr notice, and the hook-failure marker — while stderr stays
+      // piped as the diagnostic channel. windowsHide keeps the cross-spawn
+      // cmd.exe hop invisible on win32 — libuv ignores it when any fd is
+      // inherited, so the interactive path must not set it.
+      stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
+      ...(isInteractive ? {} : { windowsHide: true }),
+      env: {
+        ...process.env,
+        WORKSPACE_PATH: cwd,
+        BASE_BRANCH: baseBranch,
+        PARENT_BRANCH: parentBranch,
+        WORKSPACE_BRANCH: branchName,
+        ANTIGRAVITY_SESSION_ID: sessionId,
+        ...(suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
+      }
+    })
+  );
 
   const termination = createAntigravityTerminationController(child, {
     gracefulTimeoutMs: 5_000,

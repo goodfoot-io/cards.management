@@ -51,7 +51,7 @@ import { execFileNoWindowAsync } from '@cards.management/sdk/bin/child-process';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import type { ActionContext, ActionInput } from '@cards.management/sdk/config';
 import { CARDS_ENV_VARS } from '@cards.management/sdk/config';
-import { resolveAssignedWorktree, resolveBaseBranch, resolveMarketplacePath } from './claude-session.js';
+import { resolveBaseBranch, resolveMarketplacePath } from './claude-session.js';
 import {
   CODEX_PLUGIN_CONTENT_STAMP,
   composeDeveloperInstructions,
@@ -60,6 +60,7 @@ import {
 } from './codex-session.js';
 import { createOpencodeTerminationController } from './opencode-termination.js';
 import { spawnAgentCli } from './spawn-cli.js';
+import { openSlotSession } from './worktrees/index.js';
 
 /**
  * Computes the content digest of a bundled plugin source directory, following
@@ -1082,7 +1083,8 @@ export async function spawnOpencodeSession(
   }
 
   const baseBranch = await resolveBaseBranch(input.repoRoot, client);
-  const { worktreePath: cwd, branchName, parentBranch } = await resolveAssignedWorktree(input, client, context);
+  const session = await openSlotSession(input, { client, logger: context.logger });
+  const { worktreePath: cwd, branch: branchName, parentBranch } = session.slot;
 
   context.logger.info('Using worktree', { cwd, branch: branchName, baseBranch, parentBranch });
 
@@ -1134,29 +1136,31 @@ export async function spawnOpencodeSession(
 
   const isInteractive = input.executionMode === 'interactive';
 
-  const child: ChildProcess = spawnAgentCli(opencodeBinary, args, {
-    cwd,
-    // Interactive mode inherits stdio so the user gets direct terminal control.
-    // Background handlers run console-less (spawned from the GUI extension host
-    // via pipes): stdout/stdin have no reader and are ignored, stderr is piped
-    // for diagnostic capture. windowsHide keeps the cross-spawn cmd.exe hop
-    // invisible on win32 — libuv ignores it when any fd is inherited, so the
-    // interactive path must not set it.
-    stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
-    ...(isInteractive ? {} : { windowsHide: true }),
-    env: {
-      ...process.env,
-      // Staged activation: ONE extra config layer between the user's global
-      // config dir and the project layer. Never OPENCODE_CONFIG_DIR — replacing
-      // the config dir would cut the user's provider/model config off.
-      OPENCODE_CONFIG: configPath,
-      WORKSPACE_PATH: cwd,
-      BASE_BRANCH: baseBranch,
-      PARENT_BRANCH: parentBranch,
-      WORKSPACE_BRANCH: branchName,
-      ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
-    }
-  });
+  const child: ChildProcess = await session.spawnAgent(() =>
+    spawnAgentCli(opencodeBinary, args, {
+      cwd,
+      // Interactive mode inherits stdio so the user gets direct terminal control.
+      // Background handlers run console-less (spawned from the GUI extension host
+      // via pipes): stdout/stdin have no reader and are ignored, stderr is piped
+      // for diagnostic capture. windowsHide keeps the cross-spawn cmd.exe hop
+      // invisible on win32 — libuv ignores it when any fd is inherited, so the
+      // interactive path must not set it.
+      stdio: isInteractive ? 'inherit' : ['ignore', 'ignore', 'pipe'],
+      ...(isInteractive ? {} : { windowsHide: true }),
+      env: {
+        ...process.env,
+        // Staged activation: ONE extra config layer between the user's global
+        // config dir and the project layer. Never OPENCODE_CONFIG_DIR — replacing
+        // the config dir would cut the user's provider/model config off.
+        OPENCODE_CONFIG: configPath,
+        WORKSPACE_PATH: cwd,
+        BASE_BRANCH: baseBranch,
+        PARENT_BRANCH: parentBranch,
+        WORKSPACE_BRANCH: branchName,
+        ...(options.suppressExitWhenDone ? { [CARDS_ENV_VARS.EXIT_WHEN_DONE]: 'false' } : {})
+      }
+    })
+  );
 
   const termination = createOpencodeTerminationController(child, {
     gracefulTimeoutMs: 5_000,

@@ -14,6 +14,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
  * @summary Tests actions behavior in test
  */
 
+vi.mock('../src/lib/worktrees/index.js', async () => ({
+  openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
+}));
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so existing spawn('claude'/'codex', ...)
@@ -201,10 +205,6 @@ afterEach(() => {
 
 function createMockContext(): ActionContext {
   return {
-    assignWorktree: async () => ({
-      branch: 'cards/card-123/1',
-      worktreePath: '/test/workspace/.worktrees/cards/card-123/1'
-    }),
     logger: new Logger(),
     cwd: process.cwd(),
     onCancel: vi.fn(),
@@ -443,7 +443,7 @@ describe('Default Actions', () => {
       await promise;
     });
 
-    it('registers onSwitchToInteractive that returns session ID', async () => {
+    it('registers onSwitchToInteractive that returns the session ID and slot handoff', async () => {
       const { spawn } = await import('node:child_process');
       const child = createMockChild();
       vi.mocked(spawn).mockReturnValue(child);
@@ -455,10 +455,19 @@ describe('Default Actions', () => {
 
       expect(context.onSwitchToInteractive).toHaveBeenCalledWith(expect.any(Function));
 
-      // Invoke the registered callback and verify it returns the session ID
-      const switchCallback = vi.mocked(context.onSwitchToInteractive).mock.calls[0][0] as () => unknown;
-      const result = switchCallback();
-      expect(result).toEqual({ sessionId: 'test-uuid-1234' });
+      // Invoke the registered callback and verify it hands the session and its slot to the successor
+      const switchCallback = vi.mocked(context.onSwitchToInteractive).mock.calls[0][0] as () => Promise<unknown>;
+      const result = await switchCallback();
+      expect(result).toEqual({
+        sessionId: 'test-uuid-1234',
+        slot: {
+          ordinal: 1,
+          branch: 'cards/card-123/1',
+          worktreePath: '/test/workspace/.worktrees/cards/card-123/1',
+          generation: 1,
+          token: 'stub'
+        }
+      });
       expect(child.kill).toHaveBeenCalledWith('SIGTERM');
 
       child.emit('close', null);
