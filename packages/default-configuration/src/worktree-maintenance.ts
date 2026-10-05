@@ -7,8 +7,8 @@
  * delete-card dialog (`preview`, then `prepare-delete`) and SDK callers, and
  * hands its report back without reading it. The pass spares no requester: the
  * command's own execution only owns the pass's `removal` locks. The report is
- * a {@link WorktreeCleanupPreview} with the pass's unjudgeable-lock counts and
- * any pass-level failure beside it, so a caller can show why slots were kept.
+ * the SDK's {@link WorktreeCleanupPreview}, carrying the pass's unjudgeable-lock
+ * counts and any pass-level failure, so a caller can show why slots were kept.
  *
  * @summary Default worktree maintenance root command
  * @module
@@ -23,19 +23,13 @@ import {
   type SlotCleanupResult
 } from './lib/worktrees/index.js';
 
-/** What the command reports: the card's cleanup preview plus the pass's lock counts and failure. */
-export interface WorktreeMaintenanceReport extends WorktreeCleanupPreview {
-  readonly unknownLocks: SlotCleanupResult['unknownLocks'];
-  readonly failure?: SlotCleanupResult['failure'];
-}
-
 /**
  * Builds the command's report from a pass.
  * @param cardId - The maintained card.
  * @param result - The pass's outcome.
  * @returns The report; `canDeleteCard` holds only when every slot was removed or is eligible and the pass did not stop.
  */
-export function maintenanceReport(cardId: string, result: SlotCleanupResult): WorktreeMaintenanceReport {
+export function maintenanceReport(cardId: string, result: SlotCleanupResult): WorktreeCleanupPreview {
   return {
     cardId,
     canDeleteCard: clearsCardDeletion(result),

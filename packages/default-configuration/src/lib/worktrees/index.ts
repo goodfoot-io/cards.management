@@ -25,8 +25,7 @@ export {
   type SlotCleanupContext,
   type SlotCleanupMode,
   type SlotCleanupOptions,
-  type SlotCleanupResult,
-  type SlotCleanupStage
+  type SlotCleanupResult
 } from './cleanup.js';
 export { type CreationRecovery, recoverCreationIntent, rollbackCreation } from './intent.js';
 export { defaultSlotLayer, type SlotLayer } from './layer.js';

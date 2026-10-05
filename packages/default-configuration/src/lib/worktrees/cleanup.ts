@@ -8,7 +8,13 @@
  * @module
  */
 
-import type { ActionContext, WorktreeCleanupDecision, WorktreeCleanupReason } from '@cards.management/sdk';
+import type {
+  ActionContext,
+  WorktreeCleanupDecision,
+  WorktreeCleanupReason,
+  WorktreeMaintenanceStageFailure,
+  WorktreeUnknownLocks
+} from '@cards.management/sdk';
 import { resolveMainRepoRoot, resolveSlotRoot } from '@cards.management/sdk/cards-config';
 import {
   createSlotJudgeContext,
@@ -72,17 +78,14 @@ export interface SlotCleanupOptions {
   readonly budgetMs?: number;
 }
 
-/** Where a pass failed outside any one slot. */
-export type SlotCleanupStage = 'discovery' | 'self_probe';
-
 /** A pass's outcome. */
 export interface SlotCleanupResult {
   /** One decision per discovered slot, in ordinal order. */
   readonly decisions: readonly WorktreeCleanupDecision[];
   /** Set when the pass stopped outside any slot; `decisions` holds those made before. */
-  readonly failure?: { readonly stage: SlotCleanupStage; readonly message: string };
+  readonly failure?: WorktreeMaintenanceStageFailure;
   /** Slots whose lock could not be judged, and how many of those record an unverified owner. */
-  readonly unknownLocks: { readonly count: number; readonly unverifiedOwners: number };
+  readonly unknownLocks: WorktreeUnknownLocks;
   /**
    * Whether the pass met its mode's bar: for `prepare-delete`, no slot is
    * preserved, `budget_exhausted` or `cleanup_failed` and no `failure` is

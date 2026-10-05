@@ -12,7 +12,12 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { commandReportPayloadSchema, Logger } from '@cards.management/sdk';
+import {
+  commandReportPayloadSchema,
+  Logger,
+  type WorktreeCleanupPreview,
+  worktreeCleanupPreviewSchema
+} from '@cards.management/sdk';
 import type { CardsClient } from '@cards.management/sdk/client';
 import type { WorktreeMaintenanceInput } from '@cards.management/sdk/config';
 import { build } from '@cards.management/sdk/config/cli';
@@ -22,10 +27,7 @@ import { generateAntigravityEntry } from '../scripts/generate-antigravity-entry.
 import { generateOpencodeEntry } from '../scripts/generate-opencode-entry.mjs';
 import settingsConfig from '../settings.config.js';
 import { type AcquiredSlot, acquireSlot } from '../src/lib/worktrees/index.js';
-import worktreeMaintenance, {
-  createWorktreeMaintenance,
-  type WorktreeMaintenanceReport
-} from '../src/worktree-maintenance.js';
+import worktreeMaintenance, { createWorktreeMaintenance } from '../src/worktree-maintenance.js';
 import { createSlotFixture, type SlotFixture } from './helpers/slot-fixture.js';
 
 const PACKAGE_ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -71,14 +73,14 @@ async function finishedSlots<const W extends readonly boolean[]>(
 /** One command run: what it reported, and how often. */
 interface Run {
   readonly reports: readonly Record<string, unknown>[];
-  readonly report: WorktreeMaintenanceReport;
+  readonly report: WorktreeCleanupPreview;
 }
 
 /**
  * Runs the command on the fixture's layer as the runtime would, collecting its reports.
  * @param mode - The maintenance mode.
  * @param executionId - The command's own execution.
- * @returns The reports, and the last one as the runtime would send it.
+ * @returns The reports, and the last one parsed as a caller parses it, with the SDK's strict preview schema.
  */
 async function maintain(mode: WorktreeMaintenanceInput['mode'], executionId = 'exec-maintenance'): Promise<Run> {
   const reports: Record<string, unknown>[] = [];
@@ -98,7 +100,7 @@ async function maintain(mode: WorktreeMaintenanceInput['mode'], executionId = 'e
   );
   const last = reports.at(-1);
   if (last === undefined) throw new Error('The command finished without a report');
-  return { reports, report: last as unknown as WorktreeMaintenanceReport };
+  return { reports, report: worktreeCleanupPreviewSchema.parse(last) };
 }
 
 describe('worktreeMaintenance preview', () => {
@@ -221,6 +223,40 @@ describe('worktreeMaintenance failures', () => {
       expect(report.failure).toMatchObject({ stage: 'discovery' });
       expect(report.failure?.message).toContain('injected discovery failure');
     }
+  });
+});
+
+describe('worktreeMaintenance report contract', () => {
+  it('sends reports the SDK preview schema accepts unchanged, for kept, removed and locked slots', async () => {
+    const held = await acquire('exec-held');
+    const [, kept] = await finishedSlots(false, true);
+
+    const { reports } = await maintain('cleanup');
+
+    const parsed = worktreeCleanupPreviewSchema.safeParse(reports[0]);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.data).toEqual(reports[0]);
+    expect(parsed.data?.decisions.map((decision) => [decision.reason, decision.outcome])).toEqual([
+      ['locked', 'preserved'],
+      ['eligible', 'removed'],
+      ['unmerged_commits', 'preserved']
+    ]);
+    expect(parsed.data?.decisions[0]).toMatchObject({ branch: held.branch });
+    expect(parsed.data?.decisions[2]).toMatchObject({ branch: kept.branch });
+    await held.lock.release();
+  });
+
+  it('sends a failed pass’s report, failure included, that the SDK preview schema accepts unchanged', async () => {
+    fx.beforeGit = async (args) => {
+      if (args[0] === 'worktree' && args[1] === 'list') throw new Error('injected discovery failure');
+    };
+
+    const { reports } = await maintain('prepare-delete');
+
+    const parsed = worktreeCleanupPreviewSchema.safeParse(reports[0]);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.data).toEqual(reports[0]);
+    expect(parsed.data?.failure).toMatchObject({ stage: 'discovery' });
   });
 });
 
