@@ -980,6 +980,8 @@ describe('rerouteAllNodeModules', () => {
     const rootNM = path.join(sourceRoot, 'node_modules');
     await fsExtra.ensureDir(rootNM);
     await fs.symlink('../../packages/pkg1', path.join(rootNM, 'pkg1'));
+    // The destination checkout carries the tracked root manifest.
+    await fsExtra.copy(path.join(repoRoot, 'package.json'), path.join(worktreeDir, 'package.json'));
 
     const count = await rerouteAllNodeModules({
       sourceRoot,
@@ -1007,6 +1009,8 @@ describe('rerouteAllNodeModules', () => {
 
     const rootNM = path.join(sourceRoot, 'node_modules');
     await fsExtra.ensureDir(rootNM);
+    // The destination checkout carries the tracked root manifest.
+    await fsExtra.copy(path.join(repoRoot, 'package.json'), path.join(worktreeDir, 'package.json'));
 
     const count = await rerouteAllNodeModules({
       sourceRoot,
@@ -1036,6 +1040,8 @@ describe('rerouteAllNodeModules', () => {
     const pkg1NM = path.join(sourceRoot, 'packages', 'pkg1', 'node_modules');
     await fsExtra.ensureDir(pkg1NM);
     await fs.symlink('../../../packages/shared', path.join(pkg1NM, 'shared'));
+    // The destination checkout carries the tracked root manifest.
+    await fsExtra.copy(path.join(repoRoot, 'package.json'), path.join(worktreeDir, 'package.json'));
 
     const count = await rerouteAllNodeModules({
       sourceRoot,
@@ -1231,6 +1237,8 @@ describe('enumerateReroutedNodeModules', () => {
     const rootNM = path.join(sourceRoot, 'node_modules');
     await fsExtra.ensureDir(rootNM);
     await fs.symlink('../../packages/shared', path.join(rootNM, 'shared'));
+    // The destination checkout carries the tracked root manifest.
+    await fsExtra.copy(path.join(repoRoot, 'package.json'), path.join(worktreeDir, 'package.json'));
 
     await rerouteAllNodeModules({ sourceRoot, worktreeDir, repoRoot });
 
