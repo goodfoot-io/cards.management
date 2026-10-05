@@ -8,7 +8,7 @@
  * @module
  */
 
-import { chmod, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Logger } from '@cards.management/sdk';
 import { isProcessAbsent } from '@cards.management/sdk/process-identity';
@@ -132,6 +132,37 @@ describe('acquireSlot', () => {
     await acquire('exec-1');
 
     expect(await acquire('exec-2')).toMatchObject({ ordinal: 2, outcome: 'created' });
+  });
+
+  it('skips with lock_unavailable a free slot and a new ordinal whose lock generation cannot be published', async () => {
+    const first = await acquire('exec-1');
+    await first.lock.release();
+    // A scanner holding every new generation of slots 1 and 2 open: the rename keeps failing with EPERM.
+    const blocked = [join(fx.slotRoot, '.locks', '1'), join(fx.slotRoot, '.locks', '2')];
+    const layer = {
+      ...fx.layer,
+      lockEnvironment: {
+        ...fx.layer.lockEnvironment,
+        renameBudgetMs: 50,
+        fs: {
+          readFile: (path: string) => readFile(path, 'utf8'),
+          rename: async (from: string, to: string) => {
+            if (blocked.some((dir) => to.startsWith(`${dir}/`) && !to.slice(dir.length + 1).includes('/'))) {
+              throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}'`), { code: 'EPERM' });
+            }
+            await rename(from, to);
+          }
+        }
+      }
+    };
+
+    const slot = await acquireSlot(fx.input('exec-2'), { client: fx.client, logger: new Logger(), layer });
+
+    expect(slot).toMatchObject({ ordinal: 3, outcome: 'created' });
+    expect(slot.skipped.map((skip) => skip.ordinal)).toEqual([1, 2]);
+    for (const skip of slot.skipped) expect(skip.reason).toMatch(/^lock_unavailable: .*EPERM/);
+    expect(describeSkippedSlots(slot.skipped)).toMatch(/^2 slots skipped as unjudgeable: 1 \(lock_unavailable: /);
+    await slot.lock.release();
   });
 
   it('gives two concurrent acquires different slots, both for one free slot and for one new ordinal', async () => {

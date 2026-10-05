@@ -61,7 +61,7 @@ const slotHandoffDataSchema = z.object({
   })
 });
 
-/** A slot acquisition passed over because its lock could not be judged. */
+/** A slot acquisition passed over because its lock could not be judged or published. */
 export interface SkippedSlot {
   readonly ordinal: number;
   readonly reason: string;
@@ -79,7 +79,7 @@ export interface AcquiredSlot {
   readonly worktreePath: string;
   readonly parentBranch: string;
   readonly outcome: SlotAcquisitionOutcome;
-  /** Slots skipped as unjudgeable, each with its reason. */
+  /** Slots skipped as unjudgeable or whose lock could not be published, each with its reason. */
   readonly skipped: readonly SkippedSlot[];
   /** Why a presented handoff could not be claimed; null when none was presented or it was claimed. */
   readonly handoffLost: string | null;
@@ -101,7 +101,7 @@ const CREATE_ATTEMPTS = 64;
 
 /**
  * Formats the skipped-slot line of the launch output.
- * @param skipped - Slots skipped as unjudgeable.
+ * @param skipped - Slots skipped as unjudgeable or lock_unavailable.
  * @returns The line, or null when none was skipped.
  */
 export function describeSkippedSlots(skipped: readonly SkippedSlot[]): string | null {
@@ -225,6 +225,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
     });
     if (result.status !== 'acquired') {
       if (result.status === 'unknown') skipped.push({ ordinal, reason: result.detail.reason });
+      if (result.status === 'unavailable') skipped.push({ ordinal, reason: `lock_unavailable: ${result.detail}` });
       return null;
     }
     const { lock, previous } = result;
@@ -520,6 +521,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
       continue;
     }
     const result = await acquireSlotLock(slotRoot, ordinal, { ...lockOptions, context: judge });
+    if (result.status === 'unavailable') skipped.push({ ordinal, reason: `lock_unavailable: ${result.detail}` });
     if (result.status !== 'acquired') continue;
     const { lock, previous } = result;
     try {

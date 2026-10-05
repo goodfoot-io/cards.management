@@ -79,7 +79,7 @@ Routes through `POST /execute-command` with `{command: "cards.reportIssue", args
 
 **Usage**: `remove-worktree <path>`. **Exit codes**: 0 success, 2 failure.
 
-**Behavior**: Resolves checkout HEAD and refuses reserved `cards/<cardId>/<positive integer>` slots before removal. Ordinary card-bound checkouts are removed, then their branch registration is removed through the API; an unavailable API or failed unregistration is logged. Unbound ordinary worktrees use the same SDK teardown. Dedicated slots require authenticated owner cleanup.
+**Behavior**: Accepts only paths under the Cards worktrees root and is a no-op when the checkout is already gone. A checkout whose HEAD is a worktree slot branch `cards/<cardId>/<positive integer>` is refused before anything is removed (exit 2, `Dedicated slots require runtime worktree cleanup`), because slots are removed only under their slot lock. Remove them with the `worktreeMaintenance` command, for example the Clean Up Worktrees command. A card-bound checkout (`.cards/CARD_ID` present, HEAD on a branch) is removed with `git worktree remove --force`, then its branch registration is removed through the API. An unavailable API or a failed unregistration is logged and still exits 0. An unbound checkout, or a card-bound one with a detached HEAD, is removed from disk without touching any registration.
 
 ### `cards-sdk`
 

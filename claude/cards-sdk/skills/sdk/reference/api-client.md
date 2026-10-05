@@ -63,6 +63,19 @@ All are `async` and throw on HTTP failure.
 | `timeout` | The deadline passed; the command was cancelled |
 | `cancelled` | `signal` aborted; the command was cancelled |
 
+On the server, [`POST /cards/:cardId/runtime/commands`](./packages/cards/server/src/api/Router.ts#L2218-L2244) takes `{ requestId, messageId, command, input }`. It answers:
+
+| Status | When |
+|--------|------|
+| 400 | Malformed body |
+| 404 | No card scope for `:cardId` |
+| 401 | No runtime principal resolves for the card |
+| 503 | No runtime owner has bound the command routes |
+| 409 `command_unconfigured` | The configuration does not define `command`; refused before admission |
+| Otherwise | The action launch route's admission result, including 409 `card_deleting` |
+
+[`POST /cards/:cardId/runtime/commands/:requestId/cancel`](./packages/cards/server/src/api/Router.ts#L2246-L2270) answers 202 `cancel-requested`, 200 `not-running`, 404 when the card scope or the request is unknown, 401, or 503. The outcome is read under the same `requestId` through [`GET /cards/:cardId/runtime/actions/:requestId`](./packages/cards/server/src/api/Router.ts#L2196-L2216). The generic `POST /cards/:cardId/runtime/actions` route [refuses root-command params](./packages/cards/server/src/api/Router.ts#L113-L121) with 400, so `runRootCommand` is the only way to launch one.
+
 [getExecutionStatus(executionId)](./public/packages/sdk/src/client/cardsClient.ts#L1068) reads `GET /runtime/executions/:executionId/status` and returns `running`, `terminal` or `unknown`. `unknown` means the server holds no record, which for an execution that once spawned means it settled long ago.
 
 ## Deleting a Card
