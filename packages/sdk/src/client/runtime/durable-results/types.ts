@@ -23,7 +23,7 @@ export type DurableResultMessageType = Extract<
   | 'execution.launchAdmission'
   | 'execution.launchOutcome'
   | 'execution.commandEffectResult'
-  | 'execution.worktreeAssignmentResult'
+  | 'execution.commandReport'
   | 'execution.cleanupResult'
   | 'execution.commandCustody'
   | 'watcher.stopResult'
