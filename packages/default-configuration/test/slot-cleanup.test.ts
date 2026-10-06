@@ -24,6 +24,7 @@ import {
   type AcquiredSlot,
   acquireSlot,
   cleanupCardSlots,
+  SLOT_CLEANUP_PASS_BUDGET_MS,
   type SlotCleanupOptions,
   type SlotCleanupResult,
   type SlotLayer
@@ -66,7 +67,12 @@ async function finishedSlot(executionId: string): Promise<AcquiredSlot> {
  * @returns The pass result.
  */
 function pass(options: Partial<SlotCleanupOptions> = {}): Promise<SlotCleanupResult> {
-  return cleanupCardSlots(fx.cleanupContext(), { requester: null, mode: 'cleanup', ...options });
+  return cleanupCardSlots(fx.cleanupContext(), {
+    requester: null,
+    mode: 'cleanup',
+    budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS,
+    ...options
+  });
 }
 
 /**
@@ -521,7 +527,10 @@ describe('cleanupCardSlots removal', () => {
       try {
         const layer = hidingLayer(hidden.pid ?? 0, uid);
         for (const mode of ['preview', 'cleanup'] as const) {
-          const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
+          const result = await cleanupCardSlots(
+            { ...fx.cleanupContext(), layer },
+            { requester: null, mode, budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+          );
           const decision = decisionOf(result, slot.branch);
           expect(decision).toMatchObject({ reason: 'eligible', outcome: mode === 'preview' ? 'eligible' : 'removed' });
           expect(decision.detail).not.toMatch(/process|inspect|prob/);
@@ -548,7 +557,10 @@ describe('cleanupCardSlots removal', () => {
       }
     };
 
-    const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode: 'cleanup' });
+    const result = await cleanupCardSlots(
+      { ...fx.cleanupContext(), layer },
+      { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+    );
 
     const decision = decisionOf(result, slot.branch);
     expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
@@ -622,7 +634,10 @@ describe('cleanupCardSlots removal', () => {
       }
     };
 
-    const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode: 'cleanup' });
+    const result = await cleanupCardSlots(
+      { ...fx.cleanupContext(), layer },
+      { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+    );
 
     expect(wrote).toBe(true);
     expect(decisionOf(result, slot.branch)).toMatchObject({ reason: 'removal_restored', outcome: 'preserved' });

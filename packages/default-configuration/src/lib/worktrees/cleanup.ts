@@ -40,11 +40,8 @@ import { unregisterSlot } from './registration.js';
 /** What a pass does: report only, remove, or remove and require that nothing remains. */
 export type SlotCleanupMode = 'preview' | 'cleanup' | 'prepare-delete';
 
-/** Budget of an in-handler start or end pass, and of `preview`. */
+/** Budget of an in-handler start or end pass; maintenance passes take theirs from the command input. */
 export const SLOT_CLEANUP_PASS_BUDGET_MS = 60_000;
-
-/** Budget of a maintenance `cleanup` or `prepare-delete`, inside the root command's 300 s deadline. */
-export const SLOT_CLEANUP_MAINTENANCE_BUDGET_MS = 270_000;
 
 /** Budget of a pass's batched identity read, and of its one retry; cleanup is off the launch path. */
 const CLEANUP_JUDGE_TIMEOUT_MS = 15_000;
@@ -72,11 +69,10 @@ export interface SlotCleanupOptions {
   readonly mode: SlotCleanupMode;
   /**
    * Time after which slots not yet started are reported `budget_exhausted`
-   * and not locked. Defaults to {@link SLOT_CLEANUP_PASS_BUDGET_MS} for
-   * `preview` and in-handler passes (a non-null requester), and to
-   * {@link SLOT_CLEANUP_MAINTENANCE_BUDGET_MS} otherwise.
+   * and not locked: the maintenance input's `budgetMs`, or
+   * {@link SLOT_CLEANUP_PASS_BUDGET_MS} for an in-handler pass.
    */
-  readonly budgetMs?: number;
+  readonly budgetMs: number;
 }
 
 /** A pass's outcome. */
@@ -247,11 +243,7 @@ export async function cleanupCardSlots(
 ): Promise<SlotCleanupResult> {
   const { mode } = options;
   const requester = mode === 'prepare-delete' ? null : options.requester;
-  const budgetMs =
-    options.budgetMs ??
-    (mode === 'preview' || options.requester !== null
-      ? SLOT_CLEANUP_PASS_BUDGET_MS
-      : SLOT_CLEANUP_MAINTENANCE_BUDGET_MS);
+  const { budgetMs } = options;
   const deadline = Date.now() + budgetMs;
   const { client, logger, cardId } = context;
   const decisions: WorktreeCleanupDecision[] = [];

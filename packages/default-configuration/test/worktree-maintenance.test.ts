@@ -80,13 +80,18 @@ interface Run {
  * Runs the command on the fixture's layer as the runtime would, collecting its reports.
  * @param mode - The maintenance mode.
  * @param executionId - The command's own execution.
+ * @param budgetMs - The input's budget, as the launcher sets it.
  * @returns The reports, and the last one parsed as a caller parses it, with the SDK's strict preview schema.
  */
-async function maintain(mode: WorktreeMaintenanceInput['mode'], executionId = 'exec-maintenance'): Promise<Run> {
+async function maintain(
+  mode: WorktreeMaintenanceInput['mode'],
+  executionId = 'exec-maintenance',
+  budgetMs = 60_000
+): Promise<Run> {
   const reports: Record<string, unknown>[] = [];
   const { extensionPath } = fx.input(executionId);
   await createWorktreeMaintenance({ layer: fx.layer })(
-    { executionId, cardId: fx.cardId, mode, repoRoot: fx.repoRoot, cardRepoPath: fx.scratch, extensionPath },
+    { executionId, cardId: fx.cardId, mode, budgetMs, repoRoot: fx.repoRoot, cardRepoPath: fx.scratch, extensionPath },
     {
       logger: new Logger(),
       cwd: fx.repoRoot,
@@ -174,6 +179,25 @@ describe('worktreeMaintenance cleanup', () => {
 
     expect(report.decisions[0]).toMatchObject({ outcome: 'removed' });
     expect(owners).toEqual(['exec-maintenance-7']);
+  });
+
+  it('stops starting slots once the input’s budget has run out', async () => {
+    const [slot] = await finishedSlots(false);
+    // Discovery runs git first, so a slot can only be started after this delay has spent the budget.
+    fx.beforeGit = () => new Promise((resolve) => setTimeout(resolve, 50));
+
+    const { report } = await maintain('cleanup', 'exec-maintenance', 20);
+
+    expect(report.decisions).toEqual([
+      expect.objectContaining({
+        branch: slot.branch,
+        reason: 'budget_exhausted',
+        outcome: 'preserved',
+        detail: expect.stringContaining('the 20 ms budget')
+      })
+    ]);
+    expect(report.canDeleteCard).toBe(false);
+    expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
   });
 });
 

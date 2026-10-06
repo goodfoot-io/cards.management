@@ -17,7 +17,12 @@ import {
   type SlotClient,
   type SlotHandoffData
 } from './acquire.js';
-import { cleanupCardSlots, type SlotCleanupContext, type SlotCleanupResult } from './cleanup.js';
+import {
+  cleanupCardSlots,
+  SLOT_CLEANUP_PASS_BUDGET_MS,
+  type SlotCleanupContext,
+  type SlotCleanupResult
+} from './cleanup.js';
 import type { SlotLayer } from './layer.js';
 
 /** What the switch callback returns to the runtime for the successor. */
@@ -94,7 +99,11 @@ export async function openSlotSession(input: SlotActionInput, options: OpenSlotS
    */
   const runPass = async (stage: 'start' | 'end'): Promise<SlotCleanupResult | null> => {
     try {
-      return await cleanupCardSlots(context, { requester: input.executionId, mode: 'cleanup' });
+      return await cleanupCardSlots(context, {
+        requester: input.executionId,
+        mode: 'cleanup',
+        budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS
+      });
     } catch (error) {
       logger.warn(`Slot ${stage} pass failed`, {
         cardId: input.cardId,

@@ -24,7 +24,12 @@ import { resolveSlotRoot } from '@cards.management/sdk/cards-config';
 import { createShutdownCoordinator, type ShutdownCoordinator } from '@cards.management/sdk/config';
 import { readSlotLock, readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { acquireSlot, cleanupCardSlots, openSlotSession } from '../src/lib/worktrees/index.js';
+import {
+  acquireSlot,
+  cleanupCardSlots,
+  openSlotSession,
+  SLOT_CLEANUP_PASS_BUDGET_MS
+} from '../src/lib/worktrees/index.js';
 import {
   abandonSlotLock,
   createFixtureLayer,
@@ -287,11 +292,15 @@ describe('a handler killed at each create step', () => {
 
       const startPass = await cleanupCardSlots(
         { ...fx.cleanupContext(), executionId: 'exec-next' },
-        { requester: 'exec-next', mode: 'cleanup' }
+        { requester: 'exec-next', mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
       );
       expect(startPass.failure).toBeUndefined();
       expect(startPass.decisions.filter((decision) => decision.outcome === 'failed')).toEqual([]);
-      const deletion = await cleanupCardSlots(fx.cleanupContext(), { requester: null, mode: 'prepare-delete' });
+      const deletion = await cleanupCardSlots(fx.cleanupContext(), {
+        requester: null,
+        mode: 'prepare-delete',
+        budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS
+      });
 
       expect(deletion.ok).toBe(true);
       expect(await oidOf('cards/card-1/1')).toBeNull();
@@ -307,7 +316,11 @@ describe('a handler killed at each create step', () => {
 
     await handler.killGroup();
     await fx.client.reload();
-    const deletion = await cleanupCardSlots(fx.cleanupContext(), { requester: null, mode: 'prepare-delete' });
+    const deletion = await cleanupCardSlots(fx.cleanupContext(), {
+      requester: null,
+      mode: 'prepare-delete',
+      budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS
+    });
 
     expect(deletion.ok).toBe(true);
     expect(deletion.decisions).toMatchObject([{ reason: 'eligible', outcome: 'removed' }]);
@@ -425,7 +438,11 @@ describe('the wrapper stop burst racing a competing launch', () => {
       expect(left.released).toBeNull();
 
       await fx.client.reload();
-      const deletion = await cleanupCardSlots(fx.cleanupContext(), { requester: null, mode: 'prepare-delete' });
+      const deletion = await cleanupCardSlots(fx.cleanupContext(), {
+        requester: null,
+        mode: 'prepare-delete',
+        budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS
+      });
 
       expect(deletion.ok).toBe(true);
       expect(await oidOf(sibling.branch)).toBeNull();

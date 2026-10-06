@@ -55,7 +55,7 @@ export function createWorktreeMaintenance(overrides: MaintenanceLayer = {}) {
         workspacePath: input.repoRoot,
         ...overrides
       },
-      { requester: null, mode: input.mode }
+      { requester: null, mode: input.mode, budgetMs: input.budgetMs }
     );
     report({ ...maintenanceReport(input.cardId, result) });
   });
