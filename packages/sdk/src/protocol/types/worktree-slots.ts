@@ -86,6 +86,12 @@ export interface WorktreePurgeSummary {
   /** Copies left for a later pass: busy, locked, or out of budget. */
   readonly pending: number;
   readonly kept: readonly WorktreePurgeKeptCopy[];
+  /**
+   * Why the purge stopped early, so the counts cover only the copies it
+   * reached; null when it went through every copy. It is report data and logs
+   * only, never a stage failure.
+   */
+  readonly failure: string | null;
 }
 
 /** Authenticated preview used before requesting cleanup or card deletion. */
@@ -191,7 +197,8 @@ export const worktreeCleanupPreviewSchema = z
     purge: z.strictObject({
       purged: z.int().nonnegative(),
       pending: z.int().nonnegative(),
-      kept: z.array(z.strictObject({ path: z.string().min(1), detail: z.string() }))
+      kept: z.array(z.strictObject({ path: z.string().min(1), detail: z.string() })),
+      failure: z.string().min(1).nullable()
     }),
     failure: z.strictObject({ stage: z.enum(['discovery', 'self_probe']), message: z.string() }).optional()
   })
