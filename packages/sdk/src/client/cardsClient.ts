@@ -704,23 +704,24 @@ export class CardsClient {
    *
    * Run `worktreeMaintenance` in `prepare-delete` mode first, through
    * {@link CardsClient.runRootCommand}, and delete only when its report allows
-   * it: the server keeps no worktree state and does not clean up slots. Cite
-   * that run as `preparedBy` so the server can refuse when the card changed
-   * after it.
+   * it: the server keeps no worktree state and does not clean up slots. The
+   * delete must cite that run as `preparedBy`, so the server can refuse when
+   * the card changed after it.
    *
    * @param cardId - The id of the card to delete.
    * @param options - The delete's preconditions.
    * @param options.preparedBy - `requestId` of the passing prepare-delete run, sent as `?preparedBy=`.
    * @returns Promise resolving when deletion is complete.
    * @throws CardDeleteRefusedError on 409 `running_execution` or `card_changed`, naming the executions,
-   *   or on 400 `invalid_prepared_by`.
+   *   or on 400 `invalid_prepared_by` or `prepared_by_required`.
    * @throws ApiError when the server rejects the delete for another reason, such as 503 when runtime
    *   admission is unavailable.
    * @throws NetworkError when the request fails to reach the server.
    */
-  async deleteCard(cardId: string, options: { readonly preparedBy?: string } = {}): Promise<void> {
-    const query = options.preparedBy === undefined ? '' : `?preparedBy=${encodeURIComponent(options.preparedBy)}`;
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}${query}`);
+  async deleteCard(cardId: string, options: { readonly preparedBy: string }): Promise<void> {
+    const url = this.buildUrl(
+      `/cards/${encodeURIComponent(cardId)}?preparedBy=${encodeURIComponent(options.preparedBy)}`
+    );
     return this.request(() => this.getHttpClient().delete(url));
   }
 
@@ -1369,7 +1370,7 @@ function rootCommandNotFound(body: unknown, cardId: string): RootCommandNotFound
 /**
  * Recognizes a card-delete refusal in an error body. A 409's execution list
  * must be readable, or the body is outside the contract and stays a plain
- * {@link ApiError}; `invalid_prepared_by` carries none.
+ * {@link ApiError}; the 400 refusals carry none.
  *
  * @param code - The body's machine code.
  * @param executions - The body's `executions` field.
@@ -1381,7 +1382,8 @@ function cardDeleteRefusal(
 ): { code: CardDeleteRefusalCode; executions: readonly string[] } | null {
   const refusal = CARD_DELETE_REFUSAL_CODES.find((known) => known === code);
   if (refusal === undefined) return null;
-  if (refusal === 'invalid_prepared_by') return executions === undefined ? { code: refusal, executions: [] } : null;
+  if (refusal === 'invalid_prepared_by' || refusal === 'prepared_by_required')
+    return executions === undefined ? { code: refusal, executions: [] } : null;
   if (!Array.isArray(executions) || !executions.every((id): id is string => typeof id === 'string')) return null;
   return { code: refusal, executions };
 }
