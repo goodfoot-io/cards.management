@@ -38,6 +38,11 @@ import { createSlotGit } from '../../src/lib/worktrees/slot-git.js';
 
 const run = promisify(execFile);
 
+/**
+ * Bound for a test that drives several slot passes over real git on a loaded host; a remove-after-remedy row took up to 15.4 s at load average 23.
+ */
+export const GIT_HEAVY_TIMEOUT_MS = 120_000;
+
 /** Git identity for commits made by fixtures. */
 export const FIXTURE_GIT_ENV = {
   GIT_AUTHOR_NAME: 'Slot Fixture',
