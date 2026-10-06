@@ -33,7 +33,8 @@ const PREVIEW = {
   purge: {
     purged: 2,
     pending: 1,
-    kept: [{ path: '/repo/cards/main-1/.purge/1.copy', detail: 'It changed after its removal: a.txt' }]
+    kept: [{ path: '/repo/cards/main-1/.purge/1.copy', detail: 'It changed after its removal: a.txt' }],
+    failure: null
   }
 } as const satisfies WorktreeCleanupPreview;
 
@@ -113,7 +114,7 @@ describe('worktreeCleanupPreviewSchema', () => {
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       // Uninspected processes never block, so a clear report may still count some.
       processesNotInspected: 3,
-      purge: { purged: 0, pending: 0, kept: [] }
+      purge: { purged: 0, pending: 0, kept: [], failure: null }
     } as const satisfies WorktreeCleanupPreview;
 
     it('accepts a clear report that allows deletion, and the same report refusing it is rejected', () => {
@@ -126,9 +127,16 @@ describe('worktreeCleanupPreviewSchema', () => {
       expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, decisions: [] }).success).toBe(true);
     });
 
-    it('stays clear whatever the purge kept or left pending', () => {
-      const purge = { purged: 0, pending: 4, kept: [{ path: '/repo/cards/main-2/.purge/3.copy', detail: 'changed' }] };
-      expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, purge }).success).toBe(true);
+    it('stays clear whatever the purge kept, left pending or failed on', () => {
+      const purge = {
+        purged: 0,
+        pending: 4,
+        kept: [{ path: '/repo/cards/main-2/.purge/3.copy', detail: 'changed' }],
+        failure: 'git worktree prune failed'
+      };
+      const report = { ...CLEAR, purge };
+      expect(worktreeCleanupPreviewSchema.safeParse(report).success).toBe(true);
+      expect(clearsCardDeletion(report)).toBe(true);
     });
 
     const violations: readonly (readonly [
@@ -161,7 +169,9 @@ describe('worktreeCleanupPreviewSchema', () => {
     ['a fractional pending count', { ...PREVIEW.purge, pending: 0.5 }],
     ['a kept copy without a path', { ...PREVIEW.purge, kept: [{ path: '', detail: 'x' }] }],
     ['a kept copy without a detail', { ...PREVIEW.purge, kept: [{ path: '/x' }] }],
-    ['an extra field', { ...PREVIEW.purge, failed: 0 }]
+    ['an extra field', { ...PREVIEW.purge, failed: 0 }],
+    ['without its failure', { purged: 2, pending: 1, kept: [] }],
+    ['an empty failure', { ...PREVIEW.purge, failure: '' }]
   ])('rejects a purge summary that is %s', (_case, purge) => {
     expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, purge }).success).toBe(false);
   });
