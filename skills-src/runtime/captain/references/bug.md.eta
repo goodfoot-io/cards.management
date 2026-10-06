@@ -40,7 +40,7 @@ fi
 Read `CARD.md` from the card repository. Read CARD.meta.json for current `title`, `gates`, and `tags`. Extract `[BUG_DESCRIPTION]`, `[SCOPE_HINT]`, and any verbatim error messages or stack traces.
 
 Based on the card's shape:
-- **Describes a capability gap** (language like "add", "implement", "support", or an inability to fill in "[Expected] but [Actual]" because no actual behavior exists): This is a feature request, not a bug. Write a comment explaining the triage, commit, and Read `./plan.md` to continue.
+- **Describes a capability gap** (language like "add", "implement", "support", or an inability to fill in "[Expected] but [Actual]" because no actual behavior exists): This is a feature request, not a bug. Read `./plan.md`; the plan states the triage.
 - **Describes an observed-vs-expected mismatch**: Proceed to Step 1.3: Identify Root Cause Hypotheses.
 
 ### 1.3 Identify Root Cause Hypotheses
@@ -50,7 +50,7 @@ Enumerate all plausible root causes based on card content, error messages, and s
 - Which code paths or data-flow segments are implicated.
 - What evidence supports or contradicts it.
 
-If every hypothesis reduces to "the described behavior is not implemented anywhere," the card is a missing-feature request rather than a bug. Write a comment explaining the finding, commit, and Read `./plan.md` to continue.
+If every hypothesis reduces to "the described behavior is not implemented anywhere," the card is a missing-feature request rather than a bug. Read `./plan.md`; the plan states the finding.
 
 ### 1.4 Assess Reproduction Suitability
 
@@ -70,7 +70,7 @@ If you cannot write that one sentence — if every candidate test drops at least
 
 These three are the common ways a property fails; they are examples, not an exhaustive whitelist — apply the first principle when a bug fits none of them by name. "Hard", "slow", "obvious", and "I'm confident" are not disqualifiers — reproduce anyway. But confidence that reproduction is *feasible* never overrides a missing property: a tautological or environment-probing test you *can* write is still not a reproduction.
 
-On divert: write a comment naming the disqualifier and why no outcome-level test fits, commit, and Read `./plan.md` (the planning path picks an outcome guard where one is meaningful). Otherwise proceed to Step 1.5.
+On divert, Read `./plan.md`; the plan names the disqualifier and why no outcome-level test fits, and picks an outcome guard where one is meaningful. Otherwise proceed to Step 1.5.
 
 ### 1.5 Write Reproduction Tests
 
@@ -87,7 +87,7 @@ For each viable hypothesis, in turn:
 **Every commit below follows the `<workspace-commit-style>` and `<markdown-guidelines>` conventions.**
 
 Based on the reproduction results:
-- **One or more tests fail**: Commit all failing tests in one commit, tag the state, capture `[TEST_FAILURE_OUTPUT]`, write a progress comment to the card repository listing each viable pathway and its test, commit the card repository, and proceed to Step 2: Resolve Bug.
+- **One or more tests fail**: Commit all failing tests in one commit whose message lists each viable pathway and its test, tag the state, capture `[TEST_FAILURE_OUTPUT]`, and proceed to Step 2: Resolve Bug.
 - **No tests fail, new evidence supports a new hypothesis**: Return to Step 1.3.
 - **No tests fail, hypotheses exhausted**: Record the evidence and read `./plan.md` for focused research or a different in-scope approach. Apply `<blocker-contract>` only if progress requires external ownership or a distinct prerequisite.
 

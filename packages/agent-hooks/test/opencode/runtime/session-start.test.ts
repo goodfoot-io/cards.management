@@ -192,24 +192,32 @@ describe('runtime session-start plugin', () => {
   });
 
   it('entry exports the live factory when spawned by a Cards action', async () => {
-    const previous = process.env['CARD_ID'];
-    const previousExecutionId = process.env['CARDS_EXECUTION_ID'];
-    const previousDirective = process.env['CARDS_WORKTREE_DIRECTIVE'];
-    process.env['CARD_ID'] = 'ope-age-sup-1';
-    process.env['CARDS_EXECUTION_ID'] = 'execution-453';
-    process.env['CARDS_WORKTREE_DIRECTIVE'] = '{"kind":"reuse"}';
+    // Every variable extractActionInput() requires, so the result never depends on the ambient shell.
+    const actionEnv = {
+      CARD_ID: 'ope-age-sup-1',
+      ACTION_NAME: 'Launch',
+      CARDS_EXECUTION_ID: 'execution-453',
+      CARDS_WORKTREE_DIRECTIVE: '{"kind":"reuse"}',
+      ENVIRONMENT: 'default',
+      EXECUTION_MODE: 'background',
+      EXIT_WHEN_DONE: 'false',
+      REPO_ROOT: tempDir,
+      CARD_REPO_PATH: tempDir,
+      CONFIG_PATH: join(tempDir, 'config'),
+      EXTENSION_PATH: join(tempDir, 'extension'),
+      MARKETPLACE_PATH: join(tempDir, 'extension/dist/marketplace'),
+      WORKSPACE_PATH: tempDir,
+      BASE_BRANCH: 'main',
+      WORKSPACE_BRANCH: 'cards/main-1/1'
+    };
+    for (const [key, value] of Object.entries(actionEnv)) vi.stubEnv(key, value);
     try {
       vi.resetModules();
       const entry = await import('../../../src/opencode/runtime/session-start.js');
       const hooks = await entry.CardsRuntimeSessionStart(makePluginInput(tempDir, makeClient(logEntries)));
       expect(typeof hooks.event).toBe('function');
     } finally {
-      if (previous === undefined) delete process.env['CARD_ID'];
-      else process.env['CARD_ID'] = previous;
-      if (previousExecutionId === undefined) delete process.env['CARDS_EXECUTION_ID'];
-      else process.env['CARDS_EXECUTION_ID'] = previousExecutionId;
-      if (previousDirective === undefined) delete process.env['CARDS_WORKTREE_DIRECTIVE'];
-      else process.env['CARDS_WORKTREE_DIRECTIVE'] = previousDirective;
+      vi.unstubAllEnvs();
       vi.resetModules();
     }
   });

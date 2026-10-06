@@ -82,7 +82,7 @@ Prompts for generating exercise-revealed questions:
 - **Cross-feature interactions** — When the user uses this feature alongside an adjacent one, does behavior the user expects still hold?
 - **Recovery paths** — When something goes wrong, can the user recover, or are they stuck?
 
-Append new questions to the `user-outcome-questions` note as you discover them and commit the update. After your first verdict:
+Append new questions to the `user-outcome-questions` note as you discover them and commit the update. The note holds only the live question set — never answers or verdicts; delete a question once the mechanism it targets is gone. After your first verdict:
 
 - A new question **gates** approval only when it names the fix commit that introduced the behavior it targets, or names an artifact that did not exist at round 1 (a commit, a new surface, a runtime observation from a path the fix created). "I had not yet exercised it" is not unaskability — it is a review defect per §3.3.
 - A non-gating question is still recorded in the note and answered as you go; it never gates approval.

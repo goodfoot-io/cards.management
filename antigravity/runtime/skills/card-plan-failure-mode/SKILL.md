@@ -130,7 +130,7 @@ Prompts for plan-revealed questions:
 - **Step dependencies and failure paths** — For each step that can fail, what does the plan say happens when it does? Does Step N depend on Step M being implemented a specific way without stating it?
 - **New failure categories the plan introduces** — If the plan adds a daemon, a cache, or a new error-handling strategy, what questions does that approach now invite?
 
-Append new questions to the note as you discover them. Plans are only meaningfully compared against the same set: do not DM `APPROVED` for any plan until every question that gates it has been answered against it. Follow `<take-notes>` for architectural discoveries that don't fit as questions.
+Append new questions to the note as you discover them. The note holds only the live question set — never answers or verdicts; delete a question once the mechanism it targets is gone. Plans are only meaningfully compared against the same set: do not DM `APPROVED` for any plan until every question that gates it has been answered against it. Follow `<take-notes>` for architectural discoveries that don't fit as questions.
 
 ### 2.3. Handle Peer-Submitted Critiques
 
