@@ -44,7 +44,8 @@ import {
   RequestCancelledError,
   RetryExhaustedError,
   RootCommandError,
-  type RootCommandFailureCause
+  type RootCommandFailureCause,
+  type RootCommandFailureScope
 } from './types/errors.js';
 
 /** Input of each root configuration command, keyed by command name. */
@@ -90,6 +91,20 @@ const ROOT_COMMAND_REQUEST_MS = 10_000;
 
 /** HTTP statuses that end a root command call as `rejected` rather than being retried. */
 const ROOT_COMMAND_REJECTIONS = new Set([400, 401, 403, 503]);
+
+/** Causes that mean the workspace, not the card, cannot run root commands. */
+const WORKSPACE_FAILURE_CAUSES: ReadonlySet<RootCommandFailureCause> = new Set([
+  'unconfigured',
+  'unavailable',
+  'workspace_not_found'
+]);
+
+/** Uncertainty reasons that come from the workspace's admission storage, not the card. */
+const WORKSPACE_UNCERTAINTY_REASONS: ReadonlySet<string> = new Set([
+  'storage-unavailable',
+  'journal-unreadable',
+  'journal-corrupt'
+]);
 
 /** One root-command HTTP exchange: a status and parsed body, or no response at all. */
 type RootCommandExchange = { readonly status: number; readonly body: unknown } | null;
@@ -934,8 +949,19 @@ export class CardsClient {
     const messageId = globalThis.crypto.randomUUID();
     const deadline = Date.now() + (options.timeoutMs ?? ROOT_COMMAND_TIMEOUT_MS);
     const { signal } = options;
-    const fail = (cause: RootCommandFailureCause, detail: string): RootCommandError =>
-      new RootCommandError(`Root command ${command} on ${cardId} ended without a report: ${detail}`, cause, requestId);
+    const fail = (
+      cause: RootCommandFailureCause,
+      detail: string,
+      scope: RootCommandFailureScope = WORKSPACE_FAILURE_CAUSES.has(cause) ? 'workspace' : 'card'
+    ): RootCommandError =>
+      new RootCommandError(
+        `Root command ${command} on ${cardId} ended without a report: ${detail}`,
+        cause,
+        requestId,
+        scope
+      );
+    const uncertainScope = (reason: string): RootCommandFailureScope =>
+      WORKSPACE_UNCERTAINTY_REASONS.has(reason) ? 'workspace' : 'card';
     if (signal?.aborted) throw fail('cancelled', 'cancelled before launch');
 
     const commandsPath = `/cards/${encodeURIComponent(cardId)}/runtime/commands`;
@@ -982,9 +1008,12 @@ export class CardsClient {
         if (exchange.status === 409 && rootCommandErrorCode(exchange.body) === 'card_deleting') {
           throw fail('rejected', 'the card is being deleted');
         }
-        if (ROOT_COMMAND_REJECTIONS.has(exchange.status))
-          throw fail('rejected', `launch refused with ${exchange.status}`);
         const parsed = publicActionLaunchResponseSchema.safeParse(exchange.body);
+        // Admission that cannot answer comes back as a 503 carrying its reason; every other refusal status is final.
+        const uncertainAdmission =
+          exchange.status === 503 && parsed.success && parsed.data.disposition === 'unavailable';
+        if (ROOT_COMMAND_REJECTIONS.has(exchange.status) && !uncertainAdmission)
+          throw fail('rejected', `launch refused with ${exchange.status}`, 'workspace');
         if (!parsed.success) {
           if (exchange.status >= 500) {
             unavailable(`the launch failed with ${exchange.status}`);
@@ -1002,7 +1031,8 @@ export class CardsClient {
         outage = undefined;
         const launch = normalizeActionLaunchResponse(parsed.data, { requestId, messageId });
         if (launch.status === 'rejected') throw fail('rejected', `launch rejected: ${launch.reason}`);
-        if (launch.status === 'uncertain') throw fail('uncertain', `launch uncertain: ${launch.reason}`);
+        if (launch.status === 'uncertain')
+          throw fail('uncertain', `launch uncertain: ${launch.reason}`, uncertainScope(launch.reason));
         launched = true;
       }
 
@@ -1012,7 +1042,7 @@ export class CardsClient {
         unavailable('the retrieval got no response');
       } else {
         if (exchange.status === 401 || exchange.status === 403)
-          throw fail('rejected', `retrieval refused with ${exchange.status}`);
+          throw fail('rejected', `retrieval refused with ${exchange.status}`, 'workspace');
         const parsed = publicActionRetrievalResponseSchema.safeParse(exchange.body);
         if (parsed.success) {
           outage = undefined;
@@ -1022,7 +1052,8 @@ export class CardsClient {
             return { requestId, executionId: record.execution.executionId, report: record.commandReport };
           }
           if (record.status === 'rejected') throw fail('rejected', `admission rejected: ${record.reason}`);
-          if (record.status === 'uncertain') throw fail('uncertain', `admission uncertain: ${record.reason}`);
+          if (record.status === 'uncertain')
+            throw fail('uncertain', `admission uncertain: ${record.reason}`, uncertainScope(record.reason));
           if (record.status === 'not-found') throw fail('uncertain', 'the admitted launch has no durable record');
         } else if (exchange.status >= 500) {
           unavailable(`the retrieval failed with ${exchange.status}`);

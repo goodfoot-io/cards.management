@@ -8,7 +8,12 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CardsClient } from '../../src/client/cardsClient.js';
-import { ApiError, CardDeleteRefusedError, RootCommandError } from '../../src/client/types/errors.js';
+import {
+  ApiError,
+  CardDeleteRefusedError,
+  RootCommandError,
+  type RootCommandFailureCause
+} from '../../src/client/types/errors.js';
 
 const EXECUTION = { executionId: 'execution-1', launchRequestId: 'request-1' };
 const TERMINAL = {
@@ -473,6 +478,135 @@ describe('runRootCommand precise causes', () => {
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(requests.filter((request) => request.method === 'GET')).toHaveLength(1);
     expect(requests.filter(isCancel)).toHaveLength(1);
+  });
+});
+
+describe('runRootCommand failure scope', () => {
+  type Answer = readonly [number, unknown];
+  const admitted = (): Answer => [
+    202,
+    { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }
+  ];
+  const launchAnswers =
+    (answer: Answer): Respond =>
+    (): Answer =>
+      answer;
+  type Respond = (request: Recorded) => Answer;
+  type Row = readonly [string, RootCommandFailureCause, Respond];
+  const retrievalAnswers =
+    (answer: Answer): Respond =>
+    (request) =>
+      isLaunch(request) ? admitted() : isCancel(request) ? [202, { status: 'cancel-requested' }] : answer;
+
+  it.each<Row>([
+    ['unconfigured', 'unconfigured', launchAnswers([409, { code: 'command_unconfigured', error: 'none' }])],
+    ['a 400 launch refusal', 'rejected', launchAnswers([400, { error: 'bad params' }])],
+    ['a 401 launch refusal', 'rejected', launchAnswers([401, { error: 'unauthorized' }])],
+    ['a 403 launch refusal', 'rejected', launchAnswers([403, { error: 'forbidden' }])],
+    ['a 503 launch refusal', 'rejected', launchAnswers([503, { error: 'no admission' }])],
+    ['a 401 retrieval refusal', 'rejected', retrievalAnswers([401, { error: 'unauthorized' }])],
+    [
+      'workspace_not_found',
+      'workspace_not_found',
+      launchAnswers([404, { code: 'workspace_not_found', error: 'none' }])
+    ],
+    ...(['storage-unavailable', 'journal-unreadable', 'journal-corrupt'] as const).flatMap((reason): Row[] => [
+      [
+        `launch uncertainty ${reason}`,
+        'uncertain',
+        launchAnswers([503, { disposition: 'unavailable', reason, execution: null }])
+      ],
+      [
+        `admission uncertainty ${reason}`,
+        'uncertain',
+        retrievalAnswers([503, { status: 'uncertain', reason, execution: null }])
+      ]
+    ])
+  ])('marks %s as workspace scope', async (_case, cause, respond) => {
+    const client = await serve(respond);
+    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    expect([error.cause, error.scope]).toEqual([cause, 'workspace']);
+  });
+
+  it('marks an outage as workspace scope', async () => {
+    const client = await serve(() => [502, { error: 'bad gateway' }]);
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 1_500 })
+    );
+    expect([error.cause, error.scope]).toEqual(['unavailable', 'workspace']);
+  });
+
+  it.each<Row>([
+    ['card_deleting by code', 'rejected', launchAnswers([409, { code: 'card_deleting', error: 'deleting' }])],
+    [
+      'card_deleting by record',
+      'rejected',
+      launchAnswers([409, { disposition: 'rejected', reason: 'card_deleting', execution: null }])
+    ],
+    ...(['parameter-mismatch', 'scope-mismatch', 'retired', 'revoked', 'retention-exhausted'] as const).map(
+      (reason): Row => [
+        `launch rejection ${reason}`,
+        'rejected',
+        launchAnswers([409, { disposition: 'rejected', reason, execution: null }])
+      ]
+    ),
+    [
+      'admission rejection',
+      'rejected',
+      retrievalAnswers([200, { status: 'rejected', reason: 'revoked', execution: null }])
+    ],
+    [
+      'spawn-attempt-unconfirmed',
+      'uncertain',
+      retrievalAnswers([200, { status: 'uncertain', reason: 'spawn-attempt-unconfirmed', execution: null }])
+    ],
+    ['a launch with no durable record', 'uncertain', retrievalAnswers([404, { status: 'not-found' }])],
+    ['card_not_found', 'card_not_found', launchAnswers([404, { code: 'card_not_found', error: 'none' }])],
+    ['an unrecognized 409', 'rejected', launchAnswers([409, { code: 'scope_conflict', error: 'held' }])],
+    ['an invalid response', 'invalid_response', launchAnswers([200, { disposition: 'teleported' }])],
+    [
+      'a completion without a report',
+      'no_report',
+      (request: Recorded): Answer =>
+        retrievalAnswers([
+          200,
+          {
+            status: 'completed',
+            execution: { ...EXECUTION, launchRequestId: launchedRequestId() },
+            retrievedOutcome: SPAWNED,
+            terminalOutcome: TERMINAL
+          }
+        ])(request)
+    ]
+  ])('marks %s as card scope', async (_case, cause, respond) => {
+    const client = await serve(respond);
+    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    expect([error.cause, error.scope]).toEqual([cause, 'card']);
+  });
+
+  it('marks a timeout and a cancellation as card scope', async () => {
+    const pending = (request: Recorded): Answer =>
+      isLaunch(request)
+        ? admitted()
+        : isCancel(request)
+          ? [202, { status: 'cancel-requested' }]
+          : [
+              200,
+              {
+                status: 'pending',
+                execution: { ...EXECUTION, launchRequestId: launchedRequestId() },
+                retrievedOutcome: null
+              }
+            ];
+    const client = await serve(pending);
+    const timedOut = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 300 })
+    );
+    expect([timedOut.cause, timedOut.scope]).toEqual(['timeout', 'card']);
+    const cancelled = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { signal: AbortSignal.abort() })
+    );
+    expect([cancelled.cause, cancelled.scope]).toEqual(['cancelled', 'card']);
   });
 });
 
