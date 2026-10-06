@@ -16,6 +16,7 @@ import type {
   WorktreeUnknownLocks
 } from '@cards.management/sdk';
 import { resolveMainRepoRoot, resolveSlotRoot } from '@cards.management/sdk/cards-config';
+import { clearsCardDeletion } from '@cards.management/sdk/protocol';
 import {
   createSlotJudgeContext,
   readSlotLock,
@@ -27,6 +28,7 @@ import {
   slotLockPids,
   withSlotLock
 } from '@cards.management/sdk/slot-lock';
+import { describeSlotOccupancy, type SlotOccupantProbe, slotOccupied } from '@cards.management/sdk/worktree-removal';
 import type { SlotClient } from './acquire.js';
 import { judgeUsability, pathExists, refOid, samePath } from './checkout.js';
 import { type DiscoveredSlot, discoverSlots, type SlotInventory, type SlotPlace } from './discovery.js';
@@ -34,7 +36,6 @@ import type { CreationContext } from './intent.js';
 import { defaultSlotLayer, type SlotLayer } from './layer.js';
 import { recoverSlot } from './recovery.js';
 import { unregisterSlot } from './registration.js';
-import type { SlotOccupant } from './seams.js';
 
 /** What a pass does: report only, remove, or remove and require that nothing remains. */
 export type SlotCleanupMode = 'preview' | 'cleanup' | 'prepare-delete';
@@ -87,9 +88,15 @@ export interface SlotCleanupResult {
   /** Slots whose lock could not be judged, and how many of those record an unverified owner. */
   readonly unknownLocks: WorktreeUnknownLocks;
   /**
-   * Whether the pass met its mode's bar: for `prepare-delete`, no slot is
-   * preserved, `budget_exhausted` or `cleanup_failed` and no `failure` is
-   * set; for the other modes, no `failure` is set.
+   * The most processes owned by other users that one occupant probe could
+   * not inspect. They never block removal, so the count belongs to the pass,
+   * never to a slot's detail.
+   */
+  readonly otherUsersNotInspected: number;
+  /**
+   * Whether the pass met its mode's bar: for `prepare-delete`, the SDK's
+   * `clearsCardDeletion` (no stage failed, no lock unknown, every slot
+   * removed or eligible); for the other modes, no `failure` is set.
    */
   readonly ok: boolean;
 }
@@ -134,13 +141,14 @@ function describeHolder(state: Extract<SlotLockState, { state: 'held' }>): strin
 }
 
 /**
- * Attributes occupants to the previous holder of the slot.
- * @param occupants - Processes found inside the checkout.
+ * Describes why a probe found the slot occupied, attributing visible
+ * occupants to the previous holder of the slot.
+ * @param probe - A probe for which `slotOccupied` holds.
  * @param previous - The generation judged before this lock, or the last one read by a preview; null when none.
- * @returns A description naming which occupants are left over from that execution.
+ * @returns Which occupants are left over from that execution, and which of the user's own processes could not be inspected.
  */
 function describeOccupants(
-  occupants: readonly SlotOccupant[],
+  probe: SlotOccupantProbe,
   previous: Pick<SlotLockPrevious, 'owner' | 'companions'> | null
 ): string {
   const owner = previous?.owner ?? null;
@@ -148,13 +156,14 @@ function describeOccupants(
     ...(owner === null ? [] : [owner.holder.pid]),
     ...(previous?.companions ?? []).map((companion) => companion.pid)
   ]);
-  return occupants
-    .map((occupant) =>
-      recorded.has(occupant.pid) && owner !== null
-        ? `pid ${occupant.pid} (${occupant.command}) is left over from execution ${owner.executionId}`
-        : `pid ${occupant.pid} (${occupant.command}) is unrelated to the slot's last holder`
-    )
-    .join('; ');
+  const visible = probe.occupants.map((occupant) =>
+    recorded.has(occupant.pid) && owner !== null
+      ? `pid ${occupant.pid} (${occupant.command}) is left over from execution ${owner.executionId}`
+      : `pid ${occupant.pid} (${occupant.command}) is unrelated to the slot's last holder`
+  );
+  const hidden =
+    probe.uninspectable.length > 0 ? [describeSlotOccupancy({ ...probe, occupants: [], otherUsers: 0 })] : [];
+  return [...visible, ...hidden].join('; ');
 }
 
 /** Reasons that keep a slot until the user acts on it; no later pass clears them alone. */
@@ -218,20 +227,6 @@ function refusal<R extends PermanentRefusal>(
 }
 
 /**
- * Whether a pass's decisions allow the card to be deleted: the pass stopped
- * nowhere and left no slot preserved, failed or unstarted. It is `ok` for
- * `prepare-delete`, and the deletion verdict a preview or cleanup reports.
- * @param result - The pass's decisions and any pass-level failure.
- * @returns True when every slot was removed or is eligible and no failure is set.
- */
-export function clearsCardDeletion(result: Pick<SlotCleanupResult, 'decisions' | 'failure'>): boolean {
-  return (
-    result.failure === undefined &&
-    result.decisions.every((decision) => decision.outcome === 'removed' || decision.outcome === 'eligible')
-  );
-}
-
-/**
  * Runs one cleanup pass over a card's slots.
  * @param context - Client, logger, card and workspace.
  * @param options - Requester, mode and budget.
@@ -252,9 +247,13 @@ export async function cleanupCardSlots(
   const { client, logger, cardId } = context;
   const decisions: WorktreeCleanupDecision[] = [];
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
+  let otherUsersNotInspected = 0;
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
-    const ok = mode === 'prepare-delete' ? clearsCardDeletion({ decisions, failure }) : failure === undefined;
+    const ok =
+      mode === 'prepare-delete'
+        ? clearsCardDeletion({ decisions, unknownLocks, ...(failure === undefined ? {} : { failure }) })
+        : failure === undefined;
     logger.info('Slot cleanup pass finished', {
       cardId,
       mode,
@@ -262,9 +261,10 @@ export async function cleanupCardSlots(
       ok,
       decisions: decisions.length,
       unknownLocks,
+      otherUsersNotInspected,
       ...(failure === undefined ? {} : { failure })
     });
-    return { decisions, unknownLocks, ok, ...(failure === undefined ? {} : { failure }) };
+    return { decisions, unknownLocks, otherUsersNotInspected, ok, ...(failure === undefined ? {} : { failure }) };
   };
   const record = (
     slot: Pick<DiscoveredSlot, 'branch' | 'path'>,
@@ -420,14 +420,15 @@ export async function cleanupCardSlots(
    * @param previous - The slot's last holder, to attribute occupants to; null when none.
    * @param removalGit - Git for the fsmonitor stop, recording its children into the lock when there is one.
    * @param checkpoint - Throws when the pass must stop; a no-op outside a lock.
-   * @returns An `in_use` refusal, or how many processes the probe could not see.
+   * @returns An `in_use` refusal, or null when the slot is unoccupied. Other users' processes
+   * the probe could not inspect never refuse; their count is kept for the pass.
    */
   const probeOccupants = async (
     slot: DiscoveredSlot,
     previous: Pick<SlotLockPrevious, 'owner' | 'companions'> | null,
     removalGit: Parameters<SlotLayer['seams']['removal']['stopSlotFsmonitor']>[1],
     checkpoint: () => void
-  ): Promise<{ readonly reason: 'in_use'; readonly detail: string } | { readonly unprobed: number }> => {
+  ): Promise<{ readonly reason: 'in_use'; readonly detail: string } | null> => {
     checkpoint();
     await removal.stopSlotFsmonitor(slot.path, removalGit);
     let probe: Awaited<ReturnType<typeof removal.findSlotOccupants>>;
@@ -437,8 +438,8 @@ export async function cleanupCardSlots(
     } catch (error) {
       return refusal('in_use', slot, `the occupant probe failed: ${describe(error)}`);
     }
-    if (probe.occupants.length > 0) return refusal('in_use', slot, describeOccupants(probe.occupants, previous));
-    return { unprobed: probe.unprobed };
+    otherUsersNotInspected = Math.max(otherUsersNotInspected, probe.otherUsers);
+    return slotOccupied(probe) ? refusal('in_use', slot, describeOccupants(probe, previous)) : null;
   };
 
   /**
@@ -474,19 +475,21 @@ export async function cleanupCardSlots(
     const verdict = await inspect(slot, current);
     if (verdict.reason !== 'eligible' && verdict.reason !== 'missing')
       return { reason: verdict.reason, detail: verdict.detail, outcome: 'preserved' };
-    let detail = verdict.detail;
     if (slot.directoryExists) {
       const removalGit = { git: git.removalRunner((event) => lock.recordGit(event)) };
       const probe = await probeOccupants(slot, previous, removalGit, () => lock.checkpoint());
-      if ('reason' in probe) return { ...probe, outcome: 'preserved' };
-      if (probe.unprobed > 0) detail = `${detail}; ${probe.unprobed} processes could not be probed`;
+      if (probe !== null) return { ...probe, outcome: 'preserved' };
       lock.checkpoint();
       const quarantine = await removal.quarantineSlot(repoRoot, slot.path, removalGit);
       const removed = await removal.removeQuarantinedSlot(
         { repoRoot, slotPath: slot.path, quarantine, lock },
         removalGit
       );
-      if (removed.status === 'refused') return { reason: removed.reason, detail: removed.detail, outcome: 'preserved' };
+      if (removed.status === 'refused')
+        // The quarantined checkout is probed again, so a process that entered after the probe above refuses too.
+        return removed.reason === 'in_use'
+          ? { ...refusal('in_use', slot, removed.detail), outcome: 'preserved' }
+          : { reason: removed.reason, detail: removed.detail, outcome: 'preserved' };
     } else if (slot.entry !== null) {
       lock.checkpoint();
       const pruned = await git.run(repoRoot, ['worktree', 'remove', '-f', '-f', slot.path], {
@@ -532,7 +535,7 @@ export async function cleanupCardSlots(
       lock.checkpoint();
       await unregisterSlot(client, cardId, slot.branch);
     }
-    return { reason: verdict.reason, detail, outcome: 'removed' };
+    return { reason: verdict.reason, detail: verdict.detail, outcome: 'removed' };
   };
 
   for (const slot of inventory.slots) {
@@ -566,7 +569,7 @@ export async function cleanupCardSlots(
             verdict.reason === 'eligible' && slot.directoryExists
               ? await probeOccupants(slot, state.snapshot, { git: git.removalRunner(() => {}) }, () => {})
               : null;
-          const judged = probe !== null && 'reason' in probe ? probe : verdict;
+          const judged = probe ?? verdict;
           // A missing slot is only unregistered by a cleanup, so it does not keep the card.
           const removable = judged.reason === 'eligible' || judged.reason === 'missing';
           record(slot, judged.reason, judged.detail, removable ? 'eligible' : 'preserved');

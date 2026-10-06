@@ -8,11 +8,17 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
-import { OccupantProbeError } from '@cards.management/sdk/worktree-removal';
+import {
+  findSlotOccupants,
+  OccupantProbeError,
+  type OccupantProbeOptions,
+  type ProcReader,
+  removeQuarantinedSlot
+} from '@cards.management/sdk/worktree-removal';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type AcquiredSlot,
@@ -86,6 +92,41 @@ function decisionOf(result: SlotCleanupResult, branch: string): WorktreeCleanupD
   const decision = result.decisions.find((entry) => entry.branch === branch);
   if (decision === undefined) throw new Error(`No decision for ${branch}`);
   return decision;
+}
+
+/**
+ * A layer whose occupant probes, the pass's own and the quarantined
+ * checkout's, read the host's `/proc` as the kernel shows a process that is
+ * not dumpable: its cwd, root and descriptors refuse with `EACCES`, its
+ * world-readable `status` does not. A really undumpable process of this user
+ * would make every concurrent test file's slots `in_use`, so only the
+ * spawned process is hidden, and only from this pass.
+ * @param hidden - The pid the kernel hides.
+ * @param uid - The prober's effective uid; the test's own by default.
+ * @returns The fixture's layer with those probes.
+ */
+function hidingLayer(hidden: number, uid?: number): SlotLayer {
+  const refuse = (path: string): Promise<never> =>
+    Promise.reject(Object.assign(new Error(`EACCES: ${path}`), { code: 'EACCES' }));
+  const hiddenEntry = new RegExp(`^/proc/${hidden}/(cwd|root|fd)(/|$)`);
+  const proc: ProcReader = {
+    readdir: (path) => (hiddenEntry.test(path) ? refuse(path) : readdir(path)),
+    readlink: (path) => (hiddenEntry.test(path) ? refuse(path) : readlink(path)),
+    readFile: (path) => readFile(path, 'utf8')
+  };
+  const occupants: OccupantProbeOptions = { proc, ...(uid === undefined ? {} : { uid }) };
+  const removal = fx.layer.seams.removal;
+  return {
+    ...fx.layer,
+    seams: {
+      ...fx.layer.seams,
+      removal: {
+        ...removal,
+        findSlotOccupants: (path) => findSlotOccupants(path, occupants),
+        removeQuarantinedSlot: (target, options) => removeQuarantinedSlot(target, { ...options, occupants })
+      }
+    }
+  };
 }
 
 /**
@@ -410,6 +451,53 @@ describe('cleanupCardSlots removal', () => {
     }
   });
 
+  it.runIf(process.platform === 'linux')(
+    'preserves a slot as in_use, in preview and cleanup, when one of the user’s own processes cannot be inspected',
+    async () => {
+      const slot = await finishedSlot('exec-1');
+      const { spawn } = await import('node:child_process');
+      const hidden = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: fx.scratch });
+      try {
+        const layer = hidingLayer(hidden.pid ?? 0);
+        for (const mode of ['preview', 'cleanup'] as const) {
+          const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
+          const decision = decisionOf(result, slot.branch);
+          expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
+          expect(decision.detail).toContain(`your own processes could not be inspected`);
+          expect(decision.detail).toContain(`(pid ${hidden.pid})`);
+          expect(decision.detail).toContain(`stop the processes working in ${slot.worktreePath}`);
+          expect(decision.detail).not.toMatch(/\bclean\b/);
+        }
+        expect(await exists(slot.worktreePath)).toBe(true);
+      } finally {
+        hidden.kill('SIGKILL');
+      }
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'removes a slot past another user’s uninspectable process, counting it once for the pass and never in a detail',
+    async () => {
+      const slot = await finishedSlot('exec-1');
+      const { spawn } = await import('node:child_process');
+      const hidden = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: slot.worktreePath });
+      try {
+        // A prober whose uid is not the hidden process's owner sees it as another user's.
+        const layer = hidingLayer(hidden.pid ?? 0, (process.geteuid?.() ?? 0) + 1);
+        for (const mode of ['preview', 'cleanup'] as const) {
+          const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
+          const decision = decisionOf(result, slot.branch);
+          expect(decision).toMatchObject({ reason: 'eligible', outcome: mode === 'preview' ? 'eligible' : 'removed' });
+          expect(decision.detail).not.toMatch(/process|inspect|prob/);
+          expect(result.otherUsersNotInspected).toBeGreaterThanOrEqual(1);
+        }
+        expect(await exists(slot.worktreePath)).toBe(false);
+      } finally {
+        hidden.kill('SIGKILL');
+      }
+    }
+  );
+
   it('preserves a slot as in_use when the occupant probe itself fails', async () => {
     const slot = await finishedSlot('exec-1');
     const removal = fx.layer.seams.removal;
@@ -583,7 +671,12 @@ describe('cleanupCardSlots failures and budget', () => {
   it('succeeds prepare-delete on a card without slots', async () => {
     const result = await pass({ mode: 'prepare-delete' });
 
-    expect(result).toEqual({ decisions: [], unknownLocks: { count: 0, unverifiedOwners: 0 }, ok: true });
+    expect(result).toEqual({
+      decisions: [],
+      unknownLocks: { count: 0, unverifiedOwners: 0 },
+      otherUsersNotInspected: 0,
+      ok: true
+    });
   });
 
   it('never removal-locks a slot it preserves, so concurrent launches reuse existing slots', async () => {
