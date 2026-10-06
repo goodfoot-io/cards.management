@@ -1,6 +1,12 @@
 import type { IncomingHttpHeaders } from 'node:http';
 import { WebSocketServer, type WebSocket as WsSocket } from 'ws';
-import type { ConnectionGeneration, RegistrationOutcome, RuntimeEnvelope } from '../../../src/protocol/types/index.js';
+import type {
+  ConnectionGeneration,
+  RegistrationOutcome,
+  RuntimeEnvelope,
+  RuntimeMessageType,
+  RuntimeRefusalReason
+} from '../../../src/protocol/types/index.js';
 import { RUNTIME_PROTOCOL_VERSION } from '../../../src/protocol/types/index.js';
 import { TEST_EXECUTION, TEST_OWNERSHIP, TEST_SCOPE } from './index.js';
 
@@ -38,6 +44,13 @@ export interface FakeRuntimeServerScript {
   readonly withholdHeartbeatResponse?: boolean;
   /** Send a command immediately after registration, before synchronization completes. */
   readonly commandBeforeSynchronization?: boolean;
+  /** Answer messages of these types, or with these ids, with `runtime.refused` instead of `runtime.accepted`. */
+  readonly refuse?: {
+    readonly types?: readonly RuntimeMessageType[];
+    readonly messageIds?: readonly string[];
+    readonly reason: RuntimeRefusalReason;
+    readonly detail: string;
+  };
 }
 
 /** A running fake runtime server. */
@@ -121,6 +134,28 @@ export class FakeRuntimeServer {
   }
 
   /**
+   * Sends a terminal refusal for one message id.
+   *
+   * @param messageId - The client message being refused.
+   * @param reason - Why it is refused.
+   */
+  refuseFor(messageId: string, reason: RuntimeRefusalReason): void {
+    for (const socket of this.sockets) {
+      socket.send(
+        JSON.stringify({
+          ...this.envelope('runtime.refused', {
+            refusedMessageId: messageId,
+            reason,
+            detail: '',
+            refusedAt: '2026-01-01T00:00:02.000Z'
+          }),
+          causationId: messageId
+        })
+      );
+    }
+  }
+
+  /**
    * Sends one valid server command on a selected connection generation.
    * @param messageId - Stable command identity.
    * @param connectionIndex - Zero-based accepted socket index, defaulting to the newest.
@@ -167,7 +202,12 @@ export class FakeRuntimeServer {
   }
 
   private envelope(
-    type: 'runtime.accepted' | 'runtime.resumeAck' | 'execution.cancelCommand' | 'watcher.stopCommand',
+    type:
+      | 'runtime.accepted'
+      | 'runtime.refused'
+      | 'runtime.resumeAck'
+      | 'execution.cancelCommand'
+      | 'watcher.stopCommand',
     payload: unknown
   ): Record<string, unknown> {
     return {
@@ -234,6 +274,25 @@ export class FakeRuntimeServer {
       }
 
       if (envelope.type === 'runtime.heartbeat' && this.script.withholdHeartbeatResponse === true) return;
+
+      const refuse = this.script.refuse;
+      if (
+        refuse !== undefined &&
+        (refuse.types?.includes(envelope.type) === true || refuse.messageIds?.includes(envelope.messageId) === true)
+      ) {
+        socket.send(
+          JSON.stringify({
+            ...this.envelope('runtime.refused', {
+              refusedMessageId: envelope.messageId,
+              reason: refuse.reason,
+              detail: refuse.detail,
+              refusedAt: '2026-01-01T00:00:02.000Z'
+            }),
+            causationId: envelope.messageId
+          })
+        );
+        return;
+      }
 
       if (this.script.withholdAcceptance !== true) {
         socket.send(

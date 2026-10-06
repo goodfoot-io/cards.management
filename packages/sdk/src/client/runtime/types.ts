@@ -14,6 +14,7 @@ import type {
   RuntimeEnvelope,
   RuntimeMessageType,
   RuntimePayload,
+  RuntimeRefusalReason,
   RuntimeScope
 } from '../../protocol/types/index.js';
 import type { ClientOutbox, ReconciliationAuthorities, ReconciliationReport } from './outbox/index.js';
@@ -174,6 +175,17 @@ export type SendOutcome =
       readonly messageId: string;
     }
   | { readonly status: 'rejected'; readonly messageId: string; readonly reason: SendRejectionReason }
+  /**
+   * The server answered `runtime.refused`: it will never accept this message.
+   * Final, unlike `uncertain`: the outbox record is dropped and the message is
+   * not replayed.
+   */
+  | {
+      readonly status: 'refused';
+      readonly messageId: string;
+      readonly reason: RuntimeRefusalReason;
+      readonly detail: string;
+    }
   | {
       readonly status: 'uncertain';
       readonly messageId: string;

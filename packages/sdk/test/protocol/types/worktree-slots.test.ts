@@ -9,6 +9,7 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
 import type { z } from 'zod';
 import {
+  clearsCardDeletion,
   type WorktreeCleanupPreview,
   type WorktreeCleanupReason,
   worktreeCleanupPreviewSchema
@@ -87,6 +88,54 @@ describe('worktreeCleanupPreviewSchema', () => {
   ])('rejects a decision with %s', (_case, change) => {
     const decisions = [{ ...PREVIEW.decisions[0], ...change }];
     expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, decisions }).success).toBe(false);
+  });
+
+  describe('canDeleteCard coherence', () => {
+    const CLEAR = {
+      cardId: 'main-1',
+      canDeleteCard: true,
+      decisions: [
+        {
+          branch: 'cards/main-1/1',
+          worktreePath: '/repo/cards/main-1/1',
+          reason: 'eligible',
+          detail: '',
+          outcome: 'removed'
+        },
+        { branch: 'cards/main-1/2', worktreePath: null, reason: 'missing', detail: '', outcome: 'eligible' }
+      ],
+      unknownLocks: { count: 0, unverifiedOwners: 0 }
+    } as const satisfies WorktreeCleanupPreview;
+
+    it('accepts a clear report that allows deletion, and the same report refusing it is rejected', () => {
+      expect(clearsCardDeletion(CLEAR)).toBe(true);
+      expect(worktreeCleanupPreviewSchema.parse(CLEAR)).toEqual(CLEAR);
+      expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, canDeleteCard: false }).success).toBe(false);
+    });
+
+    it('accepts a report with no slots as clear', () => {
+      expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, decisions: [] }).success).toBe(true);
+    });
+
+    const violations: readonly (readonly [string, Partial<WorktreeCleanupPreview>])[] = [
+      ['a stage failure', { failure: { stage: 'discovery', message: 'git failed' } }],
+      ['an unknown lock', { unknownLocks: { count: 1, unverifiedOwners: 0 } }],
+      ['an unknown lock with an unverified owner', { unknownLocks: { count: 1, unverifiedOwners: 1 } }],
+      ...(['preserved', 'failed'] as const).map(
+        (outcome) =>
+          [
+            `a ${outcome} slot`,
+            { decisions: [...CLEAR.decisions, { ...CLEAR.decisions[0], reason: 'in_use', outcome }] }
+          ] as const
+      )
+    ];
+
+    it.each(violations)('rejects canDeleteCard true beside %s, and accepts it false', (_case, change) => {
+      const report: WorktreeCleanupPreview = { ...CLEAR, ...change };
+      expect(clearsCardDeletion(report)).toBe(false);
+      expect(worktreeCleanupPreviewSchema.safeParse(report).success).toBe(false);
+      expect(worktreeCleanupPreviewSchema.safeParse({ ...report, canDeleteCard: false }).success).toBe(true);
+    });
   });
 
   it('rejects unknown top-level fields and an empty card ID', () => {

@@ -48,7 +48,10 @@ export async function drainRuntimeClientOutbox(options: RuntimeClientDrainOption
         const record = records.get(ref.messageId);
         if (record === undefined) return null;
         const result = await options.client.send(outbound(record, options.deadlineMs));
-        if (result.status !== 'accepted' || result.messageId !== ref.messageId) return null;
+        // A refusal is settled too: `send` already dropped the record, so the
+        // retirement below finds it gone and the record no longer counts as owed.
+        if ((result.status !== 'accepted' && result.status !== 'refused') || result.messageId !== ref.messageId)
+          return null;
         return { messageId: ref.messageId, acknowledgedAt: (options.now?.() ?? new Date()).toISOString() };
       }
     }

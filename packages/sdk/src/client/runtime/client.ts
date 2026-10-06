@@ -3,7 +3,8 @@ import type {
   ConnectionState,
   RegistrationOutcome,
   RuntimeEnvelope,
-  RuntimeMessageType
+  RuntimeMessageType,
+  RuntimePayload
 } from '../../protocol/types/index.js';
 import {
   authorizeMessage,
@@ -321,8 +322,10 @@ class RuntimeClientImpl implements RuntimeClient {
     const accepted = await this.waitForFrame(
       socket,
       (envelope) =>
-        envelope.type === 'runtime.accepted' &&
-        (envelope.payload as { acknowledgedMessageId?: string }).acknowledgedMessageId === message.messageId,
+        (envelope.type === 'runtime.accepted' &&
+          (envelope.payload as RuntimePayload<'runtime.accepted'>).acknowledgedMessageId === message.messageId) ||
+        (envelope.type === 'runtime.refused' &&
+          (envelope.payload as RuntimePayload<'runtime.refused'>).refusedMessageId === message.messageId),
       message.deadlineMs
     );
 
@@ -343,6 +346,13 @@ class RuntimeClientImpl implements RuntimeClient {
       };
     }
 
+    if (accepted.type === 'runtime.refused') {
+      // A refusal is final for this message ID: replaying the record after the
+      // next resume could only be refused again, so the obligation ends here.
+      const refusal = accepted.payload as RuntimePayload<'runtime.refused'>;
+      await this.retire(message, refusal.refusedAt);
+      return { status: 'refused', messageId: message.messageId, reason: refusal.reason, detail: refusal.detail };
+    }
     await this.retire(message);
     return {
       status: 'accepted',
@@ -350,7 +360,10 @@ class RuntimeClientImpl implements RuntimeClient {
     };
   }
 
-  private async retire<TType extends RuntimeMessageType>(message: OutboundMessage<TType>): Promise<void> {
+  private async retire<TType extends RuntimeMessageType>(
+    message: OutboundMessage<TType>,
+    settledAt?: string
+  ): Promise<void> {
     const { records } = await this.options.outbox.scanAll();
     const record = records.find((candidate) => candidate.messageId === message.messageId);
     if (record === undefined) {
@@ -358,7 +371,7 @@ class RuntimeClientImpl implements RuntimeClient {
     }
     await this.options.outbox.retire(this.options.outbox.refFor(record), {
       messageId: message.messageId,
-      acknowledgedAt: (this.options.now?.() ?? new Date()).toISOString()
+      acknowledgedAt: settledAt ?? (this.options.now?.() ?? new Date()).toISOString()
     });
   }
 
@@ -688,7 +701,8 @@ class RuntimeClientImpl implements RuntimeClient {
         execution: envelope.execution,
         deadlineMs: 5_000
       } as OutboundMessage);
-      if (result.status !== 'accepted') return;
+      // A refused record was dropped by `send`; the replay moves on to the next.
+      if (result.status !== 'accepted' && result.status !== 'refused') return;
     }
   }
 }
