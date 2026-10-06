@@ -21,6 +21,7 @@ import {
   findSlotResidue,
   OccupantProbeError,
   type ProcReader,
+  processesNotInspected,
   quarantinePathFor,
   quarantineSlot,
   recoverSlotResidue,
@@ -203,7 +204,8 @@ describe('slot removal', () => {
       const { lock } = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       await expect(removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock })).resolves.toEqual({
-        status: 'removed'
+        status: 'removed',
+        processesNotInspected: expect.any(Number)
       });
       expect(existsSync(quarantine)).toBe(false);
       expect(existsSync(`${quarantine}.held`)).toBe(false);
@@ -244,7 +246,7 @@ describe('slot removal', () => {
       }
     );
 
-    it('refuses as in use when its own uninspectable process is reported in the quarantine', async () => {
+    it('removes the quarantine past its own uninspectable process, and counts it', async () => {
       const { lock } = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       const hidden: ProcReader = {
@@ -261,8 +263,17 @@ describe('slot removal', () => {
         { repoRoot: repo, slotPath, quarantine, lock },
         { occupants: { platform: 'linux', uid: 1000, proc: hidden } }
       );
-      expect(outcome).toMatchObject({ status: 'refused', reason: 'in_use', checkoutPath: slotPath });
-      expect(worktreePaths(repo)).toContain(slotPath);
+      expect(outcome).toEqual({ status: 'removed', processesNotInspected: 1 });
+      expect(existsSync(quarantine)).toBe(false);
+    });
+
+    it('counts the processes it could not inspect in a refusal too', async () => {
+      const { lock } = await removalLock();
+      await writeFile(join(slotPath, 'untracked.txt'), 'work in progress\n');
+      const quarantine = await quarantineSlot(repo, slotPath);
+      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+      // The content check refuses before the probe runs.
+      expect(outcome).toMatchObject({ status: 'refused', reason: 'uncommitted_changes', processesNotInspected: 0 });
     });
 
     it('removes the quarantine when only other users’ processes were hidden', async () => {
@@ -283,7 +294,7 @@ describe('slot removal', () => {
           { repoRoot: repo, slotPath, quarantine, lock },
           { occupants: { platform: 'linux', uid: 1000, proc: others } }
         )
-      ).resolves.toEqual({ status: 'removed' });
+      ).resolves.toEqual({ status: 'removed', processesNotInspected: 1 });
     });
 
     it('never nests the checkout into a recreated slot path, leaving it at the quarantine', async () => {
@@ -498,6 +509,8 @@ describe('slot removal', () => {
       readonly fail?: string;
       /** Errno for the `status` read. */
       readonly failStatus?: string;
+      /** Scheduler state in `status`; `S` by default. */
+      readonly state?: string;
     }
 
     /**
@@ -531,7 +544,7 @@ describe('slot removal', () => {
           if (rest[0] === 'status') {
             if (info.failStatus !== undefined) throw errno(info.failStatus);
             const uid = String(info.uid ?? 1000);
-            return `Name:\t${info.comm ?? 'proc'}\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
+            return `Name:\t${info.comm ?? 'proc'}\nState:\t${info.state ?? 'S'} (sleeping)\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
           }
           return `${info.comm ?? 'proc'}\n`;
         }
@@ -581,13 +594,30 @@ describe('slot removal', () => {
         'a hidden process whose owner cannot be read',
         { fail: 'EACCES', uid: 0, failStatus: 'EACCES', comm: 'sudo-child' }
       ]
-    ])('blocks on %s', async (_case, process) => {
+    ])('counts %s without blocking', async (_case, process) => {
       const probe = await linux({ 30: process });
       expect(probe).toEqual({ occupants: [], uninspectable: [{ pid: 30, command: 'sudo-child' }], otherUsers: 0 });
+      expect(slotOccupied(probe)).toBe(false);
+      expect(processesNotInspected(probe)).toBe(1);
+    });
+
+    it.each([
+      'Z',
+      'X'
+    ])('skips a hidden process in state %s, which is exiting rather than uninspectable', async (state) => {
+      const probe = await linux({ 32: { fail: 'EACCES', state }, 33: { fail: 'EACCES', uid: 0, state } });
+      expect(probe).toEqual({ occupants: [], uninspectable: [], otherUsers: 0 });
+    });
+
+    it('blocks only on proven occupants, and names only them', async () => {
+      const probe = await linux({
+        34: { cwd: slotPath, comm: 'node' },
+        35: { fail: 'EACCES', comm: 'ssh-agent' },
+        36: { fail: 'EACCES', uid: 0 }
+      });
       expect(slotOccupied(probe)).toBe(true);
-      expect(describeSlotOccupancy(probe)).toBe(
-        'your own processes could not be inspected, so they may be inside it: sudo-child (pid 30)'
-      );
+      expect(processesNotInspected(probe)).toBe(2);
+      expect(describeSlotOccupancy(probe)).toBe('in use by node (pid 34)');
     });
 
     it('treats every hidden process as its own when the prober is root', async () => {
@@ -626,11 +656,11 @@ describe('slot removal', () => {
     });
 
     it.runIf(process.platform === 'linux')(
-      'finds no occupant of an empty slot among the host’s real processes, and inspects all of its own',
+      'finds no occupant of an empty slot among the host’s real processes',
       async () => {
+        // Processes mid-exec read EACCES for a moment; they are counted, never occupants.
         const probe = await findSlotOccupants(slotPath);
         expect(probe.occupants).toEqual([]);
-        expect(probe.uninspectable).toEqual([]);
         expect(slotOccupied(probe)).toBe(false);
       }
     );

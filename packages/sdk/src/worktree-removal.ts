@@ -162,15 +162,20 @@ const registeredWorktrees = async (repoRoot: string, options: SlotRemovalOptions
 /** The parts of a held slot lock removal needs. */
 export type SlotRemovalLock = Pick<SlotLock, 'slotRoot' | 'ordinal' | 'generation' | 'checkpoint'>;
 
-/** Outcome of {@link removeQuarantinedSlot}. */
+/**
+ * Outcome of {@link removeQuarantinedSlot}. Each carries the
+ * {@link processesNotInspected} count of the quarantine's occupant probe, 0
+ * when the probe did not run, for the pass's report-level count.
+ */
 export type SlotRemovalOutcome =
-  | { readonly status: 'removed' }
+  | { readonly status: 'removed'; readonly processesNotInspected: number }
   | {
       readonly status: 'refused';
       readonly reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'removal_restored';
       readonly detail: string;
       /** Where the checkout now is: the slot path after a move-back, otherwise the quarantine. */
       readonly checkoutPath: string;
+      readonly processesNotInspected: number;
     };
 
 /**
@@ -228,6 +233,7 @@ export async function removeQuarantinedSlot(
   options: SlotRemovalOptions = {}
 ): Promise<SlotRemovalOutcome> {
   const { repoRoot, slotPath, quarantine, lock } = target;
+  let uninspected = 0;
   lock.checkpoint();
   try {
     await removeQuarantinedCheckout(
@@ -242,6 +248,7 @@ export async function removeQuarantinedSlot(
           if (changed.length > 0) throw new CheckoutContentChangedError('Checkout has uncommitted changes', changed);
           // A process that entered between the caller's probe and the move is inside the quarantine now.
           const probe = await findSlotOccupants(quarantine, options.occupants);
+          uninspected = processesNotInspected(probe);
           if (slotOccupied(probe)) throw new SlotOccupiedError(probe);
         },
         requireCurrent: () => requireCurrentSlotLock(lock),
@@ -257,20 +264,20 @@ export async function removeQuarantinedSlot(
     else if (error instanceof CheckoutRestoredError) reason = 'removal_restored';
     else throw error;
     const detail = error.message;
+    const refused = { status: 'refused', detail, processesNotInspected: uninspected } as const;
     // A refused restoration leaves entries held; recovery owns the quarantine from here.
     if (error instanceof CheckoutRemovalBlockedError && error.syscall === 'restore')
-      return { status: 'refused', reason, detail, checkoutPath: quarantine };
+      return { ...refused, reason, checkoutPath: quarantine };
     lock.checkpoint();
     // `git worktree move` into an existing directory nests the checkout inside it.
-    if (await exists(slotPath))
-      return { status: 'refused', reason: 'removal_restored', detail, checkoutPath: quarantine };
+    if (await exists(slotPath)) return { ...refused, reason: 'removal_restored', checkoutPath: quarantine };
     await requireSlotGit(repoRoot, ['worktree', 'move', quarantine, slotPath], options);
-    return { status: 'refused', reason, detail, checkoutPath: slotPath };
+    return { ...refused, reason, checkoutPath: slotPath };
   }
   lock.checkpoint();
   // With the directory gone this drops only git's administrative record.
   await requireSlotGit(repoRoot, ['worktree', 'remove', quarantine], options);
-  return { status: 'removed' };
+  return { status: 'removed', processesNotInspected: uninspected };
 }
 
 /**
@@ -509,43 +516,48 @@ export interface SlotOccupant {
 export interface SlotOccupantProbe {
   readonly occupants: readonly SlotOccupant[];
   /**
-   * Processes of the prober's own user (or of any user when the prober is root)
-   * whose cwd, root or descriptors the OS would not show. Each blocks removal,
-   * since nothing proves it is outside the slot.
+   * Live processes of the prober's own user (or of any user when the prober is
+   * root) whose cwd, root or descriptors the OS would not show, such as a
+   * non-dumpable ssh-agent. They never block removal: only a proven occupant
+   * keeps a slot. Kept for the report-level count and the logs.
    */
   readonly uninspectable: readonly SlotOccupant[];
   /**
    * Processes owned by other users, which an unprivileged prober cannot inspect.
-   * They never block removal: a slot can be removed from under another user's
-   * process. Reported as a count so callers can say so once.
+   * They never block removal either. Reported as a count only.
    */
   readonly otherUsers: number;
 }
 
 /**
- * Whether a probe leaves the slot in use: an occupant, or an own process it could not inspect.
+ * Whether a probe leaves the slot in use: a process whose cwd, root or an open
+ * file is proven inside it. A process that could not be inspected never counts.
  * @param probe - The probe result.
  * @returns True when removal must not proceed.
  */
 export function slotOccupied(probe: SlotOccupantProbe): boolean {
-  return probe.occupants.length > 0 || probe.uninspectable.length > 0;
+  return probe.occupants.length > 0;
+}
+
+/**
+ * How many processes a probe could not inspect, whoever owns them, for the
+ * report-level `processesNotInspected` count.
+ * @param probe - The probe result.
+ * @returns The uninspectable own processes plus the other users' processes.
+ */
+export function processesNotInspected(probe: SlotOccupantProbe): number {
+  return probe.uninspectable.length + probe.otherUsers;
 }
 
 /**
  * Describes why a probe leaves a slot in use.
  * @param probe - A probe for which {@link slotOccupied} holds.
- * @returns The occupants and uninspectable processes, by command and pid.
+ * @returns The proven occupants, by command and pid.
  */
 export function describeSlotOccupancy(probe: SlotOccupantProbe): string {
   const name = (process: SlotOccupant): string =>
     `${process.command === '' ? 'process' : process.command} (pid ${String(process.pid)})`;
-  const parts: string[] = [];
-  if (probe.occupants.length > 0) parts.push(`in use by ${probe.occupants.map(name).join(', ')}`);
-  if (probe.uninspectable.length > 0)
-    parts.push(
-      `your own processes could not be inspected, so they may be inside it: ${probe.uninspectable.map(name).join(', ')}`
-    );
-  return parts.join('; ');
+  return `in use by ${probe.occupants.map(name).join(', ')}`;
 }
 
 /** A quarantined slot's occupant probe found it in use, so removal was refused. */
@@ -626,11 +638,13 @@ const proberUid = (options: OccupantProbeOptions): number => {
 /**
  * Walks `/proc` for processes whose cwd, root or an open descriptor resolves inside the slot.
  * A process the kernel will not show is attributed by the effective uid in its world-readable
- * `status`: another user's is counted, the prober's own (or any, when the prober is root) blocks.
+ * `status`: another user's is counted, the prober's own (or any, when the prober is root) is
+ * listed as uninspectable. A process that exited, or is exiting (state `Z` or `X`), during the
+ * scan is gone rather than uninspectable: one mid-exec or mid-exit briefly reads `EACCES`.
  * @param slot - Real path of the slot.
  * @param proc - The `/proc` reader.
  * @param uid - The prober's effective uid.
- * @returns The occupants, the own processes it could not inspect, and the other users' count.
+ * @returns The occupants, the live own processes it could not inspect, and the other users' count.
  * @throws {OccupantProbeError} When `/proc` is unreadable or a read fails unexpectedly.
  */
 const probeProc = async (slot: string, proc: ProcReader, uid: number): Promise<SlotOccupantProbe> => {
@@ -677,6 +691,8 @@ const probeProc = async (slot: string, proc: ProcReader, uid: number): Promise<S
       }
       throw unexpected(`${base}/status`, error);
     }
+    // A zombie or dying process has no cwd left to be inside the slot.
+    if (/^State:\s+[ZX]/m.test(status)) return;
     const owner = /^Uid:\s+\d+\s+(\d+)/m.exec(status)?.[1];
     if (owner === undefined) throw new OccupantProbeError(`${base}/status has no Uid line`);
     if (uid !== 0 && Number(owner) !== uid) {
@@ -790,7 +806,7 @@ const probeLsof = async (slotPath: string, options: OccupantProbeOptions): Promi
  * Lists processes whose cwd, root or open files are inside a slot. Never signals.
  * @param slotPath - The slot checkout.
  * @param options - Platform, `/proc` reader, uid and command overrides.
- * @returns The occupants, the prober's own processes it could not inspect, and the other users' count.
+ * @returns The occupants, which alone block removal, and what could not be inspected.
  * @throws {OccupantProbeError} When the probe itself failed.
  */
 export async function findSlotOccupants(
