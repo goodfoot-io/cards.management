@@ -101,18 +101,18 @@ The server keeps no worktree state and writes no worktree log. Slot acquisition,
 | **Default path** | `{main-repo-root}/.cards/logs/cards-detached-child-stderr.log` |
 | **Format** | Append-only plain text containing the combined, verbatim stdout and stderr of detached cleanup children, plus versioned attribution records described below. This is **not JSON Lines**. |
 | **Resolution order** | 1. A nonempty `$CARDS_DETACHED_STDERR_LOG_FILE` selects that exact file. 2. Otherwise, a nonempty `$CARDS_LOG_DIR` selects `$CARDS_LOG_DIR/cards-detached-child-stderr.log`. 3. Otherwise, the main repository is resolved using nonempty `REPO_ROOT`, then `git rev-parse --path-format=absolute --git-common-dir`, and the default path above is used. 4. If no main repository can be resolved, capture is disabled (`null`) and the child is spawned with ignored output. Empty override values are skipped. `$CARDS_HOOKS_LOG_FILE` is never consulted. |
-| **Sources** | `prepareDetachedChildOutputCapture()` in `public/packages/sdk/src/config/detached-child-output.ts` defines this opt-in capture format. Branch-cleanup child records below are historical; current worktree cleanup runs in the API owner and produces the authority decisions above. |
+| **Sources** | `prepareDetachedChildOutputCapture()` in `public/packages/sdk/src/config/detached-child-output.ts` defines this opt-in capture format. No current Cards component spawns a child with this capture; a file may still hold records from earlier versions. Worktree cleanup runs in default-configuration handlers and logs the slot decisions above. |
 | **No file?** | Path-resolution, directory-creation, open, or initial-write failure produces a warning through the caller's existing logging channel, then leaves cleanup fail-open with ignored output. A healthy child normally adds only the two small attribution records below. |
 
 Each attribution record occupies one physical line and starts with the magic prefix `@@CARDS_DETACHED_CHILD_V1@@`, immediately followed by a JSON object. The parent writes a `spawn` record before launching the child. If Node reaches the generated preload, the child writes a `started` record before loading the existing cleanup entry module. Both records carry the same correlation ID, card ID, nullable session ID, and child kind; the second also records the runtime PID. Card, session, and child-kind values are bounded to 512 Unicode code points and visibly end in `...[truncated]` when shortened. JSON serialization keeps embedded newlines and other identity delimiters inside the physical record line.
 
-These examples show the exact V1 prefix, field names, field order, and compact single-line encoding; UUIDs, IDs, PIDs, and timestamps vary at runtime:
+These examples show the exact V1 prefix, field names, field order, and compact single-line encoding; the child kind is whatever the caller supplies, and UUIDs, IDs, PIDs, and timestamps vary at runtime:
 
 ```text
-@@CARDS_DETACHED_CHILD_V1@@{"phase":"spawn","correlationId":"793a94c2-ae9c-4280-a8ae-c6f7ed160f33","cardId":"main-456","sessionId":"session-123","childKind":"branch-cleanup-watcher","timestamp":"2026-08-14T02:10:00.000Z"}
-@@CARDS_DETACHED_CHILD_V1@@{"phase":"started","correlationId":"793a94c2-ae9c-4280-a8ae-c6f7ed160f33","cardId":"main-456","sessionId":"session-123","childKind":"branch-cleanup-watcher","pid":28430,"timestamp":"2026-08-14T02:10:00.014Z"}
-@@CARDS_DETACHED_CHILD_V1@@{"phase":"spawn","correlationId":"b68e809e-5a92-430b-84ba-31bd3604e32a","cardId":"main-456","sessionId":null,"childKind":"wrapper-cleanup","timestamp":"2026-08-14T02:11:00.000Z"}
-@@CARDS_DETACHED_CHILD_V1@@{"phase":"started","correlationId":"b68e809e-5a92-430b-84ba-31bd3604e32a","cardId":"main-456","sessionId":null,"childKind":"wrapper-cleanup","pid":28431,"timestamp":"2026-08-14T02:11:00.012Z"}
+@@CARDS_DETACHED_CHILD_V1@@{"phase":"spawn","correlationId":"793a94c2-ae9c-4280-a8ae-c6f7ed160f33","cardId":"main-456","sessionId":"session-123","childKind":"example-child","timestamp":"2026-08-14T02:10:00.000Z"}
+@@CARDS_DETACHED_CHILD_V1@@{"phase":"started","correlationId":"793a94c2-ae9c-4280-a8ae-c6f7ed160f33","cardId":"main-456","sessionId":"session-123","childKind":"example-child","pid":28430,"timestamp":"2026-08-14T02:10:00.014Z"}
+@@CARDS_DETACHED_CHILD_V1@@{"phase":"spawn","correlationId":"b68e809e-5a92-430b-84ba-31bd3604e32a","cardId":"main-456","sessionId":null,"childKind":"example-child","timestamp":"2026-08-14T02:11:00.000Z"}
+@@CARDS_DETACHED_CHILD_V1@@{"phase":"started","correlationId":"b68e809e-5a92-430b-84ba-31bd3604e32a","cardId":"main-456","sessionId":null,"childKind":"example-child","pid":28431,"timestamp":"2026-08-14T02:11:00.012Z"}
 ```
 
 A missing `started` record narrows the failure to the period before the preload ran, but it does not by itself identify the cause.
