@@ -2,8 +2,8 @@
  * Defensive parser for the Cards OpenCode transcript NDJSON lines.
  *
  * The Cards runtime plugin materializes the session transcript (OpenCode
- * v1.18.21 stores sessions in SQLite with no tailable native transcript) by
- * appending one normalized envelope per line:
+ * stores sessions in SQLite with no tailable native transcript, as observed
+ * on v1.18.21) by appending one normalized envelope per line:
  *
  * ```
  * {"v":1,"ts":"<iso>","seq":<n>,"sessionId":"<id>","type":"meta"|"message"|"part"|"idle","data":{…}}

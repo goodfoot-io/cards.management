@@ -6,7 +6,8 @@
  * writes per-plugin-set staged config documents, and spawns the `opencode`
  * CLI with card context, owner-assigned worktree, cancel handling and status settlement.
  *
- * Isolation model (verified against the installed binary, v1.18.21): the child
+ * Isolation model (observed on OpenCode v1.18.21; the binary-gate test
+ * re-verifies the global layer loading alongside the staged one on v1.18.31): the child
  * is pointed at one staged config document via the `OPENCODE_CONFIG` env var,
  * which adds a config layer **between** the user's global config dir and the
  * project layer (`OPENCODE_CONFIG_DIR` is deliberately NOT overridden — the
@@ -813,7 +814,8 @@ export interface WriteCardsLaunchConfigOptions {
  * spec for plugins whose exact pointer the global layer registers, direct
  * entry paths otherwise.
  *
- * Document shape (live-probed against the installed v1.18.21 binary — the
+ * Document shape (observed on OpenCode v1.18.21, and booted on v1.18.31 by
+ * the binary-gate test — the
  * earlier "Config v2 schema" reading was wrong: those schema strings exist but
  * the plugin/skills consumers decode legacy keys):
  *

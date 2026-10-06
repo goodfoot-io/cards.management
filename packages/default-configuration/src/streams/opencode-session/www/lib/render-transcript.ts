@@ -60,7 +60,7 @@ export type TranscriptItem =
   | { kind: 'reasoning'; summaryText: string; timestamp?: string }
   /** A `patch` part's change set — full absolute paths; components derive basenames. */
   | { kind: 'edited_files'; files: string[]; timestamp?: string }
-  /** A `file` part (prompt attachment); fields are optional per OpenCode v1.18.22. */
+  /** A `file` part (prompt attachment); fields are optional, as observed on OpenCode v1.18.22. */
   | { kind: 'attachment'; filename: string; mime?: string; url?: string; timestamp?: string }
   | {
       kind: 'tool_call';
