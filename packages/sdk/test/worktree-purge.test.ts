@@ -25,6 +25,7 @@ import {
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { ShutdownError } from '../src/bounded-git.js';
 import { acquireSlotLock, type SlotLock, withSlotLock } from '../src/slot-lock.js';
 import {
   findRemovedSlotCopies,
@@ -225,15 +226,36 @@ describe('slot purge', () => {
       withSlotLock(root, ordinal, purpose, { executionId: 'exec-purge', cardId, environment: env.environment }, fn);
 
   /**
-   * Runs one purge pass with a generous deadline unless overridden.
+   * Runs one purge pass with a generous deadline and nothing skipped unless overridden.
+   * @param overrides - Option and locker overrides.
+   * @param locker - The locker factory.
+   * @returns The pass's outcomes and failure.
+   */
+  const purgePass = (
+    overrides: Partial<RemovedSlotPurgeOptions> = {},
+    locker: (root: string) => SlotResidueLocker = lockerFor()
+  ) =>
+    purgeRemovedSlots(cardsDir, locker, {
+      repoRoot: repo,
+      deadline: Date.now() + 60_000,
+      skip: new Set(),
+      ...overrides
+    });
+
+  /**
+   * Runs one purge pass that must not fail.
    * @param overrides - Option and locker overrides.
    * @param locker - The locker factory.
    * @returns The pass's outcomes.
    */
-  const purge = (
+  const purge = async (
     overrides: Partial<RemovedSlotPurgeOptions> = {},
     locker: (root: string) => SlotResidueLocker = lockerFor()
-  ) => purgeRemovedSlots(cardsDir, locker, { repoRoot: repo, deadline: Date.now() + 60_000, ...overrides });
+  ) => {
+    const { outcomes, failure } = await purgePass(overrides, locker);
+    expect(failure).toBeNull();
+    return outcomes;
+  };
 
   /**
    * A locker that hands its lock to the test, so a frozen pass's lock can be released as a crash would.
@@ -450,7 +472,12 @@ describe('slot purge', () => {
       const copy = await removeSlot();
       const outcomes = await purge();
       expect(outcomes).toEqual([{ copy, status: 'purged', processesNotInspected: expect.any(Number) }]);
-      expect(summarizeRemovedSlotPurge(outcomes)).toEqual({ purged: 1, pending: 0, kept: [] });
+      expect(summarizeRemovedSlotPurge({ outcomes, failure: null })).toEqual({
+        purged: 1,
+        pending: 0,
+        kept: [],
+        failure: null
+      });
       expect(await residue()).toEqual(['.purge']);
       expect(await readdir(join(slotRoot, '.purge'))).toEqual([]);
       expect(git(repo, 'branch', '--list', 'slot-1')).toContain('slot-1');
@@ -469,10 +496,11 @@ describe('slot purge', () => {
       };
       const outcomes = await purge();
       expect(outcomes).toEqual([kept]);
-      expect(summarizeRemovedSlotPurge(outcomes)).toEqual({
+      expect(summarizeRemovedSlotPurge({ outcomes, failure: null })).toEqual({
         purged: 0,
         pending: 0,
-        kept: [{ path: copy, detail: kept.detail }]
+        kept: [{ path: copy, detail: kept.detail }],
+        failure: null
       });
       await expect(purge()).resolves.toEqual([kept]);
       expect(await readFile(join(copy, 'checkout', 'late.txt'), 'utf8')).toBe('late work\n');
@@ -530,8 +558,48 @@ describe('slot purge', () => {
           detail: expect.stringContaining(`(pid ${String(child.pid)})`)
         })
       ]);
-      expect(summarizeRemovedSlotPurge(outcomes)).toEqual({ purged: 0, pending: 1, kept: [] });
+      expect(summarizeRemovedSlotPurge({ outcomes, failure: null })).toEqual({
+        purged: 0,
+        pending: 1,
+        kept: [],
+        failure: null
+      });
       expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
+    });
+
+    it('leaves a copy this pass removed untouched and uncounted, and purges it on the next pass', async () => {
+      addSlot();
+      const copy = await removeSlot();
+      await expect(purge({ skip: new Set([copy]) })).resolves.toEqual([]);
+      expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
+      expect(existsSync(`${copy}.json`)).toBe(true);
+      await expect(purge()).resolves.toEqual([{ copy, status: 'purged', processesNotInspected: expect.any(Number) }]);
+    });
+
+    it('reports a purge that failed, with the outcomes it reached, and never as a clean one', async () => {
+      addSlot();
+      const copy = await removeSlot();
+      const failing = (): SlotResidueLocker => async () => {
+        throw new Error('The lock store is unreadable');
+      };
+      const result = await purgePass({}, failing);
+      expect(result).toEqual({ outcomes: [], failure: 'The lock store is unreadable' });
+      expect(summarizeRemovedSlotPurge(result)).toEqual({
+        purged: 0,
+        pending: 0,
+        kept: [],
+        failure: 'The lock store is unreadable'
+      });
+      expect(existsSync(join(copy, 'checkout', 'tracked.txt'))).toBe(true);
+    });
+
+    it('lets a shutdown through rather than reporting it as a failed purge', async () => {
+      addSlot();
+      await removeSlot();
+      const stopping = (): SlotResidueLocker => async () => {
+        throw new ShutdownError('stopping');
+      };
+      await expect(purgePass({}, stopping)).rejects.toBeInstanceOf(ShutdownError);
     });
 
     it('leaves copies pending once the deadline passed', async () => {

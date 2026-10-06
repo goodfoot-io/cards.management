@@ -830,6 +830,12 @@ export interface RemovedSlotPurgeOptions extends Omit<SlotRemovalOptions, 'check
   readonly repoRoot: string;
   /** Epoch milliseconds after which no further entry is deleted; the rest stays pending. */
   readonly deadline: number;
+  /**
+   * Copies this pass itself removed. They are left untouched and uncounted, so
+   * a removed slot's copy is deleted on the next pass, never the one that
+   * removed it.
+   */
+  readonly skip: ReadonlySet<string>;
   /** Injectable mutations of the dismantle. */
   readonly filesystem?: Partial<CheckoutFilesystem>;
   /** Timing seam passed to the dismantle. */
@@ -1040,24 +1046,50 @@ const purgeRemovedCopy = async (
  * entry by entry against the record its removal took, after a probe finds no
  * process inside: one that changed since its removal is kept and reported,
  * never deleted, and one that is busy, locked or past the deadline stays
- * pending for a later pass.
+ * pending for a later pass. Copies in `options.skip` are not looked at.
+ *
+ * Any failure other than shutdown stops the purge and is returned beside the
+ * outcomes so far, so the report shows a failed purge instead of an empty one.
  * @param cardsDir - The repository's slot namespace, whose entries are card slot roots.
  * @param lockerFor - Takes a slot lock of the given slot root around a function.
- * @param options - Repository, deadline, git runner and probe overrides.
- * @returns One outcome per copy, except leftovers of removals that never committed, which are cleared silently.
+ * @param options - Repository, deadline, copies to skip, git runner and probe overrides.
+ * @returns One outcome per copy reached, except leftovers of removals that never committed, which are
+ * cleared silently, and the failure that stopped the purge, or null.
  * @throws {ShutdownError} When the fence closed.
  */
 export async function purgeRemovedSlots(
   cardsDir: string,
   lockerFor: (slotRoot: string) => SlotResidueLocker,
   options: RemovedSlotPurgeOptions
-): Promise<readonly RemovedCopyPurge[]> {
+): Promise<RemovedSlotPurge> {
   const outcomes: RemovedCopyPurge[] = [];
+  try {
+    await purgeInto(outcomes, cardsDir, lockerFor, options);
+  } catch (error) {
+    if (error instanceof ShutdownError) throw error;
+    return { outcomes, failure: error instanceof Error && error.message !== '' ? error.message : String(error) };
+  }
+  return { outcomes, failure: null };
+}
+
+/**
+ * The body of {@link purgeRemovedSlots}, appending each outcome as it is decided.
+ * @param outcomes - Receives the outcomes, so those decided before a failure survive it.
+ * @param cardsDir - The repository's slot namespace.
+ * @param lockerFor - Takes a slot lock of the given slot root around a function.
+ * @param options - Repository, deadline, copies to skip, git runner and probe overrides.
+ */
+const purgeInto = async (
+  outcomes: RemovedCopyPurge[],
+  cardsDir: string,
+  lockerFor: (slotRoot: string) => SlotResidueLocker,
+  options: RemovedSlotPurgeOptions
+): Promise<void> => {
   for (const card of (await readdirOrEmpty(cardsDir)).sort()) {
     const slotRoot = join(cardsDir, card);
     const byOrdinal = new Map<number, string[]>();
     for (const { ordinal, copy } of await findRemovedSlotCopies(slotRoot))
-      byOrdinal.set(ordinal, [...(byOrdinal.get(ordinal) ?? []), copy]);
+      if (!options.skip.has(copy)) byOrdinal.set(ordinal, [...(byOrdinal.get(ordinal) ?? []), copy]);
     for (const [ordinal, copies] of byOrdinal) {
       if (Date.now() >= options.deadline) {
         for (const copy of copies)
@@ -1088,16 +1120,25 @@ export async function purgeRemovedSlots(
           });
     }
   }
-  return outcomes;
+};
+
+/** What {@link purgeRemovedSlots} did. */
+export interface RemovedSlotPurge {
+  readonly outcomes: readonly RemovedCopyPurge[];
+  /** Why the purge stopped early, or null when it went through every copy. */
+  readonly failure: string | null;
 }
 
 /**
- * Folds a purge's outcomes into the report's summary.
- * @param outcomes - What {@link purgeRemovedSlots} returned.
- * @returns Counts of purged and pending copies, and every kept copy with its detail.
+ * Folds a purge into the report's summary.
+ * @param purge - What {@link purgeRemovedSlots} returned.
+ * @param purge.outcomes - One per copy it reached.
+ * @param purge.failure - Why it stopped early, or null.
+ * @returns Counts of purged and pending copies, every kept copy with its detail, and the failure.
  */
-export function summarizeRemovedSlotPurge(outcomes: readonly RemovedCopyPurge[]): WorktreePurgeSummary {
+export function summarizeRemovedSlotPurge({ outcomes, failure }: RemovedSlotPurge): WorktreePurgeSummary {
   return {
+    failure,
     purged: outcomes.filter((outcome) => outcome.status === 'purged').length,
     pending: outcomes.filter((outcome) => outcome.status === 'pending').length,
     kept: outcomes.flatMap((outcome) =>
