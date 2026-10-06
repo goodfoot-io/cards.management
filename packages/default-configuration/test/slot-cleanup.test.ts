@@ -29,7 +29,7 @@ import {
   type SlotCleanupResult,
   type SlotLayer
 } from '../src/lib/worktrees/index.js';
-import { createSlotFixture, type SlotFixture } from './helpers/slot-fixture.js';
+import { createSlotFixture, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
 
@@ -453,18 +453,22 @@ describe('cleanupCardSlots next steps', () => {
         registration.parentBranch = 'gone';
       }
     }
-  ])('removes a $reason slot once the git commands its next step names have run', async ({ reason, arrange }) => {
-    const slot = await finishedSlot('exec-1');
-    await arrange(slot);
-    const refused = decisionOf(await pass(), slot.branch);
-    expect(refused).toMatchObject({ reason, outcome: 'preserved' });
+  ])(
+    'removes a $reason slot once the git commands its next step names have run',
+    async ({ reason, arrange }) => {
+      const slot = await finishedSlot('exec-1');
+      await arrange(slot);
+      const refused = decisionOf(await pass(), slot.branch);
+      expect(refused).toMatchObject({ reason, outcome: 'preserved' });
 
-    expect(await runStatedCommands(refused.detail)).toBeGreaterThan(0);
+      expect(await runStatedCommands(refused.detail)).toBeGreaterThan(0);
 
-    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
-    expect(await exists(slot.worktreePath)).toBe(false);
-    expect(fx.client.registrations.has(slot.branch)).toBe(false);
-  });
+      expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+      expect(await exists(slot.worktreePath)).toBe(false);
+      expect(fx.client.registrations.has(slot.branch)).toBe(false);
+    },
+    GIT_HEAVY_TIMEOUT_MS
+  );
 
   it('says the git-ignored files of a clean slot are deleted with it, in preview and in the removal', async () => {
     await writeFile(join(fx.repoRoot, '.gitignore'), '.env\n');
