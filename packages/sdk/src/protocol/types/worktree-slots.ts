@@ -126,14 +126,40 @@ const worktreeUnknownLocksSchema = z
   });
 
 /**
+ * Whether a pass's report clears its card for deletion: no stage failed, no
+ * lock went unidentified, and every slot was removed or is eligible. The
+ * report's `canDeleteCard` must equal this, so a reader can never be told a
+ * card is deletable while the same report shows a slot it kept or a lock it
+ * could not judge.
+ * @param report - The pass's decisions, unknown locks and failure.
+ * @returns True when deleting the card destroys no slot the pass kept.
+ */
+export function clearsCardDeletion(
+  report: Pick<WorktreeCleanupPreview, 'decisions' | 'unknownLocks' | 'failure'>
+): boolean {
+  return (
+    report.failure === undefined &&
+    report.unknownLocks.count === 0 &&
+    report.decisions.every((decision) => decision.outcome === 'removed' || decision.outcome === 'eligible')
+  );
+}
+
+/**
  * Parses a `worktreeMaintenance` command report, which arrives as the opaque
  * `execution.commandReport` payload, into a {@link WorktreeCleanupPreview}.
- * Unknown fields, reasons and outcomes are rejected rather than passed through.
+ * Unknown fields, reasons and outcomes are rejected rather than passed through,
+ * and so is a `canDeleteCard` that disagrees with {@link clearsCardDeletion}.
  */
-export const worktreeCleanupPreviewSchema = z.strictObject({
-  cardId: z.string().min(1),
-  canDeleteCard: z.boolean(),
-  decisions: z.array(worktreeCleanupDecisionSchema),
-  unknownLocks: worktreeUnknownLocksSchema,
-  failure: z.strictObject({ stage: z.enum(['discovery', 'self_probe']), message: z.string() }).optional()
-}) satisfies z.ZodType<WorktreeCleanupPreview>;
+export const worktreeCleanupPreviewSchema = z
+  .strictObject({
+    cardId: z.string().min(1),
+    canDeleteCard: z.boolean(),
+    decisions: z.array(worktreeCleanupDecisionSchema),
+    unknownLocks: worktreeUnknownLocksSchema,
+    failure: z.strictObject({ stage: z.enum(['discovery', 'self_probe']), message: z.string() }).optional()
+  })
+  .refine((preview) => preview.canDeleteCard === clearsCardDeletion(preview), {
+    message:
+      'canDeleteCard must hold exactly when no stage failed, no lock is unknown and every slot was removed or is eligible',
+    path: ['canDeleteCard']
+  }) satisfies z.ZodType<WorktreeCleanupPreview>;

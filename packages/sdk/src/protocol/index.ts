@@ -376,6 +376,7 @@ export {
   runtimeCredentialFileSchema
 } from './types/runtime-credential-file.js';
 export {
+  clearsCardDeletion,
   type InvalidBranchEntry,
   type WorktreeCleanupDecision,
   type WorktreeCleanupPreview,
