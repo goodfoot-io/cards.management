@@ -50,7 +50,7 @@ import {
 
 /** Input of each root configuration command, keyed by command name. */
 export interface RootCommandInputs {
-  readonly worktreeMaintenance: { readonly mode: WorktreeMaintenanceMode };
+  readonly worktreeMaintenance: { readonly mode: WorktreeMaintenanceMode; readonly budgetMs: number };
 }
 
 /** Options bounding one {@link CardsClient.runRootCommand} call. */

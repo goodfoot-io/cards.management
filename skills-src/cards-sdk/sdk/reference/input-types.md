@@ -65,13 +65,14 @@ interface CardsAssistantContext {
 
 ## WorktreeMaintenanceInput
 
-Input of the `worktreeMaintenance` root command. `mode` comes from `CARDS_ROOT_COMMAND_INPUT`.
+Input of the `worktreeMaintenance` root command. `mode` and `budgetMs` come from `CARDS_ROOT_COMMAND_INPUT`; the command fails before the handler runs when either is missing or invalid.
 
 ```typescript
 interface WorktreeMaintenanceInput {
   executionId: string;   // The command's own execution
   cardId: string;        // Card whose worktree slots are maintained
   mode: 'preview' | 'cleanup' | 'prepare-delete';
+  budgetMs: number;      // Positive integer: ms the handler may work before it must stop and report
   repoRoot: string;      // Workspace path the command was launched for; may be a linked worktree
   cardRepoPath: string;  // Card repository path
   extensionPath: string; // VS Code extension installation directory

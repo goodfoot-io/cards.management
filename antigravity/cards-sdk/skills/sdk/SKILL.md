@@ -104,7 +104,7 @@ export default defineConfig({
 
 ## Worktree Maintenance
 
-`worktreeMaintenance` compiles to `settings.json` `worktreeMaintenance.command`. The server keeps no worktree state; callers run this command through [runRootCommand](reference/api-client.md#root-commands) to preview a card's worktree slots, clean them up, or check before deleting the card. The server launches it as a card-scoped execution that sets no card status and writes no note. Its handler receives a `mode` and must call `report()` with a `WorktreeCleanupPreview` (`{ cardId, canDeleteCard, decisions, unknownLocks, processesNotInspected, failure? }`); see [input-types.md](reference/input-types.md#worktreemaintenanceinput).
+`worktreeMaintenance` compiles to `settings.json` `worktreeMaintenance.command`. The server keeps no worktree state; callers run this command through [runRootCommand](reference/api-client.md#root-commands) to preview a card's worktree slots, clean them up, or check before deleting the card. The server launches it as a card-scoped execution that sets no card status and writes no note. Its handler receives a `mode` and a `budgetMs` to finish within, and must call `report()` with a `WorktreeCleanupPreview` (`{ cardId, canDeleteCard, decisions, unknownLocks, processesNotInspected, failure? }`); see [input-types.md](reference/input-types.md#worktreemaintenanceinput).
 
 ```typescript
 // src/worktree-maintenance.ts
@@ -112,6 +112,7 @@ import { defineWorktreeMaintenance } from '@cards.management/sdk/config';
 
 export default defineWorktreeMaintenance({}, async (input, { report }) => {
   // input.mode: 'preview' | 'cleanup' | 'prepare-delete'
+  // input.budgetMs: stop work and report within this many milliseconds
   report({ cardId: input.cardId, canDeleteCard: false, decisions: [] });
 });
 ```

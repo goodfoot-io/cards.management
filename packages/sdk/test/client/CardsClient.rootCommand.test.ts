@@ -127,7 +127,10 @@ describe('runRootCommand', () => {
       ];
     });
 
-    const completion = await client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'preview' });
+    const completion = await client.runRootCommand('main-1', 'worktreeMaintenance', {
+      mode: 'preview',
+      budgetMs: 60_000
+    });
 
     const launch = requests[0];
     expect(launch?.method).toBe('POST');
@@ -136,7 +139,7 @@ describe('runRootCommand', () => {
       requestId: expect.any(String),
       messageId: expect.any(String),
       command: 'worktreeMaintenance',
-      input: { mode: 'preview' }
+      input: { mode: 'preview', budgetMs: 60_000 }
     });
     const requestId = launchedRequestId();
     expect(requests.slice(1).every((request) => request.path === `/cards/main-1/runtime/actions/${requestId}`)).toBe(
@@ -164,19 +167,25 @@ describe('runRootCommand', () => {
         }
       ];
     });
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('no_report');
   });
 
   it('fails with rejected when admission refuses the launch', async () => {
     const client = await serve(() => [409, { disposition: 'rejected', reason: 'scope-mismatch', execution: null }]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('rejected');
   });
 
   it('fails with rejected when the server has no runtime admission', async () => {
     const client = await serve(() => [503, { error: 'runtime admission unavailable' }]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('rejected');
     expect(requests).toHaveLength(1);
   });
@@ -200,7 +209,7 @@ describe('runRootCommand', () => {
         }
       ];
     });
-    await client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'preview' });
+    await client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'preview', budgetMs: 60_000 });
     const launchBodies = requests.filter(isLaunch).map((request) => request.body);
     expect(launchBodies).toHaveLength(2);
     expect(launchBodies[1]).toEqual(launchBodies[0]);
@@ -212,7 +221,9 @@ describe('runRootCommand', () => {
         return [202, { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }];
       return [200, { status: 'uncertain', reason: 'spawn-attempt-unconfirmed', execution: null }];
     });
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('uncertain');
   });
 
@@ -221,7 +232,9 @@ describe('runRootCommand', () => {
       409,
       { error: 'worktreeMaintenance is not configured', code: 'command_unconfigured' }
     ]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('unconfigured');
   });
 
@@ -230,7 +243,9 @@ describe('runRootCommand', () => {
     ['an error code', { error: 'card is being deleted', code: 'card_deleting' }]
   ])('fails with rejected when the card is being deleted, carried in %s', async (_form, body) => {
     const client = await serve(() => [409, body]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('rejected');
   });
 
@@ -246,7 +261,7 @@ describe('runRootCommand', () => {
     });
     const started = Date.now();
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 600 })
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 }, { timeoutMs: 600 })
     );
     expect(error.cause).toBe('timeout');
     expect(Date.now() - started).toBeLessThan(3_000);
@@ -267,7 +282,12 @@ describe('runRootCommand', () => {
     });
     setTimeout(() => controller.abort(), 400);
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { signal: controller.signal })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { signal: controller.signal }
+      )
     );
     expect(error.cause).toBe('cancelled');
     expect(requests.some(isCancel)).toBe(true);
@@ -278,7 +298,12 @@ describe('runRootCommand', () => {
     controller.abort();
     const client = await serve(() => [500, {}]);
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { signal: controller.signal })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { signal: controller.signal }
+      )
     );
     expect(error.cause).toBe('cancelled');
     expect(requests).toEqual([]);
@@ -312,7 +337,12 @@ describe('runRootCommand against an unavailable server', () => {
       retryOnNetworkError: false
     });
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 3_000 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 3_000 }
+      )
     );
     expect(error.cause).toBe('unavailable');
     expect(error.message).toContain(`http://127.0.0.1:${port}`);
@@ -326,7 +356,12 @@ describe('runRootCommand against an unavailable server', () => {
   it('backs off on a launch that keeps failing with 5xx and ends as unavailable', async () => {
     const client = await serve(() => [500, { error: 'boom' }]);
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 3_000 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 3_000 }
+      )
     );
     expect(error.cause).toBe('unavailable');
     expect(error.message).toContain('the launch failed with 500');
@@ -341,7 +376,12 @@ describe('runRootCommand against an unavailable server', () => {
       return [502, { error: 'bad gateway' }];
     });
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 3_000 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 3_000 }
+      )
     );
     expect(error.cause).toBe('unavailable');
     expect(error.message).toContain('the retrieval failed with 502');
@@ -361,7 +401,12 @@ describe('runRootCommand against an unavailable server', () => {
       return retrievals === 1 ? [502, { error: 'bad gateway' }] : [0, null];
     });
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 1_500 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 1_500 }
+      )
     );
     expect(retrievals).toBe(2);
     expect(error.cause).toBe('unavailable');
@@ -372,7 +417,12 @@ describe('runRootCommand against an unavailable server', () => {
     const client = await serve(() => [504, { error: 'gateway timeout' }]);
     const started = Date.now();
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 120_000 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 120_000 }
+      )
     );
     expect(error.cause).toBe('unavailable');
     expect(Date.now() - started).toBeGreaterThanOrEqual(30_000);
@@ -402,7 +452,7 @@ describe('runRootCommand against an unavailable server', () => {
     const result = await client.runRootCommand(
       'main-1',
       'worktreeMaintenance',
-      { mode: 'preview' },
+      { mode: 'preview', budgetMs: 60_000 },
       { timeoutMs: 10_000 }
     );
     expect(result.report).toEqual({ ok: true });
@@ -416,7 +466,9 @@ describe('runRootCommand precise causes', () => {
     ['workspace_not_found', 'No workspace for this repository', 'No workspace for this repository']
   ] as const)('ends as %s when the launch answers its typed 404', async (code, message, detail) => {
     const client = await serve(() => [404, { code, error: message }]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe(code);
     expect(error.message).toContain(detail);
     expect(requests.filter(isLaunch)).toHaveLength(1);
@@ -425,14 +477,18 @@ describe('runRootCommand precise causes', () => {
 
   it('ends as invalid_response on an untyped launch 404, cancelling what it cannot rule out', async () => {
     const client = await serve(() => [404, { error: 'Not Found' }]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('invalid_response');
     expect(requests.filter(isCancel)).toHaveLength(1);
   });
 
   it('ends as rejected naming the server reason on a 409 it does not recognize', async () => {
     const client = await serve(() => [409, { code: 'scope_conflict', error: 'another launch holds this scope' }]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('rejected');
     expect(error.message).toContain('another launch holds this scope');
     expect(requests.filter(isLaunch)).toHaveLength(1);
@@ -440,7 +496,9 @@ describe('runRootCommand precise causes', () => {
 
   it('ends as invalid_response on a launch body outside the contract', async () => {
     const client = await serve(() => [200, { disposition: 'teleported' }]);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect(error.cause).toBe('invalid_response');
     expect(requests.filter(isLaunch)).toHaveLength(1);
     expect(requests.filter(isCancel)).toHaveLength(1);
@@ -457,7 +515,12 @@ describe('runRootCommand precise causes', () => {
     });
     const started = Date.now();
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 60_000 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 60_000 }
+      )
     );
     expect(error.cause).toBe(code);
     expect(Date.now() - started).toBeLessThan(2_000);
@@ -472,7 +535,12 @@ describe('runRootCommand precise causes', () => {
     });
     const started = Date.now();
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 60_000 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 60_000 }
+      )
     );
     expect(error.cause).toBe('invalid_response');
     expect(Date.now() - started).toBeLessThan(2_000);
@@ -524,14 +592,21 @@ describe('runRootCommand failure scope', () => {
     ])
   ])('marks %s as workspace scope', async (_case, cause, respond) => {
     const client = await serve(respond);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect([error.cause, error.scope]).toEqual([cause, 'workspace']);
   });
 
   it('marks an outage as workspace scope', async () => {
     const client = await serve(() => [502, { error: 'bad gateway' }]);
     const error = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 1_500 })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { timeoutMs: 1_500 }
+      )
     );
     expect([error.cause, error.scope]).toEqual(['unavailable', 'workspace']);
   });
@@ -580,7 +655,9 @@ describe('runRootCommand failure scope', () => {
     ]
   ])('marks %s as card scope', async (_case, cause, respond) => {
     const client = await serve(respond);
-    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 })
+    );
     expect([error.cause, error.scope]).toEqual([cause, 'card']);
   });
 
@@ -600,11 +677,16 @@ describe('runRootCommand failure scope', () => {
             ];
     const client = await serve(pending);
     const timedOut = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 300 })
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup', budgetMs: 60_000 }, { timeoutMs: 300 })
     );
     expect([timedOut.cause, timedOut.scope]).toEqual(['timeout', 'card']);
     const cancelled = await rootCommandFailure(
-      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { signal: AbortSignal.abort() })
+      client.runRootCommand(
+        'main-1',
+        'worktreeMaintenance',
+        { mode: 'cleanup', budgetMs: 60_000 },
+        { signal: AbortSignal.abort() }
+      )
     );
     expect([cancelled.cause, cancelled.scope]).toEqual(['cancelled', 'card']);
   });
