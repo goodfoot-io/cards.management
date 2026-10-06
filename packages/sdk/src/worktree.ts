@@ -748,20 +748,59 @@ async function settleWorktreeCheckout(
 }
 
 /**
+ * Runs every refusal {@link removeWorktree} applies before it changes anything,
+ * so an entry point can refuse a slot or an out-of-scope path before it warns,
+ * resolves a branch or calls the Cards API about a removal that will not happen.
+ * @param worktreePath - Absolute path to the worktree directory to remove.
+ * @throws {WorktreeScopeError} When `worktreePath` is empty or outside the Cards worktrees root.
+ * @throws {SlotNamespaceError} When `worktreePath` is, contains or lies inside the slot namespace.
+ */
+export async function assertWorktreeRemovable(worktreePath: string): Promise<void> {
+  await locateRemovableWorktree(worktreePath);
+}
+
+/**
  * Removes a Cards-managed worktree and cleans up its git registration.
  *
  * Steps:
  * 1. Scope guard: rejects paths outside `resolveWorktreesRoot()`.
  * 2. Locates `repoRoot` by reading `<worktreePath>/.git` (a worktree file).
  *    Returns immediately when the directory is already gone (idempotent).
- * 3. `git worktree remove --force <path>` from `repoRoot`.
- * 4. Sweeps any leftover directory with `fs.rm`.
- * 5. `git worktree prune` to keep the registry clean.
+ * 3. Refuses a slot, whatever its HEAD.
+ * 4. `git worktree remove --force <path>` from `repoRoot`.
+ * 5. Sweeps any leftover directory with `fs.rm`.
+ * 6. `git worktree prune` to keep the registry clean.
  *
  * @param worktreePath - Absolute path to the worktree directory to remove.
  * @throws {Error} When `worktreePath` is outside the Cards worktrees root or git operations fail.
+ * @throws {SlotNamespaceError} When `worktreePath` touches the slot namespace.
  */
 export async function removeWorktree(worktreePath: string): Promise<void> {
+  const located = await locateRemovableWorktree(worktreePath);
+  if (located === null) return;
+  const { resolved, repoRoot } = located;
+  await execFileAsync('git', ['worktree', 'remove', '--force', resolved], { cwd: repoRoot });
+
+  // On Windows a just-exited `git worktree remove` subprocess (or a watcher/AV
+  // indexer) can briefly retain a handle into the worktree directory, so the
+  // sweep can hit a transient EPERM/EBUSY. fs.rm({recursive:true}) retries
+  // EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with linear backoff only when
+  // maxRetries > 0. POSIX is unaffected: the first attempt succeeds.
+  await fs.rm(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+
+  await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot, timeout: 30_000 });
+}
+
+/**
+ * The refusals of {@link removeWorktree}, and the paths it then works on.
+ * @param worktreePath - Absolute path to the worktree directory to remove.
+ * @returns The resolved path and its repository root, or null when the worktree is already gone.
+ * @throws {WorktreeScopeError} When `worktreePath` is empty or outside the Cards worktrees root.
+ * @throws {SlotNamespaceError} When `worktreePath` touches the slot namespace.
+ */
+async function locateRemovableWorktree(
+  worktreePath: string
+): Promise<{ readonly resolved: string; readonly repoRoot: string } | null> {
   if (typeof worktreePath !== 'string' || worktreePath.length === 0) {
     throw new WorktreeScopeError('removeWorktree: worktreePath must be a non-empty string');
   }
@@ -812,23 +851,14 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
     }
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      return;
+      return null;
     }
     throw error;
   }
 
   // A slot is refused by where it is, whatever its HEAD: detached or switched, it is still a slot.
   await assertOutsideSlotNamespace(repoRoot, canonical);
-  await execFileAsync('git', ['worktree', 'remove', '--force', resolved], { cwd: repoRoot });
-
-  // On Windows a just-exited `git worktree remove` subprocess (or a watcher/AV
-  // indexer) can briefly retain a handle into the worktree directory, so the
-  // sweep can hit a transient EPERM/EBUSY. fs.rm({recursive:true}) retries
-  // EBUSY/EMFILE/ENFILE/ENOTEMPTY/EPERM with linear backoff only when
-  // maxRetries > 0. POSIX is unaffected: the first attempt succeeds.
-  await fs.rm(resolved, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
-
-  await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot, timeout: 30_000 });
+  return { resolved, repoRoot };
 }
 
 /**

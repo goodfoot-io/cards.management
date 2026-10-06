@@ -7,7 +7,8 @@
  * logged to stderr but does not fail the command (fail-open on branch
  * unregister). Unbound worktrees fall back to the bare `removeWorktree`. The
  * command exits 0 when the worktree is removed, even if the branch unregister
- * failed.
+ * failed. A slot or a path outside the worktrees root is refused before any
+ * of that, with only the refusal on stderr.
  *
  * Exit codes: 0 success, 2 usage or worktree-removal failure.
  *
@@ -19,7 +20,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
-import { removeWorktree } from '@cards.management/sdk/worktree';
+import { assertWorktreeRemovable, removeWorktree } from '@cards.management/sdk/worktree';
 import { BranchUnregisterError, removeWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 
 const execFileAsync = promisify(execFile);
@@ -81,6 +82,9 @@ async function resolveWorktreeBranch(dir: string): Promise<string | undefined> {
 }
 
 async function main(): Promise<void> {
+  // Refuse a slot or an out-of-scope path first, so its refusal is all the
+  // user reads: no removal warning, branch lookup or Cards API call precedes it.
+  await assertWorktreeRemovable(worktreePath!);
   // Resolve the card binding from disk before removal: the marker yields the
   // cardId and HEAD yields the exact registered branch name (spike S2).
   const cardId = await readWorktreeCardId(worktreePath!);
