@@ -105,7 +105,7 @@ function isCardsSkill(skill: string): boolean {
  *
  * The live binary rejects parts whose id does not match its prefixed,
  * fixed-length convention (`prt_` + 26 characters) — a bare UUID crashes the
- * message pipeline (verified against v1.18.21). Matching the observed shape
+ * message pipeline (observed on OpenCode v1.18.21). Matching the observed shape
  * keeps the appended nudge part indistinguishable from a native one.
  *
  * @returns An `prt_`-prefixed identifier of the expected length.

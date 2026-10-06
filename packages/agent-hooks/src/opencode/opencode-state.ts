@@ -206,7 +206,7 @@ export interface SessionLike {
 /**
  * In-memory registry of root sessions seen by one plugin bundle.
  *
- * Classification rule (verified against OpenCode v1.18.21 live behavior):
+ * Classification rule (observed on OpenCode v1.18.21):
  *
  * (a) a `session.created` event whose `info.parentID` is null/absent marks a
  *     root, and one carrying `parentID` records the session as a child;

@@ -150,8 +150,9 @@ const targets = [
 /**
  * The three OpenCode build targets.
  *
- * OpenCode v1.18.21 plugins are in-process modules executed by the host's
- * embedded Bun — there is no hooks.json and nothing to stamp (no
+ * OpenCode plugins are in-process modules executed by the host's embedded
+ * Bun (observed on v1.18.21; the binary-gate test loads these bundles on
+ * v1.18.31) — there is no hooks.json and nothing to stamp (no
  * ELECTRON_RUN_AS_NODE / VSCODE_NODE indirection). Each target bundles every
  * handler under its own `src/opencode/<area>/` directory into one
  * self-contained `<name>.mjs` per handler at `<outBase>/<name>.mjs`, exporting

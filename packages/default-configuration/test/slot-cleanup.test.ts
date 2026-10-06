@@ -61,6 +61,9 @@ async function finishedSlot(executionId: string): Promise<AcquiredSlot> {
   return slot;
 }
 
+/** What a pass that purges nothing reports. */
+const NO_PURGE = { purged: 0, pending: 0, kept: [], failure: null };
+
 /**
  * Runs a pass for the fixture's card.
  * @param options - Mode, requester and budget.
@@ -636,8 +639,9 @@ describe('cleanupCardSlots removal', () => {
     const [name] = (await readdir(join(fx.slotRoot, '.purge'))).filter((entry) => !entry.endsWith('.json'));
     copy = join(fx.slotRoot, '.purge', name ?? '');
 
-    // The removing pass's own purge keeps it, and so does every later pass.
-    for (const purge of [removing.purge, (await run('cleanup')).purge]) {
+    // The removing pass leaves its own copy alone; every later pass keeps it.
+    expect(removing.purge).toEqual(NO_PURGE);
+    for (const purge of [(await run('cleanup')).purge, (await run('cleanup')).purge]) {
       expect(purge).toEqual({
         purged: 0,
         pending: 0,
@@ -650,7 +654,8 @@ describe('cleanupCardSlots removal', () => {
               )
             )
           }
-        ]
+        ],
+        failure: null
       });
     }
     expect(await readFile(join(copy, 'checkout', 'notes.txt'), 'utf8')).toBe('notes\nlate write\n');
@@ -660,30 +665,71 @@ describe('cleanupCardSlots removal', () => {
       detail: expect.stringContaining('It changed after its removal')
     });
     // A preview purges nothing and reports nothing of it.
-    expect((await run('preview')).purge).toEqual({ purged: 0, pending: 0, kept: [] });
+    expect((await run('preview')).purge).toEqual(NO_PURGE);
   });
 
-  it('purges an unchanged removed copy after the slot loop of the pass that removed it', async () => {
+  it('leaves an unchanged removed copy for the next pass, which purges it', async () => {
     const slot = await finishedSlot('exec-1');
 
-    const result = await pass();
+    const removing = await pass();
 
-    expect(decisionOf(result, slot.branch)).toMatchObject({ outcome: 'removed' });
-    expect(result.purge).toEqual({ purged: 1, pending: 0, kept: [] });
+    expect(decisionOf(removing, slot.branch)).toMatchObject({ outcome: 'removed' });
+    expect(removing.purge).toEqual(NO_PURGE);
+    expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
+
+    expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
     expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
   });
 
   it('leaves a removed copy pending when the budget left after the slots is within the purge reserve', async () => {
-    const slot = await finishedSlot('exec-1');
+    await finishedSlot('exec-1');
+    await pass();
 
     // Every slot starts within this budget, but nothing remains for the purge once the 5 s reserve is set aside.
     const result = await pass({ budgetMs: 4_000 });
 
-    expect(decisionOf(result, slot.branch)).toMatchObject({ outcome: 'removed' });
-    expect(result.purge).toEqual({ purged: 0, pending: 1, kept: [] });
+    expect(result.purge).toEqual({ purged: 0, pending: 1, kept: [], failure: null });
     expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
     // The next pass, with budget to spare, deletes it.
-    expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [] });
+    expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
+  });
+
+  it('reports why the purge stopped, logs it, and keeps the copy for a later pass', async () => {
+    await finishedSlot('exec-1');
+    await pass();
+    const removal = fx.layer.seams.removal;
+    const layer: SlotLayer = {
+      ...fx.layer,
+      seams: {
+        ...fx.layer.seams,
+        removal: {
+          ...removal,
+          purgeRemovedSlots: (cardsDir, _lockerFor, options) =>
+            removal.purgeRemovedSlots(
+              cardsDir,
+              () => async () => {
+                throw new Error('slot lock unavailable');
+              },
+              options
+            )
+        }
+      }
+    };
+    const logger = new Logger();
+    const error = vi.spyOn(logger, 'error');
+
+    const result = await cleanupCardSlots(
+      { ...fx.cleanupContext(), logger, layer },
+      { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(result.purge).toEqual({ purged: 0, pending: 0, kept: [], failure: 'slot lock unavailable' });
+    expect(error).toHaveBeenCalledWith('Purge of removed slot copies failed', {
+      cardId: fx.cardId,
+      error: 'slot lock unavailable'
+    });
+    expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
   });
 
   it('recovers residue under the lock', async () => {
@@ -764,7 +810,7 @@ describe('cleanupCardSlots failures and budget', () => {
       decisions: [],
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       processesNotInspected: 0,
-      purge: { purged: 0, pending: 0, kept: [] },
+      purge: NO_PURGE,
       ok: true
     });
   });
