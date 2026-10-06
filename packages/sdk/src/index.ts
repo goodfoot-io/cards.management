@@ -8,11 +8,15 @@
  */
 
 export {
+  assertOutsideSlotNamespace,
   CARDS_DIR_NAME,
   generateRepoId,
+  isInSlotNamespace,
   resolveGlobalCardsConfigDir,
+  resolveSlotNamespace,
   resolveWorktreeDir,
-  resolveWorktreesRoot
+  resolveWorktreesRoot,
+  SlotNamespaceError
 } from './cards-config.js';
 // Re-export all protocol types at the top level for convenience
 export * from './protocol/index.js';

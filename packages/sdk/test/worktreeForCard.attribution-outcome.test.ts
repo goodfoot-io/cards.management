@@ -24,6 +24,14 @@ import { outfitWorktreeForCard } from '../src/worktreeForCard.js';
 // isKnownAgentComm, spawnAdhocAttribution).
 // ---------------------------------------------------------------------------
 
+// The slot-namespace guard reads real repository layout; these fakes have none,
+// and test/worktree-slot-boundary.test.ts covers the guard against real Git.
+vi.mock('../src/cards-config.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/cards-config.js')>()),
+  assertOutsideSlotNamespace: vi.fn(async () => undefined),
+  resolveMainRepoRoot: vi.fn(async () => '/repo')
+}));
+
 vi.mock('../src/worktree.js', () => ({
   createWorktree: vi.fn(),
   removeWorktree: vi.fn(),

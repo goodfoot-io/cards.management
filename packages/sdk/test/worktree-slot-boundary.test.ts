@@ -1,21 +1,35 @@
 /**
  * Real-Git boundaries keep dedicated runtime slots out of generic SDK tools.
+ * A slot is identified by where it lives, the `cards` namespace under the
+ * repository's worktree directory, never by what its HEAD names, so no ref
+ * spelling can create into, over or above slots, and a slot is refused for
+ * removal whether its HEAD is on its branch, detached or switched.
  * @summary Generic worktree operations preserve reserved slots
  */
 import { execFileSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  isInSlotNamespace,
+  resolveSlotNamespace,
+  resolveWorktreeDir,
+  SlotNamespaceError
+} from '../src/cards-config.js';
 import type { CardsClient } from '../src/client/cardsClient.js';
-import { createWorktree, removeWorktree } from '../src/worktree.js';
+import { assertRefOutsideSlotNamespace, createWorktree, removeWorktree } from '../src/worktree.js';
 import { createWorktreeForCard, releaseWorktreeForCard, removeWorktreeForCard } from '../src/worktreeForCard.js';
 
 const tsxCli = createRequire(import.meta.url).resolve('tsx/cli');
 const removeBin = fileURLToPath(new URL('../src/bin/remove-worktree.ts', import.meta.url));
-const slots = ['cards/main-88/1', 'cards/another-card/90071992547409931234567890'];
+const createBin = fileURLToPath(new URL('../src/bin/create-worktree.ts', import.meta.url));
+
+const git = (cwd: string, ...args: string[]): string =>
+  execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
 
 describe('generic SDK dedicated-slot boundary', () => {
   let base = '';
@@ -32,11 +46,12 @@ describe('generic SDK dedicated-slot boundary', () => {
     priorRoot = process.env['CARDS_WORKTREES_DIR'];
     process.env['CARDS_WORKTREES_DIR'] = root;
     execFileSync('git', ['init', '-q', '-b', 'main', repo]);
-    execFileSync('git', ['-C', repo, 'config', 'user.email', 'test@example.com']);
-    execFileSync('git', ['-C', repo, 'config', 'user.name', 'Test']);
-    await writeFile(join(repo, 'README.md'), 'committed content\n');
-    execFileSync('git', ['-C', repo, 'add', '.']);
-    execFileSync('git', ['-C', repo, 'commit', '-q', '-m', 'fixture']);
+    git(repo, 'config', 'user.email', 'test@example.com');
+    git(repo, 'config', 'user.name', 'Test');
+    await mkdir(join(repo, 'packages'));
+    await writeFile(join(repo, 'packages', 'f.txt'), 'committed content\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-q', '-m', 'fixture');
   });
 
   afterEach(async () => {
@@ -45,92 +60,260 @@ describe('generic SDK dedicated-slot boundary', () => {
     await rm(base, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
 
-  it.each(slots)('refuses creation of %s before Git or card publication', async (branch) => {
-    let publications = 0;
-    const client = {
-      addBranch: async () => {
-        publications++;
+  /**
+   * A live slot `cards/x/1` with uncommitted work and a lock file, as card launches leave it.
+   * @returns The slot path and a snapshot function of everything that must survive.
+   */
+  async function liveSlot(): Promise<{ slot: string; snapshot: () => Promise<unknown> }> {
+    const namespace = resolveSlotNamespace(repo);
+    const slot = join(namespace, 'x', '1');
+    git(repo, 'worktree', 'add', '-q', '-b', 'cards/x/1', slot);
+    await mkdir(join(namespace, 'x', '.locks'), { recursive: true });
+    await writeFile(join(namespace, 'x', '.locks', '1.lock'), 'live');
+    await writeFile(join(slot, 'uncommitted.txt'), 'work in progress\n');
+    await mkdir(join(slot, '.cards'));
+    await writeFile(join(slot, '.cards', 'CARD_ID'), 'x\n');
+    await writeFile(join(slot, '.cards', 'CARD_ORIGINAL_HOOK_PATH'), 'original-hooks\n');
+    const snapshot = async () => ({
+      lock: await readFile(join(namespace, 'x', '.locks', '1.lock'), 'utf8'),
+      work: await readFile(join(slot, 'uncommitted.txt'), 'utf8'),
+      packages: await readFile(join(slot, 'packages', 'f.txt'), 'utf8'),
+      card: await readFile(join(slot, '.cards', 'CARD_ID'), 'utf8'),
+      hooks: await readFile(join(slot, '.cards', 'CARD_ORIGINAL_HOOK_PATH'), 'utf8'),
+      head: git(slot, 'rev-parse', 'HEAD'),
+      registry: git(repo, 'worktree', 'list', '--porcelain'),
+      branches: git(repo, 'branch', '--list')
+    });
+    return { slot, snapshot };
+  }
+
+  describe('isInSlotNamespace', () => {
+    it.each([
+      ['the namespace', 'cards'],
+      ['a card directory', 'cards/x'],
+      ['a slot', 'cards/x/1'],
+      ['inside a slot', 'cards/x/1/packages'],
+      ['a slot lock', 'cards/x/.locks/1.lock'],
+      ['a not-yet-created slot', 'cards/y/2/a'],
+      ['a zero-padded ordinal', 'cards/x/01'],
+      ['a trailing separator', 'cards/x/1/'],
+      ['a doubled separator', 'cards//x/1'],
+      ['a dot segment', './cards/x/1'],
+      ['a parent segment', 'other/../cards/x/1'],
+      ['the repository directory, which contains it', '.'],
+      ['another repository id’s namespace', '../other-repo-1234abcd/cards/x/1'],
+      ['another repository id’s directory', '../other-repo-1234abcd'],
+      ['the worktrees root', '..']
+    ])('holds for %s', async (_case, ref) => {
+      await expect(isInSlotNamespace(repo, resolveWorktreeDir(repo, ref))).resolves.toBe(true);
+    });
+
+    it.each([
+      ['an ordinary branch', 'feature/x'],
+      ['a sibling of the namespace', 'cardsx/1'],
+      ['a name that only starts with it', 'cards-old/x/1']
+    ])('does not hold for %s', async (_case, ref) => {
+      await expect(isInSlotNamespace(repo, resolveWorktreeDir(repo, ref))).resolves.toBe(false);
+    });
+
+    it('holds for a path that reaches the namespace through a symlink', async () => {
+      const namespace = resolveSlotNamespace(repo);
+      await mkdir(namespace, { recursive: true });
+      const alias = resolveWorktreeDir(repo, 'alias');
+      await symlink(namespace, alias, 'dir');
+      await expect(isInSlotNamespace(repo, join(alias, 'x', '1'))).resolves.toBe(true);
+    });
+
+    it.each(['darwin', 'win32'] as const)('case-folds on %s, where the filesystem ignores case', async (platform) => {
+      const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+      Object.defineProperty(process, 'platform', { value: platform });
+      try {
+        await expect(isInSlotNamespace(repo, resolveWorktreeDir(repo, 'Cards/X/1'))).resolves.toBe(true);
+      } finally {
+        if (descriptor !== undefined) Object.defineProperty(process, 'platform', descriptor);
       }
-    } as unknown as CardsClient;
-    const missingRepo = join(base, 'not-a-repository');
-    await expect(createWorktree(branch, { cwd: missingRepo })).rejects.toThrow('Dedicated slots');
-    await expect(
-      createWorktreeForCard(client, branch, {
-        cwd: missingRepo,
-        cardId: 'main-88',
-        parentBranch: 'main',
-        registrationIntent: 'create',
-        compiledScriptPaths: {}
-      })
-    ).rejects.toThrow('Dedicated slots');
-    expect(publications).toBe(0);
-    expect(execFileSync('git', ['-C', repo, 'branch', '--list', branch], { encoding: 'utf8' })).toBe('');
+    });
+
+    it.runIf(process.platform === 'linux')('treats a different case as a different directory on Linux', async () => {
+      await expect(isInSlotNamespace(repo, resolveWorktreeDir(repo, 'Cards/x/1'))).resolves.toBe(false);
+    });
   });
 
-  it.each(slots)('preserves %s through bare, bound, release, and unavailable-API CLI removal', async (branch) => {
-    const checkout = join(root, 'slot');
-    execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', '-b', branch, checkout]);
-    await mkdir(join(checkout, '.cards'));
-    await writeFile(join(checkout, '.cards', 'CARD_ID'), 'main-88\n');
-    await writeFile(join(checkout, '.cards', 'CARD_ORIGINAL_HOOK_PATH'), 'original-hooks\n');
-    await writeFile(join(checkout, 'README.md'), 'dirty content that must survive\n');
-    const oid = execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' });
-    const registry = execFileSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' });
-    let removals = 0;
-    const client = {
-      removeBranch: async () => {
-        removals++;
-      }
-    } as unknown as CardsClient;
-    await expect(removeWorktree(checkout)).rejects.toThrow('Dedicated slots');
-    await expect(removeWorktreeForCard(client, checkout, { cardId: 'main-88' })).rejects.toThrow('Dedicated slots');
-    await expect(releaseWorktreeForCard(client, checkout, { cardId: 'main-88' })).rejects.toThrow('Dedicated slots');
-    for (const discovery of [join(base, 'absent.json'), join(base, 'unreachable.json')]) {
-      if (discovery.endsWith('unreachable.json')) {
-        await writeFile(
-          discovery,
-          JSON.stringify({
-            host: '127.0.0.1',
-            port: 1,
-            accessToken: 'unused',
-            pid: process.pid,
-            startedAt: new Date().toISOString()
-          })
-        );
-      }
-      let result: { status: number | null; stderr: string } | undefined;
+  describe('creation', () => {
+    it.each([
+      'cards',
+      'cards/x',
+      'cards/x/1',
+      'cards/x/1/packages',
+      'cards/x/2/a',
+      'cards/x/01',
+      'cards/x/1/',
+      'cards//x/1',
+      './cards/x/1',
+      'cards/x/1.lock',
+      'cards/main-88/90071992547409931234567890'
+    ])('refuses %s with nothing on disk or in git changed', async (ref) => {
+      const { snapshot } = await liveSlot();
+      const before = await snapshot();
+      let publications = 0;
+      const client = {
+        addBranch: async () => {
+          publications++;
+        }
+      } as unknown as CardsClient;
+
+      await expect(createWorktree(ref, { cwd: repo })).rejects.toThrow(SlotNamespaceError);
+      await expect(
+        createWorktreeForCard(client, ref, {
+          cwd: repo,
+          cardId: 'x',
+          parentBranch: 'main',
+          registrationIntent: 'create',
+          compiledScriptPaths: {}
+        })
+      ).rejects.toThrow(SlotNamespaceError);
+      await expect(assertRefOutsideSlotNamespace(repo, ref)).rejects.toThrow(SlotNamespaceError);
+
+      expect(publications).toBe(0);
+      expect(await snapshot()).toEqual(before);
+    });
+
+    it('names the supported way to change slots in the refusal', async () => {
+      await expect(createWorktree('cards/x/1', { cwd: repo })).rejects.toThrow(
+        /Clean Up Worktrees \(the worktreeMaintenance command\)/
+      );
+    });
+
+    it('refuses through the create-worktree CLI with the same message and no change', async () => {
+      const { snapshot } = await liveSlot();
+      const before = await snapshot();
+      let failure: { status: number | null; stderr: string } | undefined;
       try {
-        execFileSync(process.execPath, [tsxCli, removeBin, checkout], {
+        execFileSync(process.execPath, [tsxCli, createBin, 'cards/x'], {
           cwd: repo,
           encoding: 'utf8',
-          env: { ...process.env, CARDS_DISCOVERY_PATH: discovery }
+          env: { ...process.env, CARDS_DISCOVERY_PATH: join(base, 'absent.json') }
         });
       } catch (error) {
-        result = error as { status: number | null; stderr: string };
+        failure = error as { status: number | null; stderr: string };
       }
-      expect(result?.status).toBe(2);
-      expect(result?.stderr).toContain('Dedicated slots');
-    }
-    // The bare CLI path must protect slots even without a card binding marker.
-    await rm(join(checkout, '.cards', 'CARD_ID'));
-    let bareStatus: number | null | undefined;
-    try {
-      execFileSync(process.execPath, [tsxCli, removeBin, checkout], {
-        cwd: repo,
-        encoding: 'utf8',
-        env: { ...process.env, CARDS_DISCOVERY_PATH: join(base, 'absent.json') }
-      });
-    } catch (error) {
-      bareStatus = (error as { status: number | null }).status;
-    }
-    expect(bareStatus).toBe(2);
-    await writeFile(join(checkout, '.cards', 'CARD_ID'), 'main-88\n');
-    expect(removals).toBe(0);
-    expect(await readFile(join(checkout, 'README.md'), 'utf8')).toBe('dirty content that must survive\n');
-    expect(await readFile(join(checkout, '.cards', 'CARD_ID'), 'utf8')).toBe('main-88\n');
-    expect(await readFile(join(checkout, '.cards', 'CARD_ORIGINAL_HOOK_PATH'), 'utf8')).toBe('original-hooks\n');
-    expect(execFileSync('git', ['-C', checkout, 'rev-parse', 'HEAD'], { encoding: 'utf8' })).toBe(oid);
-    expect(execFileSync('git', ['-C', repo, 'rev-parse', branch], { encoding: 'utf8' })).toBe(oid);
-    expect(execFileSync('git', ['-C', repo, 'worktree', 'list', '--porcelain'], { encoding: 'utf8' })).toBe(registry);
+      expect(failure?.status).not.toBe(0);
+      expect(failure?.stderr).toContain('worktreeMaintenance');
+      expect(await snapshot()).toEqual(before);
+    });
+
+    it('still creates an ordinary worktree', async () => {
+      const result = await createWorktree('feature/x', { cwd: repo });
+      await result.settle;
+      expect(result.path).toBe(resolveWorktreeDir(repo, 'feature/x'));
+      expect(await readFile(join(result.path, 'packages', 'f.txt'), 'utf8')).toBe('committed content\n');
+    });
+  });
+
+  describe('stale directory cleanup', () => {
+    it('removes a crash remnant at an ordinary path and creates the worktree', async () => {
+      const target = resolveWorktreeDir(repo, 'feature/x');
+      await mkdir(join(target, 'partial'), { recursive: true });
+      await writeFile(join(target, 'partial', 'file'), 'half-written\n');
+      const result = await createWorktree('feature/x', { cwd: repo });
+      await result.settle;
+      expect(existsSync(join(target, 'partial'))).toBe(false);
+      expect(existsSync(join(target, 'packages', 'f.txt'))).toBe(true);
+    });
+
+    it('refuses to delete a remnant that holds a lock directory at any depth', async () => {
+      const target = resolveWorktreeDir(repo, 'feature/x');
+      await mkdir(join(target, 'nested', '.locks'), { recursive: true });
+      await writeFile(join(target, 'nested', '.locks', '1.lock'), 'live');
+      await expect(createWorktree('feature/x', { cwd: repo })).rejects.toThrow(/lock directory/);
+      expect(await readFile(join(target, 'nested', '.locks', '1.lock'), 'utf8')).toBe('live');
+    });
+
+    it('refuses to delete a remnant that holds a registered worktree', async () => {
+      const target = resolveWorktreeDir(repo, 'feature/x');
+      const nested = join(target, 'nested');
+      git(repo, 'worktree', 'add', '-q', '-b', 'nested', nested);
+      await writeFile(join(nested, 'uncommitted.txt'), 'work\n');
+      await expect(createWorktree('feature/x', { cwd: repo })).rejects.toThrow(/registered worktree/);
+      expect(await readFile(join(nested, 'uncommitted.txt'), 'utf8')).toBe('work\n');
+      expect(git(repo, 'worktree', 'list', '--porcelain')).toContain(nested);
+    });
+  });
+
+  describe('removal', () => {
+    it.each([
+      ['on its slot branch', () => undefined],
+      ['with a detached HEAD', (slot: string) => git(slot, 'checkout', '-q', '--detach')],
+      ['switched to another branch', (slot: string) => git(slot, 'switch', '-q', '-c', 'feature')]
+    ])('refuses a slot %s through every removal path', async (_case, prepare) => {
+      const { slot, snapshot } = await liveSlot();
+      prepare(slot);
+      const before = await snapshot();
+      let removals = 0;
+      const client = {
+        removeBranch: async () => {
+          removals++;
+          return { outcome: 'removed' };
+        }
+      } as unknown as CardsClient;
+
+      await expect(removeWorktree(slot)).rejects.toThrow(SlotNamespaceError);
+      await expect(removeWorktreeForCard(client, slot, { cardId: 'x' })).rejects.toThrow(SlotNamespaceError);
+      await expect(releaseWorktreeForCard(client, slot, { cardId: 'x' })).rejects.toThrow(SlotNamespaceError);
+      await expect(removeWorktree(join(slot, 'packages', '..'))).rejects.toThrow(SlotNamespaceError);
+
+      for (const discovery of [join(base, 'absent.json'), join(base, 'unreachable.json')]) {
+        if (discovery.endsWith('unreachable.json'))
+          await writeFile(
+            discovery,
+            JSON.stringify({
+              host: '127.0.0.1',
+              port: 1,
+              accessToken: 'unused',
+              pid: process.pid,
+              startedAt: new Date().toISOString()
+            })
+          );
+        let failure: { status: number | null; stderr: string } | undefined;
+        try {
+          execFileSync(process.execPath, [tsxCli, removeBin, slot], {
+            cwd: repo,
+            encoding: 'utf8',
+            env: { ...process.env, CARDS_DISCOVERY_PATH: discovery }
+          });
+        } catch (error) {
+          failure = error as { status: number | null; stderr: string };
+        }
+        expect(failure?.status).toBe(2);
+        expect(failure?.stderr).toContain('worktreeMaintenance');
+      }
+
+      expect(removals).toBe(0);
+      expect(await snapshot()).toEqual(before);
+    });
+
+    it('still removes an ordinary card worktree and unregisters its branch', async () => {
+      const checkout = resolveWorktreeDir(repo, 'feature/x');
+      git(repo, 'worktree', 'add', '-q', '-b', 'feature/x', checkout);
+      await mkdir(join(checkout, '.cards'));
+      await writeFile(join(checkout, '.cards', 'CARD_ID'), 'x\n');
+      const removed: string[] = [];
+      const client = {
+        removeBranch: async (_card: string, branch: string) => {
+          removed.push(branch);
+          return { outcome: 'removed' };
+        }
+      } as unknown as CardsClient;
+      await removeWorktreeForCard(client, checkout, { cardId: 'x' });
+      expect(existsSync(checkout)).toBe(false);
+      expect(removed).toEqual(['feature/x']);
+    });
+
+    it('removes an ordinary worktree whose HEAD names a slot-shaped branch, since it is not in the namespace', async () => {
+      const checkout = resolveWorktreeDir(repo, 'not-a-slot');
+      git(repo, 'worktree', 'add', '-q', '-b', 'cards/y/1', checkout);
+      await removeWorktree(checkout);
+      expect(existsSync(checkout)).toBe(false);
+    });
   });
 });

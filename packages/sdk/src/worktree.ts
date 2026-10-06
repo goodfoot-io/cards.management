@@ -19,7 +19,16 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { resolveWorktreeDir, resolveWorktreesRoot } from './cards-config.js';
+import {
+  assertOutsideSlotNamespace,
+  canonicalizePath,
+  resolveWorktreeDir,
+  resolveWorktreesRoot,
+  SlotNamespaceError
+} from './cards-config.js';
+
+export { SlotNamespaceError };
+
 import { atomicWriteHookFile, RESOLVE_NODE_BASH } from './git-hooks.js';
 import { applyWorktreeInclude } from './worktreeInclude.js';
 import {
@@ -319,39 +328,6 @@ function repoRootFromGitFile(content: string): string {
 }
 
 /**
- * Resolves a path through symlinks even when its leaf does not exist.
- *
- * `fs.realpath` cannot canonicalize a stale worktree path because that
- * directory is missing. Walk to the deepest existing ancestor, canonicalize
- * that ancestor, then append the missing suffix unchanged. This makes a path
- * below a configured symlink comparable with Git's resolved spelling.
- *
- * @param input - Existing or partially missing filesystem path.
- * @returns Canonical absolute path with any missing suffix restored.
- */
-async function canonicalizePath(input: string): Promise<string> {
-  let existingAncestor = path.resolve(input);
-  const missingSegments: string[] = [];
-
-  for (;;) {
-    try {
-      const canonicalAncestor = await fs.realpath(existingAncestor);
-      return path.join(canonicalAncestor, ...missingSegments.reverse());
-    } catch (error: unknown) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
-      const parent = path.dirname(existingAncestor);
-      if (parent === existingAncestor) {
-        throw error;
-      }
-      missingSegments.push(path.basename(existingAncestor));
-      existingAncestor = parent;
-    }
-  }
-}
-
-/**
  * Compares two filesystem paths for equality, tolerating symlink spellings,
  * separators, missing leaf directories, and (on Windows) case differences.
  *
@@ -424,7 +400,6 @@ export interface EarlyWorktreeResult {
  * @returns Early result with `path` available immediately and `settle` resolving when setup completes.
  */
 export async function createWorktree(ref: string, options?: CreateWorktreeOptions): Promise<EarlyWorktreeResult> {
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(ref)) throw new Error('Dedicated slots require runtime worktree assignment');
   // Opt-in phase timing (CARDS_WORKTREE_PERF). A no-op fast path when unset, so
   // the common case allocates nothing and reads no clock. t0 is captured here,
   // so every offset is measured from the start of the call the contributor waits on.
@@ -435,6 +410,8 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
   );
 
   const worktreeDir = resolveWorktreeDir(repoRoot, ref);
+  // Before anything on disk changes: no ref spelling may create into, over or above the slots.
+  await assertOutsideSlotNamespace(repoRoot, worktreeDir);
 
   await perf.measure('cleanStaleWorktreeRegistration', () => cleanStaleWorktreeRegistration(repoRoot, worktreeDir));
 
@@ -822,10 +799,8 @@ export async function removeWorktree(worktreePath: string): Promise<void> {
     throw error;
   }
 
-  const branch = (
-    await execFileAsync('git', ['-C', resolved, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 5_000 })
-  ).stdout.trim();
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(branch)) throw new Error('Dedicated slots require runtime worktree cleanup');
+  // A slot is refused by where it is, whatever its HEAD: detached or switched, it is still a slot.
+  await assertOutsideSlotNamespace(repoRoot, canonical);
   await execFileAsync('git', ['worktree', 'remove', '--force', resolved], { cwd: repoRoot });
 
   // On Windows a just-exited `git worktree remove` subprocess (or a watcher/AV
@@ -892,21 +867,67 @@ export async function cleanupFailedWorktree(
  * Removes stale directory remnants left by a crashed previous session.
  *
  * Git doesn't track the worktree, but the directory may still exist on disk,
- * which causes `git worktree add` to fail with "already exists".
+ * which causes `git worktree add` to fail with "already exists". The recursive
+ * delete is refused when the directory holds anything a crash would not leave
+ * behind: a worktree git still has registered, or a `.locks` directory, which
+ * only slot locking writes.
  *
  * @param repoRoot - Primary repository root where git commands run.
  * @param worktreeDir - Absolute worktree path being created.
+ * @throws {Error} When the directory contains a registered worktree or a `.locks` directory.
  */
 async function cleanStaleWorktreeDir(repoRoot: string, worktreeDir: string): Promise<void> {
   try {
     await fs.access(worktreeDir);
-    await fs.rm(worktreeDir, { recursive: true });
-    await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot, timeout: 30_000 });
   } catch (error: unknown) {
-    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-      throw error;
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  const kept = await staleDirectoryKeepers(repoRoot, worktreeDir);
+  if (kept.length > 0)
+    throw new Error(
+      `Refusing to delete ${worktreeDir}: it is not a crash remnant because it contains ${kept.join(', ')}. ` +
+        'Move it aside or remove it by hand after checking its contents.'
+    );
+  await fs.rm(worktreeDir, { recursive: true });
+  await execFileAsync('git', ['worktree', 'prune'], { cwd: repoRoot, timeout: 30_000 });
+}
+
+/**
+ * Lists what in a directory forbids deleting it as a crash remnant: worktrees
+ * git has registered at or under it, and `.locks` directories at any depth.
+ * Symlinks are not followed, since the delete does not follow them either.
+ *
+ * @param repoRoot - Primary repository root whose registrations count.
+ * @param directory - The directory about to be deleted.
+ * @returns Descriptions of each keeper; empty when the delete is safe.
+ */
+async function staleDirectoryKeepers(repoRoot: string, directory: string): Promise<string[]> {
+  const keepers: string[] = [];
+  const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], {
+    cwd: repoRoot,
+    timeout: 30_000
+  });
+  const fold = (canonical: string): string =>
+    process.platform === 'win32' || process.platform === 'darwin' ? canonical.toLowerCase() : canonical;
+  const root = fold(await canonicalizePath(directory));
+  for (const line of stdout.split('\n')) {
+    if (!line.startsWith('worktree ')) continue;
+    const registered = await canonicalizePath(line.slice('worktree '.length).trim());
+    const relative = path.relative(root, fold(registered));
+    if (relative === '' || (relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative)))
+      keepers.push(`registered worktree ${registered}`);
+  }
+  const pending = [directory];
+  for (let current = pending.pop(); current !== undefined; current = pending.pop()) {
+    for (const entry of await fs.readdir(current, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const child = path.join(current, entry.name);
+      if (entry.name === '.locks') keepers.push(`lock directory ${child}`);
+      else pending.push(child);
     }
   }
+  return keepers;
 }
 
 /**
@@ -944,6 +965,19 @@ async function cleanStaleWorktreeRegistration(repoRoot: string, worktreeDir: str
     });
     return;
   }
+}
+
+/**
+ * Refuses a ref whose worktree would land in, over or above the dedicated slot
+ * namespace, before a caller spends any work on it. {@link createWorktree}
+ * enforces the same rule itself; this lets entry points fail first.
+ * @param cwd - Directory inside the repository the worktree would belong to.
+ * @param ref - The ref the worktree would be created for.
+ * @throws {SlotNamespaceError} When the worktree path touches the slot namespace.
+ */
+export async function assertRefOutsideSlotNamespace(cwd: string, ref: string): Promise<void> {
+  const { repoRoot } = await findGitRoots(cwd);
+  await assertOutsideSlotNamespace(repoRoot, resolveWorktreeDir(repoRoot, ref));
 }
 
 export interface GitRoots {
