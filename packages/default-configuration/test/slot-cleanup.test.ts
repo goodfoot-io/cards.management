@@ -8,8 +8,8 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { chmod, mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
+import { basename, dirname, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import {
@@ -17,6 +17,7 @@ import {
   OccupantProbeError,
   type OccupantProbeOptions,
   type ProcReader,
+  removedCopyPathFor,
   removeQuarantinedSlot
 } from '@cards.management/sdk/worktree-removal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -29,7 +30,7 @@ import {
   type SlotCleanupResult,
   type SlotLayer
 } from '../src/lib/worktrees/index.js';
-import { createSlotFixture, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
+import { ageRemovedCopies, createSlotFixture, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
 
@@ -63,6 +64,8 @@ async function finishedSlot(executionId: string): Promise<AcquiredSlot> {
 
 /** What a pass that purges nothing reports. */
 const NO_PURGE = { purged: 0, pending: 0, kept: [], failure: null };
+/** A pass that found one removed copy younger than an hour. */
+const PENDING = { purged: 0, pending: 1, kept: [], failure: null };
 
 /**
  * Runs a pass for the fixture's card.
@@ -606,6 +609,95 @@ describe('cleanupCardSlots removal', () => {
     expect(fx.client.registrations.has(slot.branch)).toBe(false);
   });
 
+  it('refuses a quarantined checkout that changed after the checks with uncommitted_changes and its next step', async () => {
+    const slot = await finishedSlot('exec-1');
+    let wrote = false;
+    // A write lands after the checks under the lock, once the checkout is quarantined.
+    fx.beforeGit = async (args, cwd) => {
+      if (wrote || args[0] !== 'status' || !cwd.includes('.deleting-')) return;
+      wrote = true;
+      await writeFile(join(cwd, 'late.txt'), 'late write');
+    };
+
+    const refused = decisionOf(await pass(), slot.branch);
+    fx.beforeGit = null;
+
+    expect(wrote).toBe(true);
+    expect(refused).toMatchObject({ reason: 'uncommitted_changes', outcome: 'preserved' });
+    expect(refused.detail).toContain('Checkout has uncommitted changes: late.txt');
+    expect(refused.detail).toMatch(
+      /; commit, stash or discard them, or abandon its work: .*; then run Clean Up Worktrees again$/
+    );
+    expect(await readFile(join(slot.worktreePath, 'late.txt'), 'utf8')).toBe('late write');
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+  });
+
+  it('refuses with removal_blocked and its next step when the checkout cannot move into its copy', async () => {
+    const slot = await finishedSlot('exec-1');
+    const removal = fx.layer.seams.removal;
+    const layer: SlotLayer = {
+      ...fx.layer,
+      seams: {
+        ...fx.layer.seams,
+        removal: {
+          ...removal,
+          removeQuarantinedSlot: (target, options) =>
+            removal.removeQuarantinedSlot(target, {
+              ...options,
+              // A copy directory that cannot be written refuses the commit rename.
+              checkpoint: async (step) => {
+                if (step === 'recorded') await chmod(removedCopyPathFor(target.quarantine), 0o555);
+              }
+            })
+        }
+      }
+    };
+
+    const blocked = decisionOf(
+      await cleanupCardSlots(
+        { ...fx.cleanupContext(), layer },
+        { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+      ),
+      slot.branch
+    );
+
+    expect(blocked).toMatchObject({ reason: 'removal_blocked', outcome: 'preserved' });
+    expect(blocked.detail).toContain('EACCES rename .: checkout restored');
+    expect(blocked.detail).toMatch(
+      new RegExp(
+        `; clear the error the detail names, which kept .* from moving under ${join(fx.slotRoot, '.purge')}; then run Clean Up Worktrees again$`
+      )
+    );
+    expect(await exists(join(slot.worktreePath, '.git'))).toBe(true);
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+  });
+
+  it('refuses with removal_restored and its next step when the slot path is recreated before a refusal', async () => {
+    const slot = await finishedSlot('exec-1');
+    let quarantine = '';
+    // A late write refuses the removal, and an editor has recreated the slot path, so the checkout cannot move back.
+    fx.beforeGit = async (args, cwd) => {
+      if (quarantine !== '' || args[0] !== 'status' || !cwd.includes('.deleting-')) return;
+      quarantine = cwd;
+      await writeFile(join(cwd, 'late.txt'), 'late write');
+      await mkdir(slot.worktreePath);
+      await writeFile(join(slot.worktreePath, 'stray.txt'), 'editor save');
+    };
+
+    const restored = decisionOf(await pass(), slot.branch);
+    fx.beforeGit = null;
+
+    expect(restored).toMatchObject({ reason: 'removal_restored', outcome: 'preserved' });
+    expect(restored.detail).toContain(`the checkout stays at ${quarantine}, because ${slot.worktreePath} exists again`);
+    expect(restored.detail).toMatch(
+      /; compare the set-aside checkout the detail names with .*, keep what is wanted and remove the other; then run Clean Up Worktrees again$/
+    );
+    expect(await readFile(join(quarantine, 'late.txt'), 'utf8')).toBe('late write');
+    expect(await readFile(join(slot.worktreePath, 'stray.txt'), 'utf8')).toBe('editor save');
+  });
+
   it('keeps a removed copy that changed after its removal, reports it on every pass and logs it', async () => {
     await writeFile(join(fx.repoRoot, 'notes.txt'), 'notes\n');
     await fx.git(['add', 'notes.txt']);
@@ -643,8 +735,9 @@ describe('cleanupCardSlots removal', () => {
     const [name] = (await readdir(join(fx.slotRoot, '.purge'))).filter((entry) => !entry.endsWith('.json'));
     copy = join(fx.slotRoot, '.purge', name ?? '');
 
-    // The removing pass leaves its own copy alone; every later pass keeps it.
-    expect(removing.purge).toEqual(NO_PURGE);
+    // The copy waits out its hour; once it is old enough, every pass keeps it.
+    expect(removing.purge).toEqual(PENDING);
+    await ageRemovedCopies(fx.slotRoot);
     for (const purge of [(await run('cleanup')).purge, (await run('cleanup')).purge]) {
       expect(purge).toEqual({
         purged: 0,
@@ -672,22 +765,52 @@ describe('cleanupCardSlots removal', () => {
     expect((await run('preview')).purge).toEqual(NO_PURGE);
   });
 
-  it('leaves an unchanged removed copy for the next pass, which purges it', async () => {
+  it('keeps an unchanged removed copy pending until its removal is an hour old, then purges it', async () => {
     const slot = await finishedSlot('exec-1');
 
     const removing = await pass();
 
     expect(decisionOf(removing, slot.branch)).toMatchObject({ outcome: 'removed' });
-    expect(removing.purge).toEqual(NO_PURGE);
+    expect(removing.purge).toEqual(PENDING);
+    expect((await pass()).purge).toEqual(PENDING);
     expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
 
+    await ageRemovedCopies(fx.slotRoot);
     expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
     expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+  });
+
+  it("leaves a deleted card's fresh copy pending from another card's pass, and purges it once an hour old, creating no slot folder", async () => {
+    const slot = await finishedSlot('exec-1');
+    const deleting = await pass({ mode: 'prepare-delete' });
+    expect(decisionOf(deleting, slot.branch)).toMatchObject({ outcome: 'removed' });
+    expect(deleting.purge).toEqual(PENDING);
+    const liveRoot = join(dirname(fx.slotRoot), 'card-live');
+    expect(await exists(liveRoot)).toBe(false);
+    const livePass = () =>
+      cleanupCardSlots(
+        { ...fx.cleanupContext(), cardId: 'card-live' },
+        { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+      );
+
+    const fresh = await livePass();
+    expect(fresh).toMatchObject({ ok: true, decisions: [] });
+    expect(fresh.purge).toEqual(PENDING);
+    expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
+
+    await ageRemovedCopies(fx.slotRoot);
+    const live = await livePass();
+
+    expect(live).toMatchObject({ ok: true, decisions: [] });
+    expect(live.purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+    expect(await exists(liveRoot)).toBe(false);
   });
 
   it('leaves a removed copy pending when the budget left after the slots is within the purge reserve', async () => {
     await finishedSlot('exec-1');
     await pass();
+    await ageRemovedCopies(fx.slotRoot);
 
     // Every slot starts within this budget, but nothing remains for the purge once the 5 s reserve is set aside.
     const result = await pass({ budgetMs: 4_000 });
@@ -701,6 +824,7 @@ describe('cleanupCardSlots removal', () => {
   it('reports why the purge stopped, logs it, and keeps the copy for a later pass', async () => {
     await finishedSlot('exec-1');
     await pass();
+    await ageRemovedCopies(fx.slotRoot);
     const removal = fx.layer.seams.removal;
     const layer: SlotLayer = {
       ...fx.layer,

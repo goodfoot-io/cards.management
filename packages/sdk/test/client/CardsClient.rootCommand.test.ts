@@ -693,16 +693,12 @@ describe('runRootCommand failure scope', () => {
 });
 
 describe('deleteCard', () => {
-  it('sends no preparedBy without one, and an encoded one that decodes intact', async () => {
+  it('sends preparedBy encoded, and it decodes intact', async () => {
     const client = await serve(() => [204, null]);
-    await client.deleteCard('main-1');
     await client.deleteCard('main-1', { preparedBy: 'req/1 &x' });
     expect(
       requests.map((request) => [request.method, request.path, new URLSearchParams(request.query).get('preparedBy')])
-    ).toEqual([
-      ['DELETE', '/cards/main-1', null],
-      ['DELETE', '/cards/main-1', 'req/1 &x']
-    ]);
+    ).toEqual([['DELETE', '/cards/main-1', 'req/1 &x']]);
   });
 
   it.each([
@@ -716,18 +712,14 @@ describe('deleteCard', () => {
     expect(error).toMatchObject({ code, executions: ['exec-1', 'exec-2'], message });
   });
 
-  it('throws CardDeleteRefusedError with no executions on 400 invalid_prepared_by', async () => {
-    const client = await serve(() => [
-      400,
-      { code: 'invalid_prepared_by', error: 'req-9 is not a prepare-delete run' }
-    ]);
+  it.each([
+    ['invalid_prepared_by', 'req-9 is not a prepare-delete run'],
+    ['prepared_by_required', 'Cite a passing prepare-delete run as preparedBy']
+  ] as const)('throws CardDeleteRefusedError with no executions on 400 %s', async (code, message) => {
+    const client = await serve(() => [400, { code, error: message }]);
     const error = await client.deleteCard('main-1', { preparedBy: 'req-9' }).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(CardDeleteRefusedError);
-    expect(error).toMatchObject({
-      code: 'invalid_prepared_by',
-      executions: [],
-      message: 'req-9 is not a prepare-delete run'
-    });
+    expect(error).toMatchObject({ code, executions: [], message });
   });
 
   it.each([
@@ -737,17 +729,18 @@ describe('deleteCard', () => {
       { code: 'running_execution', error: 'busy', executions: [7] }
     ],
     ['a card_changed body without executions', 409, { code: 'card_changed', error: 'changed' }],
-    ['an invalid_prepared_by body with executions', 400, { code: 'invalid_prepared_by', error: 'bad', executions: [] }]
+    ['an invalid_prepared_by body with executions', 400, { code: 'invalid_prepared_by', error: 'bad', executions: [] }],
+    ['a prepared_by_required body with executions', 400, { code: 'prepared_by_required', error: 'bad', executions: [] }]
   ] as const)('throws a plain ApiError for %s', async (_case, status, body) => {
     const client = await serve(() => [status, body]);
-    const error = await client.deleteCard('main-1').catch((failure: unknown) => failure);
+    const error = await client.deleteCard('main-1', { preparedBy: 'req-1' }).catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(ApiError);
     expect(error).not.toBeInstanceOf(CardDeleteRefusedError);
   });
 
   it('does not report a 503 as a delete refusal', async () => {
     const client = await serve(() => [503, { code: 'runtime_unavailable', error: 'runtime admission is unavailable' }]);
-    const error = await client.deleteCard('main-1').catch((failure: unknown) => failure);
+    const error = await client.deleteCard('main-1', { preparedBy: 'req-1' }).catch((failure: unknown) => failure);
     expect(error).not.toBeInstanceOf(CardDeleteRefusedError);
     expect(error).toBeInstanceOf(Error);
   });

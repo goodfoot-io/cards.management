@@ -136,10 +136,10 @@ describe('CardsClient', () => {
     it('should DELETE /cards/:id when deleting card', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
-      await client.deleteCard('card-123');
+      await client.deleteCard('card-123', { preparedBy: 'req-1' });
       expect(httpClient.requests[0]).toMatchObject({
         method: 'DELETE',
-        url: expect.stringContaining('/cards/card-123')
+        url: expect.stringContaining('/cards/card-123?preparedBy=req-1')
       });
     });
   });
@@ -310,7 +310,7 @@ describe('CardsClient', () => {
 
     const cardIdCallers: Array<[string, (client: CardsClient, cardId: string) => Promise<unknown>]> = [
       ['updateCard', (client, cardId) => client.updateCard(cardId, { title: 'x' })],
-      ['deleteCard', (client, cardId) => client.deleteCard(cardId)],
+      ['deleteCard', (client, cardId) => client.deleteCard(cardId, { preparedBy: 'req-1' })],
       ['listAttachments', (client, cardId) => client.listAttachments(cardId)],
       ['getTimeline', (client, cardId) => client.getTimeline(cardId)],
       ['putFile', (client, cardId) => client.putFile(cardId, 'PLAN.md', 'content')],
