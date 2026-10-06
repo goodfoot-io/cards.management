@@ -382,6 +382,8 @@ export {
   type WorktreeCleanupPreview,
   type WorktreeCleanupReason,
   type WorktreeMaintenanceStageFailure,
+  type WorktreePurgeKeptCopy,
+  type WorktreePurgeSummary,
   type WorktreeUnknownLocks,
   worktreeCleanupPreviewSchema
 } from './types/worktree-slots.js';

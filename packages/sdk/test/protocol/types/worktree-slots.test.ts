@@ -29,7 +29,12 @@ const PREVIEW = {
     { branch: 'implement/main-1/slot-2', worktreePath: null, reason: 'missing', detail: '', outcome: 'eligible' }
   ],
   unknownLocks: { count: 2, unverifiedOwners: 1 },
-  processesNotInspected: 5
+  processesNotInspected: 5,
+  purge: {
+    purged: 2,
+    pending: 1,
+    kept: [{ path: '/repo/cards/main-1/.purge/1.copy', detail: 'It changed after its removal: a.txt' }]
+  }
 } as const satisfies WorktreeCleanupPreview;
 
 describe('worktreeCleanupPreviewSchema', () => {
@@ -107,7 +112,8 @@ describe('worktreeCleanupPreviewSchema', () => {
       ],
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       // Uninspected processes never block, so a clear report may still count some.
-      processesNotInspected: 3
+      processesNotInspected: 3,
+      purge: { purged: 0, pending: 0, kept: [] }
     } as const satisfies WorktreeCleanupPreview;
 
     it('accepts a clear report that allows deletion, and the same report refusing it is rejected', () => {
@@ -118,6 +124,11 @@ describe('worktreeCleanupPreviewSchema', () => {
 
     it('accepts a report with no slots as clear', () => {
       expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, decisions: [] }).success).toBe(true);
+    });
+
+    it('stays clear whatever the purge kept or left pending', () => {
+      const purge = { purged: 0, pending: 4, kept: [{ path: '/repo/cards/main-2/.purge/3.copy', detail: 'changed' }] };
+      expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, purge }).success).toBe(true);
     });
 
     const violations: readonly (readonly [
@@ -142,6 +153,17 @@ describe('worktreeCleanupPreviewSchema', () => {
       expect(worktreeCleanupPreviewSchema.safeParse(report).success).toBe(false);
       expect(worktreeCleanupPreviewSchema.safeParse({ ...report, canDeleteCard: false }).success).toBe(true);
     });
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['a negative purged count', { ...PREVIEW.purge, purged: -1 }],
+    ['a fractional pending count', { ...PREVIEW.purge, pending: 0.5 }],
+    ['a kept copy without a path', { ...PREVIEW.purge, kept: [{ path: '', detail: 'x' }] }],
+    ['a kept copy without a detail', { ...PREVIEW.purge, kept: [{ path: '/x' }] }],
+    ['an extra field', { ...PREVIEW.purge, failed: 0 }]
+  ])('rejects a purge summary that is %s', (_case, purge) => {
+    expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, purge }).success).toBe(false);
   });
 
   it('rejects unknown top-level fields and an empty card ID', () => {
