@@ -31,6 +31,8 @@ export function maintenanceReport(cardId: string, result: SlotCleanupResult): Wo
     canDeleteCard: clearsCardDeletion(result),
     decisions: result.decisions,
     unknownLocks: result.unknownLocks,
+    processesNotInspected: result.processesNotInspected,
+    purge: result.purge,
     ...(result.failure === undefined ? {} : { failure: result.failure })
   };
 }
@@ -54,7 +56,7 @@ export function createWorktreeMaintenance(overrides: MaintenanceLayer = {}) {
         workspacePath: input.repoRoot,
         ...overrides
       },
-      { requester: null, mode: input.mode }
+      { requester: null, mode: input.mode, budgetMs: input.budgetMs }
     );
     report({ ...maintenanceReport(input.cardId, result) });
   });

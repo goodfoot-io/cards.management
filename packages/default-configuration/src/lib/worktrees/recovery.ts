@@ -14,43 +14,35 @@ import { type CreationContext, type CreationRecovery, recoverCreationIntent } fr
 import type { SlotRemoval, SlotResidueReport } from './seams.js';
 
 /** Residue reports after which the slot is not in a state to use or remove. */
-type UnsettledResidue = Extract<
-  SlotResidueReport,
-  { readonly kind: 'removal_restored' | 'quarantine_stranded' | 'recovery_failed' }
->;
+type UnsettledResidue = Extract<SlotResidueReport, { readonly kind: 'quarantine_stranded' | 'recovery_failed' }>;
 
 /**
  * Tells whether a residue report leaves the slot unsettled.
  * @param report - One residue report.
- * @returns True for a restoration, a stranded quarantine or a failed recovery.
+ * @returns True for a stranded quarantine or a failed recovery; set-aside submodules put back are settled.
  */
 const isUnsettled = (report: SlotResidueReport): report is UnsettledResidue =>
-  report.kind === 'removal_restored' || report.kind === 'quarantine_stranded' || report.kind === 'recovery_failed';
+  report.kind === 'quarantine_stranded' || report.kind === 'recovery_failed';
 
 /**
  * Says what a residue report left behind, for a cleanup decision or a launch error.
  * @param report - One residue report.
- * @returns The paths involved and, for a restoration, what changed.
+ * @returns The paths involved and, for a failed recovery, why.
  */
 export function describeResidue(report: SlotResidueReport): string {
   switch (report.kind) {
     case 'removal_finished':
-      return `the removal of ${report.quarantine} was finished`;
+      return `the set-aside submodules of ${report.quarantine} joined its removed copy`;
     case 'moved_back':
       return `${report.quarantine} was moved back to ${report.slotPath}`;
-    case 'removal_restored': {
-      const changes = [
-        ...(report.changed.length === 0 ? [] : [`changed: ${report.changed.join(', ')}`]),
-        ...(report.displaced.length === 0 ? [] : [`displaced: ${report.displaced.join(', ')}`])
-      ];
-      return `an interrupted removal was restored at ${report.quarantine} for ${report.slotPath}${changes.length === 0 ? '' : ` (${changes.join('; ')})`}`;
-    }
+    case 'submodules_restored':
+      return `submodules set aside at ${report.setAside} were put back into ${report.slotPath}`;
     case 'quarantine_stranded':
       return `${report.quarantine} cannot return to ${report.slotPath}, which exists`;
     case 'pruned':
       return `git's record of the vanished ${report.quarantine} was dropped`;
     case 'recovery_failed':
-      return `the holding area ${report.holding} could not be recovered: ${report.detail}`;
+      return `the set-aside area ${report.holding} could not be put back: ${report.detail}`;
   }
 }
 
@@ -68,7 +60,7 @@ export interface SlotRecovery {
 }
 
 /**
- * Whether quarantine residue (`<slot>.deleting-*`, `<slot>.held*`) lies beside the slot now.
+ * Whether quarantine residue (`<slot>.deleting-*`) lies beside the slot now.
  * @param slotPath - The slot checkout path.
  * @returns True when any residue name is present.
  */
@@ -78,7 +70,7 @@ async function hasResidue(slotPath: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
     throw error;
   });
-  return names.some((name) => name.startsWith(`${base}.deleting-`) || name.startsWith(`${base}.held`));
+  return names.some((name) => name.startsWith(`${base}.deleting-`));
 }
 
 /**

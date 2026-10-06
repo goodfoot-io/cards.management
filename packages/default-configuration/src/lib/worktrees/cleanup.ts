@@ -13,9 +13,10 @@ import type {
   WorktreeCleanupDecision,
   WorktreeCleanupReason,
   WorktreeMaintenanceStageFailure,
+  WorktreePurgeSummary,
   WorktreeUnknownLocks
 } from '@cards.management/sdk';
-import { resolveMainRepoRoot, resolveSlotRoot } from '@cards.management/sdk/cards-config';
+import { resolveMainRepoRoot, resolveSlotNamespace, resolveSlotRoot } from '@cards.management/sdk/cards-config';
 import { clearsCardDeletion } from '@cards.management/sdk/protocol';
 import {
   createSlotJudgeContext,
@@ -28,7 +29,13 @@ import {
   slotLockPids,
   withSlotLock
 } from '@cards.management/sdk/slot-lock';
-import { describeSlotOccupancy, type SlotOccupantProbe, slotOccupied } from '@cards.management/sdk/worktree-removal';
+import {
+  processesNotInspected,
+  type SlotOccupantProbe,
+  type SlotResidueLocker,
+  slotOccupied,
+  summarizeRemovedSlotPurge
+} from '@cards.management/sdk/worktree-removal';
 import type { SlotClient } from './acquire.js';
 import { judgeUsability, pathExists, refOid, samePath } from './checkout.js';
 import { type DiscoveredSlot, discoverSlots, type SlotInventory, type SlotPlace } from './discovery.js';
@@ -36,15 +43,19 @@ import type { CreationContext } from './intent.js';
 import { defaultSlotLayer, type SlotLayer } from './layer.js';
 import { recoverSlot } from './recovery.js';
 import { unregisterSlot } from './registration.js';
+import { judgeSubmodules } from './submodules.js';
 
 /** What a pass does: report only, remove, or remove and require that nothing remains. */
 export type SlotCleanupMode = 'preview' | 'cleanup' | 'prepare-delete';
 
-/** Budget of an in-handler start or end pass, and of `preview`. */
+/** Budget of an in-handler start or end pass; maintenance passes take theirs from the command input. */
 export const SLOT_CLEANUP_PASS_BUDGET_MS = 60_000;
 
-/** Budget of a maintenance `cleanup` or `prepare-delete`, inside the root command's 300 s deadline. */
-export const SLOT_CLEANUP_MAINTENANCE_BUDGET_MS = 270_000;
+/** Part of a pass's budget the purge of removed copies leaves for reporting. */
+const PURGE_RESERVE_MS = 5_000;
+
+/** What a preview, which purges nothing, reports for the purge. */
+const NO_PURGE: WorktreePurgeSummary = { purged: 0, pending: 0, kept: [] };
 
 /** Budget of a pass's batched identity read, and of its one retry; cleanup is off the launch path. */
 const CLEANUP_JUDGE_TIMEOUT_MS = 15_000;
@@ -72,11 +83,10 @@ export interface SlotCleanupOptions {
   readonly mode: SlotCleanupMode;
   /**
    * Time after which slots not yet started are reported `budget_exhausted`
-   * and not locked. Defaults to {@link SLOT_CLEANUP_PASS_BUDGET_MS} for
-   * `preview` and in-handler passes (a non-null requester), and to
-   * {@link SLOT_CLEANUP_MAINTENANCE_BUDGET_MS} otherwise.
+   * and not locked: the maintenance input's `budgetMs`, or
+   * {@link SLOT_CLEANUP_PASS_BUDGET_MS} for an in-handler pass.
    */
-  readonly budgetMs?: number;
+  readonly budgetMs: number;
 }
 
 /** A pass's outcome. */
@@ -88,11 +98,17 @@ export interface SlotCleanupResult {
   /** Slots whose lock could not be judged, and how many of those record an unverified owner. */
   readonly unknownLocks: WorktreeUnknownLocks;
   /**
-   * The most processes owned by other users that one occupant probe could
-   * not inspect. They never block removal, so the count belongs to the pass,
-   * never to a slot's detail.
+   * The most processes, of any owner, that one occupant probe could not
+   * inspect. They never block removal, so the count belongs to the pass's
+   * report and log, never to a slot's detail.
    */
-  readonly otherUsersNotInspected: number;
+  readonly processesNotInspected: number;
+  /**
+   * The purge, after the slots, of every removed slot copy the repository's
+   * earlier passes left, deleted cards included; {@link NO_PURGE} in a
+   * preview or when the pass stopped before it. It plays no part in `ok`.
+   */
+  readonly purge: WorktreePurgeSummary;
   /**
    * Whether the pass met its mode's bar: for `prepare-delete`, the SDK's
    * `clearsCardDeletion` (no stage failed, no lock unknown, every slot
@@ -141,11 +157,10 @@ function describeHolder(state: Extract<SlotLockState, { state: 'held' }>): strin
 }
 
 /**
- * Describes why a probe found the slot occupied, attributing visible
- * occupants to the previous holder of the slot.
+ * Describes the proven occupants of a slot, attributing them to its previous holder.
  * @param probe - A probe for which `slotOccupied` holds.
  * @param previous - The generation judged before this lock, or the last one read by a preview; null when none.
- * @returns Which occupants are left over from that execution, and which of the user's own processes could not be inspected.
+ * @returns Which occupants are left over from that execution.
  */
 function describeOccupants(
   probe: SlotOccupantProbe,
@@ -156,14 +171,13 @@ function describeOccupants(
     ...(owner === null ? [] : [owner.holder.pid]),
     ...(previous?.companions ?? []).map((companion) => companion.pid)
   ]);
-  const visible = probe.occupants.map((occupant) =>
-    recorded.has(occupant.pid) && owner !== null
-      ? `pid ${occupant.pid} (${occupant.command}) is left over from execution ${owner.executionId}`
-      : `pid ${occupant.pid} (${occupant.command}) is unrelated to the slot's last holder`
-  );
-  const hidden =
-    probe.uninspectable.length > 0 ? [describeSlotOccupancy({ ...probe, occupants: [], otherUsers: 0 })] : [];
-  return [...visible, ...hidden].join('; ');
+  return probe.occupants
+    .map((occupant) =>
+      recorded.has(occupant.pid) && owner !== null
+        ? `pid ${occupant.pid} (${occupant.command}) is left over from execution ${owner.executionId}`
+        : `pid ${occupant.pid} (${occupant.command}) is unrelated to the slot's last holder`
+    )
+    .join('; ');
 }
 
 /** Reasons that keep a slot until the user acts on it; no later pass clears them alone. */
@@ -214,7 +228,7 @@ function nextStep(
     case 'in_use':
       return `stop the processes working in ${slot.path} or wait for them to exit; ${RUN_AGAIN}`;
     case 'submodules':
-      return `cleanup cannot prove a checkout with submodules clean, so while ${target} has submodules no pass removes this slot; if they were added on ${slot.branch} only, ${abandon}; ${RUN_AGAIN}`;
+      return `resolve what the detail names inside the submodule, or ${abandon}; ${RUN_AGAIN}`;
   }
 }
 
@@ -249,16 +263,13 @@ export async function cleanupCardSlots(
 ): Promise<SlotCleanupResult> {
   const { mode } = options;
   const requester = mode === 'prepare-delete' ? null : options.requester;
-  const budgetMs =
-    options.budgetMs ??
-    (mode === 'preview' || options.requester !== null
-      ? SLOT_CLEANUP_PASS_BUDGET_MS
-      : SLOT_CLEANUP_MAINTENANCE_BUDGET_MS);
+  const { budgetMs } = options;
   const deadline = Date.now() + budgetMs;
   const { client, logger, cardId } = context;
   const decisions: WorktreeCleanupDecision[] = [];
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
-  let otherUsersNotInspected = 0;
+  let uninspected = 0;
+  let purge = NO_PURGE;
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
     const ok =
@@ -272,10 +283,18 @@ export async function cleanupCardSlots(
       ok,
       decisions: decisions.length,
       unknownLocks,
-      otherUsersNotInspected,
+      processesNotInspected: uninspected,
+      purge: { purged: purge.purged, pending: purge.pending, kept: purge.kept.length },
       ...(failure === undefined ? {} : { failure })
     });
-    return { decisions, unknownLocks, otherUsersNotInspected, ok, ...(failure === undefined ? {} : { failure }) };
+    return {
+      decisions,
+      unknownLocks,
+      processesNotInspected: uninspected,
+      purge,
+      ok,
+      ...(failure === undefined ? {} : { failure })
+    };
   };
   const record = (
     slot: Pick<DiscoveredSlot, 'branch' | 'path'>,
@@ -407,11 +426,26 @@ export async function cleanupCardSlots(
     if (merged.exitCode !== 0 || merged.timedOut || merged.aborted)
       throw new Error(`git merge-base --is-ancestor failed: ${merged.stderr.trim()}`);
     if (slot.directoryExists) {
-      if ((await git.text(slot.path, ['status', '--porcelain', '--untracked-files=all'])).trim() !== '')
+      // Submodules are judged first, so the slot's own status can ignore them.
+      const submodules = await judgeSubmodules(git, slot.path);
+      if (submodules.status === 'kept')
+        return refusal('submodules', slot, submodules.detail, parent, `${submodules.step}; ${RUN_AGAIN}`);
+      const status = await git.text(slot.path, [
+        'status',
+        '--porcelain',
+        '--untracked-files=all',
+        '--ignore-submodules=all'
+      ]);
+      if (status.trim() !== '')
         return refusal('uncommitted_changes', slot, `${slot.path} has uncommitted or untracked changes`, parent);
-      const staged = await git.text(slot.path, ['ls-files', '--stage']);
-      if (staged.split('\n').some((line) => line.startsWith('160000 ')))
-        return refusal('submodules', slot, `${slot.path} contains submodules`, parent);
+      if (submodules.repositories.length > 0)
+        return refusal(
+          'submodules',
+          slot,
+          `${slot.path} has initialized submodules, which are clean and pushed, but git cannot remove a worktree that holds their repositories until the SDK sets them aside`,
+          parent,
+          `awaiting set-aside; ${RUN_AGAIN}`
+        );
     }
     const merged_ =
       slot.registration === null
@@ -431,8 +465,8 @@ export async function cleanupCardSlots(
    * @param previous - The slot's last holder, to attribute occupants to; null when none.
    * @param removalGit - Git for the fsmonitor stop, recording its children into the lock when there is one.
    * @param checkpoint - Throws when the pass must stop; a no-op outside a lock.
-   * @returns An `in_use` refusal, or null when the slot is unoccupied. Other users' processes
-   * the probe could not inspect never refuse; their count is kept for the pass.
+   * @returns An `in_use` refusal, or null when no process is proven inside. Processes the
+   * probe could not inspect never refuse; their count is kept for the pass.
    */
   const probeOccupants = async (
     slot: DiscoveredSlot,
@@ -449,7 +483,7 @@ export async function cleanupCardSlots(
     } catch (error) {
       return refusal('in_use', slot, `the occupant probe failed: ${describe(error)}`);
     }
-    otherUsersNotInspected = Math.max(otherUsersNotInspected, probe.otherUsers);
+    uninspected = Math.max(uninspected, processesNotInspected(probe));
     return slotOccupied(probe) ? refusal('in_use', slot, describeOccupants(probe, previous)) : null;
   };
 
@@ -496,6 +530,7 @@ export async function cleanupCardSlots(
         { repoRoot, slotPath: slot.path, quarantine, lock },
         removalGit
       );
+      uninspected = Math.max(uninspected, removed.processesNotInspected);
       if (removed.status === 'refused')
         // The quarantined checkout is probed again, so a process that entered after the probe above refuses too.
         return removed.reason === 'in_use'
@@ -630,6 +665,30 @@ export async function cleanupCardSlots(
       }
     } catch (error) {
       record(slot, 'cleanup_failed', describe(error), 'failed');
+    }
+  }
+  if (mode !== 'preview') {
+    // Copies are deleted a pass after their removal, so a slot removed above is never purged in the same pass.
+    const lockerFor =
+      (root: string): SlotResidueLocker =>
+      (ordinal, purpose, fn) =>
+        withSlotLock(
+          root,
+          ordinal,
+          purpose,
+          { executionId: context.executionId, cardId, context: judge, ...environment },
+          fn
+        );
+    try {
+      const outcomes = await removal.purgeRemovedSlots(resolveSlotNamespace(repoRoot), lockerFor, {
+        repoRoot,
+        deadline: deadline - PURGE_RESERVE_MS
+      });
+      for (const outcome of outcomes) uninspected = Math.max(uninspected, outcome.processesNotInspected);
+      purge = summarizeRemovedSlotPurge(outcomes);
+      for (const { path, detail } of purge.kept) logger.warn('Removed slot copy kept', { cardId, path, detail });
+    } catch (error) {
+      logger.error('Purge of removed slot copies failed', { cardId, error: describe(error) });
     }
   }
   return conclude();
