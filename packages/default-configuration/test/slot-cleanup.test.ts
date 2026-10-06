@@ -315,22 +315,29 @@ describe('cleanupCardSlots next steps', () => {
     {
       reason: 'unmerged_commits',
       arrange: (slot: AcquiredSlot) => fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], slot.worktreePath),
-      step: (slot: AcquiredSlot) => [`git branch -D ${slot.branch}`, `git worktree remove --force ${slot.worktreePath}`]
+      step: (slot: AcquiredSlot) => [
+        `merge ${slot.branch} into main`,
+        `\`git -C ${slot.worktreePath} reset --hard main\``,
+        `\`git -C ${slot.worktreePath} clean -ffd\``
+      ]
     },
     {
       reason: 'uncommitted_changes',
       arrange: (slot: AcquiredSlot) => writeFile(join(slot.worktreePath, 'draft.txt'), 'draft'),
-      step: (slot: AcquiredSlot) => ['commit, stash or discard', `git branch -D ${slot.branch}`]
+      step: (slot: AcquiredSlot) => ['commit, stash or discard', `\`git -C ${slot.worktreePath} reset --hard main\``]
     },
     {
       reason: 'head_off_branch',
       arrange: (slot: AcquiredSlot) => fx.git(['checkout', '-q', '--detach'], slot.worktreePath),
-      step: (slot: AcquiredSlot) => [`git switch ${slot.branch}`, `git worktree remove --force ${slot.worktreePath}`]
+      step: (slot: AcquiredSlot) => [
+        `\`git -C ${slot.worktreePath} switch --discard-changes ${slot.branch}\``,
+        `\`git -C ${slot.worktreePath} reset --hard main\``
+      ]
     },
     {
       reason: 'parent_branch_missing',
       arrange: async (slot: AcquiredSlot) => setParent(slot.branch, 'gone'),
-      step: () => ['recreate the parent branch']
+      step: () => ['recreate gone in the main repository', '`git branch gone <commit>`']
     },
     {
       reason: 'invalid_entry',
@@ -358,7 +365,10 @@ describe('cleanupCardSlots next steps', () => {
         await mkdir(join(slot.worktreePath, 'sub'));
         await fx.git(['merge', '-q', '--ff-only', slot.branch]);
       },
-      step: (slot: AcquiredSlot) => [`git worktree remove --force ${slot.worktreePath}`, `git branch -D ${slot.branch}`]
+      step: (slot: AcquiredSlot) => [
+        'while main has submodules no pass removes this slot',
+        `\`git -C ${slot.worktreePath} reset --hard main\``
+      ]
     }
   ])('names the next step for $reason', async ({ reason, arrange, step }) => {
     const slot = await finishedSlot('exec-1');
@@ -389,15 +399,64 @@ describe('cleanupCardSlots next steps', () => {
     }
   });
 
-  it('removes an abandoned slot once its stated git commands have run', async () => {
+  /**
+   * Runs the git commands a decision's next step names, as the user would,
+   * with `<commit>` standing for the main branch.
+   * @param detail - The decision's detail.
+   * @returns How many commands ran.
+   */
+  async function runStatedCommands(detail: string): Promise<number> {
+    const commands = [...detail.matchAll(/`(git [^`]+)`/g)].map(([, command]) => command ?? '');
+    for (const command of commands) await fx.git(command.replace('<commit>', 'main').split(' ').slice(1));
+    return commands.length;
+  }
+
+  it.each([
+    {
+      reason: 'unmerged_commits',
+      arrange: (slot: AcquiredSlot) => fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], slot.worktreePath)
+    },
+    {
+      reason: 'unmerged_commits',
+      arrange: async (slot: AcquiredSlot) => {
+        await fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], slot.worktreePath);
+        await fx.git(['update-ref', '-d', `refs/heads/${slot.branch}`]);
+      }
+    },
+    {
+      reason: 'uncommitted_changes',
+      arrange: async (slot: AcquiredSlot) => {
+        await writeFile(join(slot.worktreePath, 'draft.txt'), 'draft');
+        await fx.git(['init', '-q', join(slot.worktreePath, 'nested')]);
+        await fx.git(['commit', '-q', '--allow-empty', '-m', 'nested'], join(slot.worktreePath, 'nested'));
+      }
+    },
+    {
+      reason: 'head_off_branch',
+      arrange: async (slot: AcquiredSlot) => {
+        await fx.git(['checkout', '-q', '--detach'], slot.worktreePath);
+        await fx.git(['commit', '-q', '--allow-empty', '-m', 'detached work'], slot.worktreePath);
+        await writeFile(join(slot.worktreePath, 'draft.txt'), 'draft');
+      }
+    },
+    {
+      reason: 'parent_branch_missing',
+      arrange: async (slot: AcquiredSlot) => {
+        const registration = fx.client.registrations.get(slot.branch);
+        if (registration === undefined) throw new Error('slot not registered');
+        registration.parentBranch = 'gone';
+      }
+    }
+  ])('removes a $reason slot once the git commands its next step names have run', async ({ reason, arrange }) => {
     const slot = await finishedSlot('exec-1');
-    await fx.git(['commit', '-q', '--allow-empty', '-m', 'work to abandon'], slot.worktreePath);
-    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'unmerged_commits', outcome: 'preserved' });
+    await arrange(slot);
+    const refused = decisionOf(await pass(), slot.branch);
+    expect(refused).toMatchObject({ reason, outcome: 'preserved' });
 
-    await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
-    await fx.git(['branch', '-D', slot.branch]);
+    expect(await runStatedCommands(refused.detail)).toBeGreaterThan(0);
 
-    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'missing', outcome: 'removed' });
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+    expect(await exists(slot.worktreePath)).toBe(false);
     expect(fx.client.registrations.has(slot.branch)).toBe(false);
   });
 

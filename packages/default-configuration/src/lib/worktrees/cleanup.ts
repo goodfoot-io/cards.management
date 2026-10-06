@@ -182,22 +182,31 @@ const RUN_AGAIN = 'then run Clean Up Worktrees again';
 
 /**
  * The next step for a permanent refusal, naming the slot's own path and branch.
- * Abandoning by hand uses git directly, because `remove-worktree` refuses slots.
+ * Abandoning work never removes anything by hand: it resets the slot to its
+ * parent inside the checkout, so the next pass proves it merged and clean and
+ * removes it under its lock, as it removes any other slot.
  * @param reason - Why the slot is kept.
  * @param slot - The slot's branch and checkout path.
+ * @param parent - The slot's parent branch; null when unknown.
  * @returns What the user does before a pass can remove the slot.
  */
-function nextStep(reason: PermanentRefusal, slot: Pick<DiscoveredSlot, 'branch' | 'path'>): string {
-  const abandon = `abandon its work with \`git worktree remove --force ${slot.path}\` and \`git branch -D ${slot.branch}\` in the main repository`;
+function nextStep(
+  reason: PermanentRefusal,
+  slot: Pick<DiscoveredSlot, 'branch' | 'path'>,
+  parent: string | null
+): string {
+  const target = parent ?? '<parent branch>';
+  const discard = `copy anything wanted elsewhere, then run \`git -C ${slot.path} reset --hard ${target}\` and \`git -C ${slot.path} clean -ffd\``;
+  const abandon = `abandon its work: ${discard}`;
   switch (reason) {
     case 'unmerged_commits':
-      return `merge ${slot.branch} into its parent branch, or ${abandon}; ${RUN_AGAIN}`;
+      return `merge ${slot.branch} into ${target}, or ${abandon}; ${RUN_AGAIN}`;
     case 'uncommitted_changes':
       return `commit, stash or discard them, or ${abandon}; ${RUN_AGAIN}`;
     case 'head_off_branch':
-      return `keep any commits made there, then run \`git switch ${slot.branch}\` in ${slot.path}, or ${abandon}; ${RUN_AGAIN}`;
+      return `keep any commits made there, then run \`git -C ${slot.path} switch --discard-changes ${slot.branch}\`; to abandon the slot's work as well, ${discard}; ${RUN_AGAIN}`;
     case 'parent_branch_missing':
-      return `recreate the parent branch, or ${abandon}; ${RUN_AGAIN}`;
+      return `recreate ${target} in the main repository, for example with \`git branch ${target} <commit>\`; ${RUN_AGAIN}`;
     case 'invalid_entry':
       return `fix or delete the slot's file under branches/ in the card repository and commit; ${RUN_AGAIN}`;
     case 'checked_out_elsewhere':
@@ -205,7 +214,7 @@ function nextStep(reason: PermanentRefusal, slot: Pick<DiscoveredSlot, 'branch' 
     case 'in_use':
       return `stop the processes working in ${slot.path} or wait for them to exit; ${RUN_AGAIN}`;
     case 'submodules':
-      return `${abandon} (a merged branch loses no commits); ${RUN_AGAIN}`;
+      return `cleanup cannot prove a checkout with submodules clean, so while ${target} has submodules no pass removes this slot; if they were added on ${slot.branch} only, ${abandon}; ${RUN_AGAIN}`;
   }
 }
 
@@ -214,6 +223,7 @@ function nextStep(reason: PermanentRefusal, slot: Pick<DiscoveredSlot, 'branch' 
  * @param reason - Why the slot is kept.
  * @param slot - The slot's branch and checkout path.
  * @param detail - What the check found.
+ * @param parent - The slot's parent branch, named by the step; null when unknown.
  * @param step - A next step for this instance; the reason's own by default.
  * @returns The verdict.
  */
@@ -221,7 +231,8 @@ function refusal<R extends PermanentRefusal>(
   reason: R,
   slot: Pick<DiscoveredSlot, 'branch' | 'path'>,
   detail: string,
-  step: string = nextStep(reason, slot)
+  parent: string | null = null,
+  step: string = nextStep(reason, slot, parent)
 ): { readonly reason: R; readonly detail: string } {
   return { reason, detail: `${detail}; ${step}` };
 }
@@ -353,6 +364,7 @@ export async function cleanupCardSlots(
               'invalid_entry',
               slot,
               `registrations could not be read (${current.registrationError}), so this unregistered slot is kept`,
+              null,
               `${RUN_AGAIN} once the Cards server lists the card's branches`
             );
       if (slot.residue.length > 0)
@@ -360,6 +372,7 @@ export async function cleanupCardSlots(
           'invalid_entry',
           slot,
           `an unregistered slot has quarantine residue at ${slot.residue.join(', ')}`,
+          null,
           `compare it with ${slot.path}, keep what is wanted and remove the rest; ${RUN_AGAIN}`
         );
     } else {
@@ -372,7 +385,9 @@ export async function cleanupCardSlots(
     }
     if (slot.directoryExists) {
       const usability = await judgeUsability(git, repoRoot, slot.path, slot.branch, current.entries);
-      if (usability.status === 'head_off_branch') return refusal('head_off_branch', slot, usability.detail);
+      if (usability.status === 'head_off_branch')
+        // The parent only names the reset in the step, so a failure to read it does not hide the refusal.
+        return refusal('head_off_branch', slot, usability.detail, await parentOf(slot).catch(() => null));
       if (usability.status === 'unusable_checkout') return { reason: usability.status, detail: usability.detail };
     }
     if (slot.oid === null && !slot.directoryExists)
@@ -383,24 +398,20 @@ export async function cleanupCardSlots(
     }
     const parent = await parentOf(slot);
     if (parent === null || (await refOid(git, repoRoot, parent)) === null)
-      return refusal('parent_branch_missing', slot, `parent branch ${parent ?? '(none)'} does not exist`);
+      return refusal('parent_branch_missing', slot, `parent branch ${parent ?? '(none)'} does not exist`, parent);
     if (slot.oid === null)
-      return refusal(
-        'unmerged_commits',
-        slot,
-        'the checkout exists but the slot ref is missing',
-        `keep anything wanted from ${slot.path}, then remove it with \`git worktree remove --force ${slot.path}\` in the main repository; ${RUN_AGAIN}`
-      );
+      return refusal('unmerged_commits', slot, 'the checkout exists but the slot ref is missing', parent);
     const merged = await git.run(repoRoot, ['merge-base', '--is-ancestor', slot.oid, `refs/heads/${parent}`]);
-    if (merged.exitCode === 1) return refusal('unmerged_commits', slot, `${slot.branch} has commits not in ${parent}`);
+    if (merged.exitCode === 1)
+      return refusal('unmerged_commits', slot, `${slot.branch} has commits not in ${parent}`, parent);
     if (merged.exitCode !== 0 || merged.timedOut || merged.aborted)
       throw new Error(`git merge-base --is-ancestor failed: ${merged.stderr.trim()}`);
     if (slot.directoryExists) {
       if ((await git.text(slot.path, ['status', '--porcelain', '--untracked-files=all'])).trim() !== '')
-        return refusal('uncommitted_changes', slot, `${slot.path} has uncommitted or untracked changes`);
+        return refusal('uncommitted_changes', slot, `${slot.path} has uncommitted or untracked changes`, parent);
       const staged = await git.text(slot.path, ['ls-files', '--stage']);
       if (staged.split('\n').some((line) => line.startsWith('160000 ')))
-        return refusal('submodules', slot, `${slot.path} contains submodules`);
+        return refusal('submodules', slot, `${slot.path} contains submodules`, parent);
     }
     const merged_ =
       slot.registration === null
@@ -507,7 +518,12 @@ export async function cleanupCardSlots(
         const now = await refOid(git, repoRoot, slot.branch);
         if (now !== null && now !== verdict.oid)
           return {
-            ...refusal('unmerged_commits', slot, `${slot.branch} moved to ${now} during removal; the ref is kept`),
+            ...refusal(
+              'unmerged_commits',
+              slot,
+              `${slot.branch} moved to ${now} during removal; the ref is kept`,
+              await parentOf(slot).catch(() => null)
+            ),
             outcome: 'preserved'
           };
         if (now !== null)
