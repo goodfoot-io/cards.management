@@ -73,7 +73,15 @@ function cannedGit(result: Partial<GitBoundedResult>): { git: SlotRemovalGit; ca
     git: {
       run: async (_cwd, args) => {
         calls.push([...args]);
-        return { exitCode: 0, stdout: '', stderr: '', timedOut: false, aborted: false, ...result };
+        return {
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+          timedOut: false,
+          aborted: false,
+          stopReport: { survivors: [], complete: true },
+          ...result
+        };
       }
     }
   };

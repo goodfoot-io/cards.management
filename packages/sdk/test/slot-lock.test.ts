@@ -717,17 +717,19 @@ describe('Windows judgement [F7] [H3]', () => {
     return ownerFile({ domain: WINDOWS_DOMAIN, holder: { startIdentity: ticks(handlerStart), processGroupId: null } });
   }
 
-  it.each<[string, Date, 'dead' | 'alive']>([
-    ['after its writtenAt', new Date('2026-10-05T09:06:00Z'), 'dead'],
-    ["before the handler's start", new Date('2026-10-05T08:59:00Z'), 'dead'],
-    ['between the two', new Date('2026-10-05T09:04:00Z'), 'alive']
-  ])('reads a live pending companion created %s as %s', async (_name, created, expected) => {
+  it.each<[string, number, Date, 'dead' | 'alive']>([
+    ['after its writtenAt', 2_000, new Date('2026-10-05T09:06:00Z'), 'dead'],
+    ['between the two', 2_000, new Date('2026-10-05T09:04:00Z'), 'alive'],
+    // A backward clock step between the handler's start and the spawn dates the companion first.
+    ["before the handler's start, after a backward clock step", 2_000, new Date('2026-10-05T08:59:30Z'), 'alive'],
+    ['under another parent', 4, new Date('2026-10-05T09:04:00Z'), 'dead']
+  ])('reads a live pending companion created %s (parent %i) as %s', async (_name, parentPid, created, expected) => {
     writeGeneration(slotRoot, 1, 1, {
       owner: windowsOwner(),
       companions: [{ pid: 3_000, startIdentity: 'pending', writtenAt: writtenAt.toISOString(), role: 'git' }]
     });
     const world = fakeWorld({ platform: 'win32' });
-    world.processes.set(3_000, { parentPid: 4, startIdentity: ticks(created), processGroupId: 0 });
+    world.processes.set(3_000, { parentPid, startIdentity: ticks(created), processGroupId: 0 });
     const result = await acquire(world);
     expect(result.status).toBe(expected === 'dead' ? 'acquired' : 'held');
   });
@@ -1107,6 +1109,93 @@ describe('shutdown fence [G1] [F4]', () => {
     children.push(agent);
     expect((await lock.addCompanion(agent, 'agent')).status).toBe('recorded');
     await shutdown.shutdownAndExit(0, 'completed');
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
+  });
+
+  /**
+   * A fake world whose handler leads its own process group, as a launched handler does.
+   * @returns A Linux world with no processes but this handler, whose PID is its group id.
+   */
+  function leaderWorld(): FakeWorld {
+    return fakeWorld({
+      selfGroup: SELF_PID,
+      self: { parentPid: 1, startIdentity: 'self-start', processGroupId: SELF_PID }
+    });
+  }
+
+  /**
+   * Reads the current generation's companions.
+   * @returns Each companion entry as persisted in `companions.json`.
+   */
+  function recordedCompanions(): unknown[] {
+    return JSON.parse(readFileSync(join(generationDir(1), 'companions.json'), 'utf8')).companions;
+  }
+
+  it('keeps the lock and records the survivors when stopping slot git leaves members alive [L4]', async () => {
+    const env = lockEnvironment(fakeWorld(), {
+      git: { abortAll: async () => ({ survivors: [{ pid: 4_400, startIdentity: 'hook-start' }], complete: true }) }
+    });
+    acquired(
+      await acquireSlotLock(slotRoot, 1, {
+        executionId: 'e',
+        cardId: 'c',
+        purpose: 'work',
+        environment: env.environment
+      })
+    );
+    await env.shutdown.shutdownAndExit(0, 'completed');
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
+    expect(recordedCompanions()).toEqual([{ pid: 4_400, startIdentity: 'hook-start', role: 'agent' }]);
+  });
+
+  it('keeps the lock when stopping slot git could not list its tree [L4]', async () => {
+    const env = lockEnvironment(fakeWorld(), { git: { abortAll: async () => ({ survivors: [], complete: false }) } });
+    acquired(
+      await acquireSlotLock(slotRoot, 1, {
+        executionId: 'e',
+        cardId: 'c',
+        purpose: 'work',
+        environment: env.environment
+      })
+    );
+    await env.shutdown.shutdownAndExit(0, 'completed');
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
+  });
+
+  it("keeps the lock at shutdown while a member of the handler's group is alive, and records it [L4]", async () => {
+    const world = leaderWorld();
+    const { shutdown } = await workLock(world);
+    world.processes.set(4_500, { parentPid: 1, startIdentity: 'orphan-start', processGroupId: SELF_PID });
+    await shutdown.shutdownAndExit(0, 'completed');
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
+    expect(recordedCompanions()).toEqual([{ pid: 4_500, startIdentity: 'orphan-start', role: 'agent' }]);
+  });
+
+  it("refuses an explicit release while a member of the handler's group is alive [L4]", async () => {
+    const world = leaderWorld();
+    const { lock } = await workLock(world);
+    world.processes.set(4_500, { parentPid: SELF_PID, startIdentity: 'child-start', processGroupId: SELF_PID });
+    expect(await lock.release()).toBe(false);
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
+    world.processes.delete(4_500);
+    expect(await lock.release()).toBe(true);
+    expect(existsSync(join(generationDir(1), 'released.json'))).toBe(true);
+  });
+
+  it('refuses a release when the process table cannot be listed [L4]', async () => {
+    const world = leaderWorld();
+    const identity = { ...fakeIdentity(world), enumerate: async () => 'unknown' as const };
+    const env = lockEnvironment(world, { identity });
+    const result = acquired(
+      await acquireSlotLock(slotRoot, 1, {
+        executionId: 'e',
+        cardId: 'c',
+        purpose: 'work',
+        environment: env.environment
+      })
+    );
+    expect(await result.lock.release()).toBe(false);
+    await env.shutdown.shutdownAndExit(0, 'completed');
     expect(existsSync(join(generationDir(1), 'released.json'))).toBe(false);
   });
 

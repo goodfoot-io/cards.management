@@ -6,10 +6,13 @@
  * belong to the group a slot lock records from the moment they are forked. At
  * the deadline the runner ends git's own process tree — never the group, which
  * also holds the handler and the agent: it enumerates git's descendants by
- * parent PID, sends SIGTERM to each, and after the grace period sends SIGKILL
- * only to those whose start identity still matches. On Windows the deadline is
- * `taskkill /PID <git> /T /F`. Once {@link shutdownSignal} has aborted, no new
- * git starts.
+ * parent PID, sends SIGTERM to each, enumerates again after the grace period
+ * to catch what they forked meanwhile, and sends SIGKILL only to members whose
+ * start identity still matches. On Windows the deadline is
+ * `taskkill /PID <git> /T /F`. Either way the stop fails closed: a tree it
+ * could not list, a member whose identity it could not read, or a member still
+ * alive after SIGKILL is reported in {@link GitStopReport}, never assumed gone.
+ * Once {@link shutdownSignal} has aborted, no new git starts.
  *
  * @summary Deadline-bounded slot git that stays in the recorded group and stops at the shutdown fence
  * @module
@@ -38,6 +41,17 @@ export interface GitDescendant {
   readonly startIdentity: string;
 }
 
+/** What stopping git's tree left behind. */
+export interface GitStopReport {
+  /** Members still alive after the forced stop, or whose identity could not be read to stop them. */
+  readonly survivors: readonly GitDescendant[];
+  /** False when the tree could not be listed, so members may be missing from {@link survivors}. */
+  readonly complete: boolean;
+}
+
+/** The report of a tree that was never stopped, or stopped without a trace. */
+const NOTHING_LEFT: GitStopReport = { survivors: [], complete: true };
+
 /** Options of one bounded git call. */
 export interface RunGitBoundedOptions {
   /** Elapsed-time ceiling before git's tree is stopped. */
@@ -62,6 +76,8 @@ export interface GitBoundedResult {
   readonly timedOut: boolean;
   /** Whether {@link abortAll} stopped git. */
   readonly aborted: boolean;
+  /** What a deadline or abort stop left of git's tree; empty and complete when git was not stopped. */
+  readonly stopReport: GitStopReport;
 }
 
 /** OS boundaries of the runner; every one is injectable for tests. */
@@ -74,11 +90,12 @@ export interface BoundedGitPlatform {
    */
   readonly identify: (pid: number) => Promise<IdentityProbe>;
   /**
-   * Lists the live descendants of a process, by parent PID, with their start identities.
-   * @param pid - Root of the tree.
-   * @returns The descendants found, root excluded.
+   * Lists the live descendants of some processes, by parent PID, with their start identities.
+   * @param roots - Roots of the walk, each with the start identity it must still have to count
+   *   as the same process, or null for git itself, this runner's unreaped child.
+   * @returns The descendants found, roots excluded, or `unknown` when the process table is unreadable.
    */
-  readonly descendants: (pid: number) => Promise<readonly GitDescendant[]>;
+  readonly descendants: (roots: ReadonlyMap<number, string | null>) => Promise<readonly GitDescendant[] | 'unknown'>;
   /**
    * Reads one process's start identity.
    * @param pid - Process to read.
@@ -108,9 +125,9 @@ export interface BoundedGitRunner {
    * Stops every in-flight call's tree, as at its deadline.
    * @param options - How long to wait after the polite stop.
    * @param options.graceMs - Wait between SIGTERM and SIGKILL on POSIX.
-   * @returns Once every in-flight git has exited.
+   * @returns Once every in-flight git has exited, what the stops left of their trees.
    */
-  abortAll(options: { readonly graceMs: number }): Promise<void>;
+  abortAll(options: { readonly graceMs: number }): Promise<GitStopReport>;
 }
 
 /** Budget of each process-identity read the runner makes. */
@@ -122,6 +139,12 @@ const TASKKILL_TIMEOUT_MS = 10_000;
 /** How long buffered output may trail git's exit before the pipes are closed. */
 const DRAIN_MS = 100;
 
+/** How long SIGKILLed members may take to vanish before they are reported as survivors. */
+const KILL_SETTLE_MS = 500;
+
+/** Interval between checks while SIGKILLed members vanish. */
+const KILL_SETTLE_POLL_MS = 25;
+
 /**
  * The host's OS boundaries.
  * @returns Boundaries over the process-wide identity service, `process.kill` and `taskkill`.
@@ -131,16 +154,24 @@ function hostPlatform(): BoundedGitPlatform {
   return {
     platform: process.platform,
     identify: (pid) => identity.identify(pid, PROBE_TIMEOUT_MS),
-    descendants: async (root) => {
+    descendants: async (roots) => {
       const roster = await identity.enumerate(PROBE_TIMEOUT_MS);
-      if (roster === 'unknown') return [];
+      if (roster === 'unknown') return 'unknown';
+      // A root whose PID now belongs to another process roots nothing: its children are not git's.
+      const parents = new Set(
+        [...roots]
+          .filter(
+            ([pid, start]) =>
+              start === null || roster.some((entry) => entry.pid === pid && entry.startIdentity === start)
+          )
+          .map(([pid]) => pid)
+      );
       const found: GitDescendant[] = [];
-      const parents = new Set([root]);
       // Walk to a fixed point: a roster is not ordered parent-first.
       for (let grew = true; grew; ) {
         grew = false;
         for (const entry of roster) {
-          if (parents.has(entry.parentPid) && !parents.has(entry.pid) && entry.pid !== root) {
+          if (parents.has(entry.parentPid) && !parents.has(entry.pid) && !roots.has(entry.pid)) {
             parents.add(entry.pid);
             found.push({ pid: entry.pid, startIdentity: entry.startIdentity });
             grew = true;
@@ -166,7 +197,7 @@ function hostPlatform(): BoundedGitPlatform {
 /** One git call still running. */
 interface InFlight {
   /** Ends git's tree; `aborted` marks the call as stopped by {@link BoundedGitRunner.abortAll}. */
-  stop(graceMs: number, aborted: boolean): Promise<void>;
+  stop(graceMs: number, aborted: boolean): Promise<GitStopReport>;
   readonly settled: Promise<unknown>;
 }
 
@@ -185,6 +216,25 @@ export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): Bo
     } catch {
       // ESRCH: already gone. EPERM: not ours to end.
     }
+  };
+
+  /**
+   * Waits up to {@link KILL_SETTLE_MS} for SIGKILLed members to vanish.
+   * @param killed - Members sent SIGKILL.
+   * @returns Those still running under the same identity, or whose identity became unreadable.
+   */
+  const stillAlive = async (killed: readonly GitDescendant[]): Promise<GitDescendant[]> => {
+    let left = [...killed];
+    const until = Date.now() + KILL_SETTLE_MS;
+    while (left.length > 0) {
+      const states = await Promise.all(
+        left.map((member) => os.startIdentity(member.pid).catch(() => 'unknown' as const))
+      );
+      left = left.filter((member, index) => states[index] === 'unknown' || states[index] === member.startIdentity);
+      if (left.length === 0 || Date.now() >= until) break;
+      await new Promise((resolvePoll) => setTimeout(resolvePoll, KILL_SETTLE_POLL_MS));
+    }
+    return left;
   };
 
   return {
@@ -212,7 +262,7 @@ export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): Bo
         let exited = false;
         let timedOut = false;
         let aborted = false;
-        let stopping: Promise<void> | undefined;
+        let stopping: Promise<GitStopReport> | undefined;
         let markExited: () => void = () => {};
         const exitedPromise = new Promise<void>((resolveExit) => {
           markExited = resolveExit;
@@ -234,33 +284,57 @@ export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): Bo
                 );
               })();
 
-        const stopTree = async (grace: number): Promise<void> => {
-          if (pid === undefined || exited) return;
+        const stopTree = async (grace: number): Promise<GitStopReport> => {
+          if (pid === undefined || exited) return NOTHING_LEFT;
+          const list = (roots: ReadonlyMap<number, string | null>): Promise<readonly GitDescendant[] | 'unknown'> =>
+            os.descendants(roots).catch(() => 'unknown' as const);
           if (os.platform === 'win32') {
-            // A console git.exe can only be ended forcefully [R14].
+            // A console git.exe can only be ended forcefully [R14]. Windows never reparents,
+            // so whatever still names git as an ancestor afterwards escaped the tree kill.
             await os.killTree(pid).catch(() => {});
-            return;
+            const left = await list(new Map([[pid, null]]));
+            return left === 'unknown' ? { survivors: [], complete: false } : { survivors: left, complete: true };
           }
+          let complete = true;
+          const tree = new Map<number, string>();
+          const add = (found: readonly GitDescendant[] | 'unknown'): void => {
+            if (found === 'unknown') complete = false;
+            else for (const member of found) if (!tree.has(member.pid)) tree.set(member.pid, member.startIdentity);
+          };
           // Enumerate before signalling: once git dies its children are reparented.
-          const tree = await os.descendants(pid).catch(() => [] as readonly GitDescendant[]);
+          add(await list(new Map([[pid, null]])));
           if (!exited) child.kill('SIGTERM');
-          for (const member of tree) signal(member.pid, 'SIGTERM');
+          for (const member of tree.keys()) signal(member, 'SIGTERM');
           await new Promise<void>((resolveGrace) => {
             const timer = setTimeout(resolveGrace, grace);
             void exitedPromise.then(() => {
-              if (tree.length === 0) {
+              if (tree.size === 0) {
                 clearTimeout(timer);
                 resolveGrace();
               }
             });
           });
-          for (const member of tree) {
+          // Enumerate again: a member that ignored SIGTERM may have forked during the grace period.
+          // Git roots the walk only while unreaped; after its exit its PID may be another process's.
+          const roots = new Map<number, string | null>([...tree].map(([member, start]) => [member, start]));
+          if (!exited) roots.set(pid, null);
+          add(await list(roots));
+          const killed: GitDescendant[] = [];
+          const survivors: GitDescendant[] = [];
+          for (const [member, startIdentity] of tree) {
+            const now = await os.startIdentity(member).catch(() => 'unknown' as const);
+            // Unreadable is not evidence of death, and not licence to signal: report it.
+            if (now === 'unknown') survivors.push({ pid: member, startIdentity });
             // A PID whose start identity changed was reused; it is no longer git's.
-            if ((await os.startIdentity(member.pid).catch(() => 'unknown' as const)) === member.startIdentity)
-              signal(member.pid, 'SIGKILL');
+            else if (now === startIdentity) {
+              signal(member, 'SIGKILL');
+              killed.push({ pid: member, startIdentity });
+            }
           }
           // Git itself is this call's unreaped child, so its PID cannot have been reused.
           if (!exited) child.kill('SIGKILL');
+          survivors.push(...(await stillAlive(killed)));
+          return { survivors, complete };
         };
 
         const entry: InFlight = {
@@ -296,7 +370,7 @@ export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): Bo
               resolveDrain();
             });
           });
-          void Promise.all([drained, identified, stopping]).then(() => {
+          void Promise.all([drained, identified, stopping]).then(([, , report]) => {
             child.stdout?.destroy();
             child.stderr?.destroy();
             inFlight.delete(entry);
@@ -306,7 +380,8 @@ export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): Bo
               stdout: Buffer.concat(stdout).toString('utf8'),
               stderr: Buffer.concat(stderr).toString('utf8'),
               timedOut,
-              aborted
+              aborted,
+              stopReport: report ?? NOTHING_LEFT
             });
           });
         });
@@ -314,8 +389,12 @@ export function createBoundedGit(platform: Partial<BoundedGitPlatform> = {}): Bo
     },
     async abortAll(options) {
       const calls = [...inFlight];
-      await Promise.all(calls.map((call) => call.stop(options.graceMs, true)));
+      const reports = await Promise.all(calls.map((call) => call.stop(options.graceMs, true)));
       await Promise.all(calls.map((call) => call.settled));
+      return {
+        survivors: reports.flatMap((report) => report.survivors),
+        complete: reports.every((report) => report.complete)
+      };
     }
   };
 }
@@ -347,8 +426,8 @@ export function runGitBounded(
  * Stops every in-flight call of the host's process-wide runner.
  * @param options - How long to wait after the polite stop.
  * @param options.graceMs - Wait between SIGTERM and SIGKILL on POSIX.
- * @returns Once every in-flight git has exited.
+ * @returns Once every in-flight git has exited, what the stops left of their trees.
  */
-export function abortAll(options: { readonly graceMs: number }): Promise<void> {
+export function abortAll(options: { readonly graceMs: number }): Promise<GitStopReport> {
   return runner().abortAll(options);
 }

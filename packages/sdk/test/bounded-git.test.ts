@@ -9,6 +9,7 @@ import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { build } from 'esbuild';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createBoundedGit, type GitChildEvent, ShutdownError } from '../src/bounded-git.js';
 import { createProcessIdentity } from '../src/process-identity.js';
@@ -250,6 +251,242 @@ describe('abort and fence', () => {
     const repo = makeRepo();
     const result = await createBoundedGit().run(repo, ['rev-parse', '--abbrev-ref', 'HEAD'], { timeoutMs: 10_000 });
     expect(result).toMatchObject({ exitCode: 0, stdout: 'main\n', timedOut: false, aborted: false });
+  });
+});
+
+describe.runIf(POSIX)('POSIX stop report [L4]', () => {
+  it('SIGKILLs a member that a SIGTERM-ignoring hook forks during the grace period', async () => {
+    const lateFile = join(dir, 'late.pid');
+    const repo = makeRepo({
+      'post-checkout': `trap '' TERM\nsleep 0.8\n(trap '' TERM; exec sleep 30) &\necho $! > ${JSON.stringify(lateFile)}\nwait`
+    });
+
+    const result = await createBoundedGit().run(repo, ['checkout', '-q', 'other'], { timeoutMs: 500, graceMs: 1_500 });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.stopReport).toEqual({ survivors: [], complete: true });
+    const late = await readPid(lateFile);
+    await waitFor(() => !isAlive(late));
+  });
+
+  it.runIf(process.platform === 'linux')("SIGKILLs a hook's setsid descendant, which has left the group", async () => {
+    const escapeeFile = join(dir, 'escapee.pid');
+    const repo = makeRepo({
+      'post-checkout': `trap '' TERM\nsetsid sleep 30 &\necho $! > ${JSON.stringify(escapeeFile)}\nsleep 30`
+    });
+
+    const result = await createBoundedGit().run(repo, ['checkout', '-q', 'other'], { timeoutMs: 1_000, graceMs: 500 });
+
+    expect(result.stopReport).toEqual({ survivors: [], complete: true });
+    const escapee = await readPid(escapeeFile);
+    await waitFor(() => !isAlive(escapee));
+  });
+
+  /**
+   * Runs a timed-out checkout whose hook records its PID, with platform overrides.
+   * @param overrides - Platform functions to replace.
+   * @returns The result and the hook's PID, which the caller must end.
+   */
+  async function stopWith(
+    overrides: Parameters<typeof createBoundedGit>[0]
+  ): Promise<{ result: Awaited<ReturnType<ReturnType<typeof createBoundedGit>['run']>>; hookPid: number }> {
+    const pidFile = join(dir, 'hook.pid');
+    const repo = makeRepo({ 'post-checkout': `echo $$ > ${JSON.stringify(pidFile)}\nexec sleep 30` });
+    const result = await createBoundedGit(overrides).run(repo, ['checkout', '-q', 'other'], {
+      timeoutMs: 1_000,
+      graceMs: 200
+    });
+    return { result, hookPid: await readPid(pidFile) };
+  }
+
+  /**
+   * Ends a hook a test kept alive by stubbing the platform's signals.
+   * @param pid - The hook's PID, read from the file the hook wrote.
+   */
+  function endHook(pid: number): void {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {}
+  }
+
+  it('reports an incomplete stop when the process table cannot be listed', async () => {
+    const { result, hookPid } = await stopWith({ descendants: async () => 'unknown' });
+    endHook(hookPid);
+    expect(result.timedOut).toBe(true);
+    expect(result.stopReport.complete).toBe(false);
+  });
+
+  it('reports a member whose identity cannot be read as a survivor, without signalling it', async () => {
+    const fakePid = 2_147_000_002;
+    const sent: Array<[number, NodeJS.Signals]> = [];
+    const real = createProcessIdentity();
+    const { result, hookPid } = await stopWith({
+      descendants: async () => [{ pid: fakePid, startIdentity: 'start' }],
+      startIdentity: async (pid) => {
+        if (pid === fakePid) return 'unknown';
+        const probe = await real.identify(pid, 2_000);
+        return probe === null || probe === 'unknown' ? probe : probe.startIdentity;
+      },
+      kill: (pid, signal) => {
+        sent.push([pid, signal]);
+        if (pid !== fakePid) process.kill(pid, signal);
+      }
+    });
+    endHook(hookPid);
+    expect(result.stopReport).toEqual({ survivors: [{ pid: fakePid, startIdentity: 'start' }], complete: true });
+    expect(sent).not.toContainEqual([fakePid, 'SIGKILL']);
+  });
+
+  it('reports a member still running under its identity after SIGKILL as a survivor', async () => {
+    const fakePid = 2_147_000_003;
+    const real = createProcessIdentity();
+    const { result, hookPid } = await stopWith({
+      descendants: async () => [{ pid: fakePid, startIdentity: 'start' }],
+      startIdentity: async (pid) => {
+        if (pid === fakePid) return 'start';
+        const probe = await real.identify(pid, 2_000);
+        return probe === null || probe === 'unknown' ? probe : probe.startIdentity;
+      },
+      kill: (pid, signal) => {
+        if (pid !== fakePid) process.kill(pid, signal);
+      }
+    });
+    endHook(hookPid);
+    expect(result.stopReport).toEqual({ survivors: [{ pid: fakePid, startIdentity: 'start' }], complete: true });
+  });
+
+  it('abortAll returns the survivors of every stopped call', async () => {
+    const fakePid = 2_147_000_004;
+    const pidFile = join(dir, 'hook.pid');
+    const repo = makeRepo({ 'post-checkout': `echo $$ > ${JSON.stringify(pidFile)}\nexec sleep 30` });
+    const runner = createBoundedGit({
+      descendants: async () => [{ pid: fakePid, startIdentity: 'start' }],
+      startIdentity: async (pid) => (pid === fakePid ? 'start' : null),
+      kill: (pid, signal) => {
+        if (pid !== fakePid) process.kill(pid, signal);
+      }
+    });
+    const call = runner.run(repo, ['checkout', '-q', 'other'], { timeoutMs: 60_000 });
+    const hookPid = await readPid(pidFile);
+    const report = await runner.abortAll({ graceMs: 200 });
+    endHook(hookPid);
+    expect(report).toEqual({ survivors: [{ pid: fakePid, startIdentity: 'start' }], complete: true });
+    expect((await call).aborted).toBe(true);
+  });
+});
+
+describe.runIf(POSIX)('shutdown release of a launched handler [L4]', () => {
+  /**
+   * Runs a handler that leads its own group, as a launched one does: it takes a work
+   * lock, starts `body`, shuts down, and prints the lock's state from its exit.
+   * @param slotRoot - Slot root of the lock.
+   * @param body - Statements run after the lock is taken; `git` and `lock` are in scope.
+   * @returns The lock state the handler printed and its group id, which the caller must end.
+   */
+  async function runHandler(
+    slotRoot: string,
+    body: string
+  ): Promise<{ report: { state: string; released: boolean }; pgid: number }> {
+    const script = join(dir, 'handler.mts');
+    writeFileSync(
+      script,
+      `
+import { createBoundedGit } from ${JSON.stringify(join(SOURCE, 'bounded-git.ts'))};
+import { createShutdownCoordinator } from ${JSON.stringify(join(SOURCE, 'config/runtime-shutdown.ts'))};
+import { acquireSlotLock, readSlotLock } from ${JSON.stringify(join(SOURCE, 'slot-lock.ts'))};
+const shutdown = createShutdownCoordinator({
+  exit: () => {
+    void readSlotLock(${JSON.stringify(slotRoot)}, 1).then((state) => {
+      process.stdout.write(JSON.stringify({ state: state.state, released: state.snapshot?.released != null }));
+      process.exit(0);
+    });
+  }
+});
+const git = createBoundedGit({ shutdownSignal: shutdown.signal });
+const acquired = await acquireSlotLock(${JSON.stringify(slotRoot)}, 1, { executionId: 'e1', cardId: 'c1', purpose: 'work', environment: { shutdown, git } });
+if (acquired.status !== 'acquired') process.exit(3);
+const lock = acquired.lock;
+${body}
+await shutdown.shutdownAndExit(0, 'completed');
+`
+    );
+    // Bundled, as a launched handler is: tsx would add its esbuild service to the group.
+    const bundle = join(dir, 'handler.mjs');
+    await build({
+      entryPoints: [script],
+      bundle: true,
+      platform: 'node',
+      format: 'esm',
+      outfile: bundle,
+      logLevel: 'silent'
+    });
+    const handler = spawn(process.execPath, [bundle], {
+      stdio: ['ignore', 'pipe', 'inherit'],
+      detached: true,
+      env: { ...process.env, ...GIT_ENV }
+    });
+    children.push(handler);
+    const pgid = handler.pid as number;
+    let output = '';
+    handler.stdout?.on('data', (chunk) => {
+      output += String(chunk);
+    });
+    await new Promise((resolveExit) => handler.once('exit', resolveExit));
+    return { report: JSON.parse(output), pgid };
+  }
+
+  /**
+   * Ends what a handler left in its group.
+   * @param pgid - The group the handler led, which is its PID.
+   * @param pid - The handler's PID, recorded at spawn.
+   */
+  function endGroup(pgid: number, pid: number): void {
+    expect(pgid).toBeGreaterThan(1);
+    expect(pgid).toBe(pid);
+    try {
+      process.kill(-pgid, 'SIGKILL');
+    } catch {}
+  }
+
+  it('releases only once a hook that ignored SIGTERM and forked during the grace period is gone', async () => {
+    const slotRoot = join(dir, 'slots');
+    mkdirSync(slotRoot);
+    const lateFile = join(dir, 'late-write');
+    const repo = makeRepo({
+      'pre-commit': `trap '' TERM\nsleep 1\n(trap '' TERM; sleep 3; echo late > ${JSON.stringify(lateFile)}; exec sleep 30) &\nwait`
+    });
+    const { report, pgid } = await runHandler(
+      slotRoot,
+      `void git.run(${JSON.stringify(repo)}, ['commit', '-q', '--allow-empty', '-m', 'x'], { timeoutMs: 60_000 });
+await new Promise((resolveWait) => setTimeout(resolveWait, 800));`
+    );
+    try {
+      expect(report).toEqual({ state: 'free', released: true });
+      await new Promise((resolveWait) => setTimeout(resolveWait, 3_000));
+      expect(existsSync(lateFile)).toBe(false);
+    } finally {
+      endGroup(pgid, children.at(-1)?.pid as number);
+    }
+  });
+
+  it('keeps the lock while a process the handler left in its group is alive, and records it', async () => {
+    const slotRoot = join(dir, 'slots');
+    mkdirSync(slotRoot);
+    const { report, pgid } = await runHandler(
+      slotRoot,
+      `const { spawn } = await import('node:child_process');
+spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }).unref();
+await new Promise((resolveWait) => setTimeout(resolveWait, 300));`
+    );
+    try {
+      expect(report).toEqual({ state: 'held', released: false });
+      const { readSlotLock } = await import('../src/slot-lock.js');
+      const state = await readSlotLock(slotRoot, 1);
+      expect(state.state).toBe('held');
+      expect(state.snapshot?.companions).toHaveLength(1);
+    } finally {
+      endGroup(pgid, children.at(-1)?.pid as number);
+    }
   });
 });
 
