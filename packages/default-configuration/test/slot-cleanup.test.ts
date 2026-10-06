@@ -30,7 +30,7 @@ import {
   type SlotCleanupResult,
   type SlotLayer
 } from '../src/lib/worktrees/index.js';
-import { createSlotFixture, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
+import { ageRemovedCopies, createSlotFixture, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
 
@@ -64,6 +64,8 @@ async function finishedSlot(executionId: string): Promise<AcquiredSlot> {
 
 /** What a pass that purges nothing reports. */
 const NO_PURGE = { purged: 0, pending: 0, kept: [], failure: null };
+/** A pass that found one removed copy younger than an hour. */
+const PENDING = { purged: 0, pending: 1, kept: [], failure: null };
 
 /**
  * Runs a pass for the fixture's card.
@@ -733,8 +735,9 @@ describe('cleanupCardSlots removal', () => {
     const [name] = (await readdir(join(fx.slotRoot, '.purge'))).filter((entry) => !entry.endsWith('.json'));
     copy = join(fx.slotRoot, '.purge', name ?? '');
 
-    // The removing pass leaves its own copy alone; every later pass keeps it.
-    expect(removing.purge).toEqual(NO_PURGE);
+    // The copy waits out its hour; once it is old enough, every pass keeps it.
+    expect(removing.purge).toEqual(PENDING);
+    await ageRemovedCopies(fx.slotRoot);
     for (const purge of [(await run('cleanup')).purge, (await run('cleanup')).purge]) {
       expect(purge).toEqual({
         purged: 0,
@@ -762,31 +765,41 @@ describe('cleanupCardSlots removal', () => {
     expect((await run('preview')).purge).toEqual(NO_PURGE);
   });
 
-  it('leaves an unchanged removed copy for the next pass, which purges it', async () => {
+  it('keeps an unchanged removed copy pending until its removal is an hour old, then purges it', async () => {
     const slot = await finishedSlot('exec-1');
 
     const removing = await pass();
 
     expect(decisionOf(removing, slot.branch)).toMatchObject({ outcome: 'removed' });
-    expect(removing.purge).toEqual(NO_PURGE);
+    expect(removing.purge).toEqual(PENDING);
+    expect((await pass()).purge).toEqual(PENDING);
     expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
 
+    await ageRemovedCopies(fx.slotRoot);
     expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
     expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
   });
 
-  it("purges a deleted card's copy from a pass on a live card that has no slot folder, creating none", async () => {
+  it("leaves a deleted card's fresh copy pending from another card's pass, and purges it once an hour old, creating no slot folder", async () => {
     const slot = await finishedSlot('exec-1');
     const deleting = await pass({ mode: 'prepare-delete' });
     expect(decisionOf(deleting, slot.branch)).toMatchObject({ outcome: 'removed' });
-    expect(deleting.purge).toEqual(NO_PURGE);
+    expect(deleting.purge).toEqual(PENDING);
     const liveRoot = join(dirname(fx.slotRoot), 'card-live');
     expect(await exists(liveRoot)).toBe(false);
+    const livePass = () =>
+      cleanupCardSlots(
+        { ...fx.cleanupContext(), cardId: 'card-live' },
+        { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+      );
 
-    const live = await cleanupCardSlots(
-      { ...fx.cleanupContext(), cardId: 'card-live' },
-      { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
-    );
+    const fresh = await livePass();
+    expect(fresh).toMatchObject({ ok: true, decisions: [] });
+    expect(fresh.purge).toEqual(PENDING);
+    expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
+
+    await ageRemovedCopies(fx.slotRoot);
+    const live = await livePass();
 
     expect(live).toMatchObject({ ok: true, decisions: [] });
     expect(live.purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
@@ -797,6 +810,7 @@ describe('cleanupCardSlots removal', () => {
   it('leaves a removed copy pending when the budget left after the slots is within the purge reserve', async () => {
     await finishedSlot('exec-1');
     await pass();
+    await ageRemovedCopies(fx.slotRoot);
 
     // Every slot starts within this budget, but nothing remains for the purge once the 5 s reserve is set aside.
     const result = await pass({ budgetMs: 4_000 });
@@ -810,6 +824,7 @@ describe('cleanupCardSlots removal', () => {
   it('reports why the purge stopped, logs it, and keeps the copy for a later pass', async () => {
     await finishedSlot('exec-1');
     await pass();
+    await ageRemovedCopies(fx.slotRoot);
     const removal = fx.layer.seams.removal;
     const layer: SlotLayer = {
       ...fx.layer,

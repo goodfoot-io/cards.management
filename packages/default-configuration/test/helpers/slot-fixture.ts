@@ -10,7 +10,7 @@
 
 import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -42,6 +42,21 @@ const run = promisify(execFile);
  * Bound for a test that drives several slot passes over real git on a loaded host; a remove-after-remedy row took up to 15.4 s at load average 23.
  */
 export const GIT_HEAVY_TIMEOUT_MS = 120_000;
+
+/**
+ * Backdates every removed copy under a slot root past the purge's one-hour
+ * wait, as if its removal had happened two hours ago, so the next purge judges it.
+ * @param slotRoot - The slot root whose `.purge` records are rewritten.
+ */
+export async function ageRemovedCopies(slotRoot: string): Promise<void> {
+  const purge = join(slotRoot, '.purge');
+  const removedAt = new Date(Date.now() - 2 * 60 * 60 * 1_000).toISOString();
+  for (const name of await readdir(purge)) {
+    if (!name.endsWith('.json')) continue;
+    const record = JSON.parse(await readFile(join(purge, name), 'utf8')) as Record<string, unknown>;
+    await writeFile(join(purge, name), JSON.stringify({ ...record, removedAt }));
+  }
+}
 
 /** Git identity for commits made by fixtures. */
 export const FIXTURE_GIT_ENV = {

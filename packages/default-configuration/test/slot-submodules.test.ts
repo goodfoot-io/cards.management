@@ -10,7 +10,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -23,7 +23,13 @@ import {
   SLOT_CLEANUP_PASS_BUDGET_MS,
   type SlotCleanupResult
 } from '../src/lib/worktrees/index.js';
-import { createSlotFixture, FIXTURE_GIT_ENV, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
+import {
+  ageRemovedCopies,
+  createSlotFixture,
+  FIXTURE_GIT_ENV,
+  GIT_HEAVY_TIMEOUT_MS,
+  type SlotFixture
+} from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
 /** The bare remotes every test clones from, made once. */
@@ -144,14 +150,16 @@ async function runStatedCommands(detail: string): Promise<string[]> {
 
 /**
  * Checks a slot is gone with everything of it: ref, checkout, git's worktree
- * record with its module repositories, and the removed copy, which the next
- * pass purges. The main repository's submodule configuration stays.
+ * record with its module repositories, and the removed copy, which a pass
+ * purges once it is an hour old. The main repository's submodule
+ * configuration stays.
  * @param slot - The removed slot.
  */
 async function expectGone(slot: AcquiredSlot): Promise<void> {
   expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
   expect(await fx.git(['worktree', 'list', '--porcelain'])).not.toContain(slot.worktreePath);
   expect(await exists(slot.worktreePath)).toBe(false);
+  await ageRemovedCopies(fx.slotRoot);
   expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
   expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
   expect(await fx.git(['config', 'submodule.sub.url'])).toBe(join(remotes, 'sub.git'));
@@ -314,6 +322,116 @@ describe('cleanupCardSlots submodules', () => {
       await runStatedCommands(decision.detail);
       expect(decisionOf(await pass(), slot)).toMatchObject(REMOVED);
       await expectGone(slot);
+    },
+    GIT_HEAVY_TIMEOUT_MS
+  );
+});
+
+describe('cleanupCardSlots submodules changed after the judge', () => {
+  /** A change made between the judge under the lock and the quarantine, and what the refusal says. */
+  interface Race {
+    readonly change: string;
+    readonly reason: 'submodules' | 'uncommitted_changes';
+    /**
+     * Makes the change.
+     * @param slot - The slot checkout, still at its own path.
+     * @returns What the detail contains, and a check that the work is still at the slot path.
+     */
+    readonly make: (slot: string) => Promise<{ expected: string[]; intact: () => Promise<void> }>;
+  }
+
+  it.each<Race>([
+    {
+      change: 'a submodule commit',
+      reason: 'submodules',
+      make: async (slot) => {
+        const sub = join(slot, 'sub');
+        await fx.git(['checkout', '-q', '-b', 'work'], sub);
+        await writeFile(join(sub, 'precious.txt'), 'unpushed work');
+        await fx.git(['add', 'precious.txt'], sub);
+        await fx.git(['commit', '-q', '-m', 'precious'], sub);
+        const commit = await fx.git(['rev-parse', 'HEAD'], sub);
+        return {
+          expected: ['sub is at', `\`git -C ${sub} checkout --detach`],
+          intact: async () => expect(await fx.git(['rev-parse', 'work'], sub)).toBe(commit)
+        };
+      }
+    },
+    {
+      change: 'a nested submodule commit no remote-tracking ref reaches',
+      reason: 'submodules',
+      make: async (slot) => {
+        const nested = join(slot, 'sub', 'nested');
+        await fx.git(['commit', '-q', '--allow-empty', '-m', 'local'], nested);
+        await fx.git(['update-ref', 'refs/heads/side', 'HEAD'], nested);
+        await fx.git(['checkout', '-q', '--detach', 'HEAD~'], nested);
+        const commit = await fx.git(['rev-parse', 'side'], nested);
+        return {
+          expected: [`sub/nested has commit ${commit.slice(0, 12)}`, `\`git -C ${nested} push origin side\``],
+          intact: async () => expect(await fx.git(['rev-parse', 'side'], nested)).toBe(commit)
+        };
+      }
+    },
+    {
+      change: 'an uncommitted submodule file',
+      reason: 'submodules',
+      make: async (slot) => {
+        const sub = join(slot, 'sub');
+        await writeFile(join(sub, 'precious.txt'), 'uncommitted work');
+        return {
+          expected: ['sub has uncommitted or untracked changes', `\`git -C ${sub} clean -ffd\``],
+          intact: async () => expect(await readFile(join(sub, 'precious.txt'), 'utf8')).toBe('uncommitted work')
+        };
+      }
+    },
+    {
+      change: 'a submodule stash',
+      reason: 'submodules',
+      make: async (slot) => {
+        const sub = join(slot, 'sub');
+        await writeFile(join(sub, 'file.txt'), 'stashed work');
+        await fx.git(['stash', '-q'], sub);
+        return {
+          expected: ['sub has stashed changes', `\`git -C ${sub} stash clear\``],
+          intact: async () => expect(await fx.git(['stash', 'list'], sub)).not.toBe('')
+        };
+      }
+    },
+    {
+      change: 'an uncommitted file in the slot itself',
+      reason: 'uncommitted_changes',
+      make: async (slot) => {
+        await writeFile(join(slot, 'precious.txt'), 'uncommitted work');
+        return {
+          expected: ['Checkout has uncommitted changes: precious.txt', 'commit, stash or discard them'],
+          intact: async () => expect(await readFile(join(slot, 'precious.txt'), 'utf8')).toBe('uncommitted work')
+        };
+      }
+    }
+  ])(
+    'refuses a slot that gained $change after the judge, and puts it back intact',
+    async ({ reason, make }) => {
+      const slot = await finishedSlot();
+      await initialize(slot);
+      const race: { made: Awaited<ReturnType<Race['make']>> | null } = { made: null };
+      // The fsmonitor stop comes after the judge under the lock and before the quarantine.
+      fx.beforeGit = async (args) => {
+        if (race.made === null && args.includes('fsmonitor--daemon')) race.made = await make(slot.worktreePath);
+      };
+
+      const decision = decisionOf(await pass(), slot);
+      fx.beforeGit = null;
+
+      if (race.made === null) throw new Error('The change was never made');
+      const { expected, intact } = race.made;
+      expect(decision).toMatchObject({ reason, outcome: 'preserved' });
+      for (const text of expected) expect(decision.detail).toContain(text);
+      expect(decision.detail).toMatch(/; then run Clean Up Worktrees again$/);
+      await intact();
+      expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
+      expect(await fx.git(['status', '--porcelain'], join(slot.worktreePath, 'sub', 'nested'))).toBe('');
+      expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+      expect((await readdir(fx.slotRoot)).filter((name) => name.includes('.deleting-'))).toEqual([]);
     },
     GIT_HEAVY_TIMEOUT_MS
   );

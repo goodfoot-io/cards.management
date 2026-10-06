@@ -16,6 +16,7 @@
 
 import { lstat, readdir, realpath } from 'node:fs/promises';
 import { join, relative, sep } from 'node:path';
+import type { SetAsideSubmodules } from '@cards.management/sdk/worktree-removal';
 import type { SlotGit } from './slot-git.js';
 
 /** Mode of a gitlink in `git ls-files --stage`. */
@@ -31,20 +32,6 @@ export type SubmoduleJudgement =
   | { readonly status: 'clean'; readonly repositories: readonly string[] }
   /** Something a removal would lose, what it is, and how to resolve it. */
   | { readonly status: 'kept'; readonly detail: string; readonly step: string };
-
-/** A quarantined slot whose submodules the SDK set aside, as its set-aside record names them. */
-export interface SetAsideSubmodules {
-  /** The slot path, where a refused removal puts everything back. */
-  readonly slotPath: string;
-  /** The quarantined checkout, whose submodule directories are now empty. */
-  readonly quarantine: string;
-  /** The set-aside area: checkout `i` at `<area>/<i>`, the repositories at `<area>/modules`. */
-  readonly area: string;
-  /** The slot's own git directory, whose `modules` the repositories came from. */
-  readonly gitDir: string;
-  /** Slot-relative paths of the set-aside checkouts, in area order. */
-  readonly paths: readonly string[];
-}
 
 /** A failed check: what was found and the user's step. */
 type Finding = { readonly detail: string; readonly step: string };
