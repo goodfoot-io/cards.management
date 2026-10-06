@@ -8,7 +8,7 @@
  * @module
  */
 
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -257,6 +257,20 @@ describe('worktreeMaintenance report contract', () => {
     expect(parsed.error).toBeUndefined();
     expect(parsed.data).toEqual(reports[0]);
     expect(parsed.data?.failure).toMatchObject({ stage: 'discovery' });
+  });
+  it('refuses prepare-delete on an unknown lock with a report the SDK preview schema accepts', async () => {
+    const held = await acquire('exec-held');
+    const ownerPath = join(fx.slotRoot, '.locks', '1', String(held.lock.generation), 'owner.json');
+    const owner = JSON.parse(await readFile(ownerPath, 'utf8')) as { holder: Record<string, unknown> };
+    owner.holder['startIdentity'] = null;
+    await writeFile(ownerPath, JSON.stringify(owner));
+
+    const { reports } = await maintain('prepare-delete');
+
+    const parsed = worktreeCleanupPreviewSchema.safeParse(reports[0]);
+    expect(parsed.error).toBeUndefined();
+    expect(parsed.data).toMatchObject({ canDeleteCard: false, unknownLocks: { count: 1, unverifiedOwners: 1 } });
+    await held.lock.release();
   });
 });
 

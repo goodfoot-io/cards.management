@@ -1035,7 +1035,7 @@ export async function assertOpencodeBinaryAvailable(): Promise<string> {
  * stdio (direct terminal control); background runs
  * execute headlessly via `opencode run` under console-less stdio (`ignore`,
  * `ignore`, piped stderr) and log captured stderr for diagnostics.
- * The API owner performs worktree maintenance from durable execution outcomes.
+ * The session's worktree slot is taken and cleaned up by {@link openSlotSession}.
  *
  * Named degradations (documented plan decisions):
  * - **Per-card `references`**: the Config v2 shape is verified (a record

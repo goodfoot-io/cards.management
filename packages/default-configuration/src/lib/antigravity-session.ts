@@ -4,7 +4,7 @@
  * Mirrors the launch mechanics of {@link ./codex-session.js} and
  * {@link ./opencode-session.js} for the `agy` CLI: worktree resolution,
  * process-group ownership, cancel/shutdown drain wiring and status settlement.
- * Worktree assignment and maintenance run in the API owner.
+ * The session's worktree slot is taken and cleaned up by {@link openSlotSession}.
  *
  * Invocation contract (notes/antigravity-host-contract.md, verified launch
  * surface): interactive launches run terminal-owned `agy -i <prompt>`;

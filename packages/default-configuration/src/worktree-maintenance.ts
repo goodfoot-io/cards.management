@@ -16,18 +16,14 @@
 
 import type { WorktreeCleanupPreview } from '@cards.management/sdk';
 import { defineWorktreeMaintenance } from '@cards.management/sdk/config';
-import {
-  cleanupCardSlots,
-  clearsCardDeletion,
-  type SlotCleanupContext,
-  type SlotCleanupResult
-} from './lib/worktrees/index.js';
+import { clearsCardDeletion } from '@cards.management/sdk/protocol';
+import { cleanupCardSlots, type SlotCleanupContext, type SlotCleanupResult } from './lib/worktrees/index.js';
 
 /**
  * Builds the command's report from a pass.
  * @param cardId - The maintained card.
  * @param result - The pass's outcome.
- * @returns The report; `canDeleteCard` holds only when every slot was removed or is eligible and the pass did not stop.
+ * @returns The report; `canDeleteCard` is the SDK's `clearsCardDeletion` of it, so the report always satisfies the preview schema.
  */
 export function maintenanceReport(cardId: string, result: SlotCleanupResult): WorktreeCleanupPreview {
   return {

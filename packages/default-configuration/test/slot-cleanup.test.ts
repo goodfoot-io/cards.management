@@ -8,11 +8,17 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
-import { OccupantProbeError } from '@cards.management/sdk/worktree-removal';
+import {
+  findSlotOccupants,
+  OccupantProbeError,
+  type OccupantProbeOptions,
+  type ProcReader,
+  removeQuarantinedSlot
+} from '@cards.management/sdk/worktree-removal';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   type AcquiredSlot,
@@ -86,6 +92,41 @@ function decisionOf(result: SlotCleanupResult, branch: string): WorktreeCleanupD
   const decision = result.decisions.find((entry) => entry.branch === branch);
   if (decision === undefined) throw new Error(`No decision for ${branch}`);
   return decision;
+}
+
+/**
+ * A layer whose occupant probes, the pass's own and the quarantined
+ * checkout's, read the host's `/proc` as the kernel shows a process that is
+ * not dumpable: its cwd, root and descriptors refuse with `EACCES`, its
+ * world-readable `status` does not. A really undumpable process of this user
+ * would make every concurrent test file's slots `in_use`, so only the
+ * spawned process is hidden, and only from this pass.
+ * @param hidden - The pid the kernel hides.
+ * @param uid - The prober's effective uid; the test's own by default.
+ * @returns The fixture's layer with those probes.
+ */
+function hidingLayer(hidden: number, uid?: number): SlotLayer {
+  const refuse = (path: string): Promise<never> =>
+    Promise.reject(Object.assign(new Error(`EACCES: ${path}`), { code: 'EACCES' }));
+  const hiddenEntry = new RegExp(`^/proc/${hidden}/(cwd|root|fd)(/|$)`);
+  const proc: ProcReader = {
+    readdir: (path) => (hiddenEntry.test(path) ? refuse(path) : readdir(path)),
+    readlink: (path) => (hiddenEntry.test(path) ? refuse(path) : readlink(path)),
+    readFile: (path) => readFile(path, 'utf8')
+  };
+  const occupants: OccupantProbeOptions = { proc, ...(uid === undefined ? {} : { uid }) };
+  const removal = fx.layer.seams.removal;
+  return {
+    ...fx.layer,
+    seams: {
+      ...fx.layer.seams,
+      removal: {
+        ...removal,
+        findSlotOccupants: (path) => findSlotOccupants(path, occupants),
+        removeQuarantinedSlot: (target, options) => removeQuarantinedSlot(target, { ...options, occupants })
+      }
+    }
+  };
 }
 
 /**
@@ -254,6 +295,131 @@ describe('cleanupCardSlots preservation', () => {
   });
 });
 
+describe('cleanupCardSlots next steps', () => {
+  /** What every permanent refusal's detail ends with: the pass that then removes the slot. */
+  const AGAIN = /run Clean Up Worktrees again$/;
+
+  /**
+   * Sets a slot's registered parent branch.
+   * @param branch - Slot branch.
+   * @param parentBranch - The parent to record.
+   * @throws When the slot is not registered.
+   */
+  function setParent(branch: string, parentBranch: string): void {
+    const registration = fx.client.registrations.get(branch);
+    if (registration === undefined) throw new Error('slot not registered');
+    registration.parentBranch = parentBranch;
+  }
+
+  it.each([
+    {
+      reason: 'unmerged_commits',
+      arrange: (slot: AcquiredSlot) => fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], slot.worktreePath),
+      step: (slot: AcquiredSlot) => [`git branch -D ${slot.branch}`, `git worktree remove --force ${slot.worktreePath}`]
+    },
+    {
+      reason: 'uncommitted_changes',
+      arrange: (slot: AcquiredSlot) => writeFile(join(slot.worktreePath, 'draft.txt'), 'draft'),
+      step: (slot: AcquiredSlot) => ['commit, stash or discard', `git branch -D ${slot.branch}`]
+    },
+    {
+      reason: 'head_off_branch',
+      arrange: (slot: AcquiredSlot) => fx.git(['checkout', '-q', '--detach'], slot.worktreePath),
+      step: (slot: AcquiredSlot) => [`git switch ${slot.branch}`, `git worktree remove --force ${slot.worktreePath}`]
+    },
+    {
+      reason: 'parent_branch_missing',
+      arrange: async (slot: AcquiredSlot) => setParent(slot.branch, 'gone'),
+      step: () => ['recreate the parent branch']
+    },
+    {
+      reason: 'invalid_entry',
+      arrange: async (slot: AcquiredSlot) => {
+        fx.client.registrations.delete(slot.branch);
+        fx.client.invalidEntries.push({ name: slot.branch, reason: 'unparseable' });
+      },
+      step: () => ['under branches/ in the card repository']
+    },
+    {
+      reason: 'checked_out_elsewhere',
+      arrange: async (slot: AcquiredSlot) => {
+        await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
+        await fx.git(['worktree', 'add', '-q', join(fx.repoRoot, '..', 'elsewhere'), slot.branch]);
+      },
+      step: () => ['switch that checkout to another branch or remove it']
+    },
+    {
+      reason: 'submodules',
+      arrange: async (slot: AcquiredSlot) => {
+        const head = await fx.git(['rev-parse', 'HEAD'], slot.worktreePath);
+        await fx.git(['update-index', '--add', '--cacheinfo', `160000,${head},sub`], slot.worktreePath);
+        await fx.git(['commit', '-q', '-m', 'gitlink'], slot.worktreePath);
+        // An uninitialized submodule is an empty directory; without it, status reports the gitlink deleted.
+        await mkdir(join(slot.worktreePath, 'sub'));
+        await fx.git(['merge', '-q', '--ff-only', slot.branch]);
+      },
+      step: (slot: AcquiredSlot) => [`git worktree remove --force ${slot.worktreePath}`, `git branch -D ${slot.branch}`]
+    }
+  ])('names the next step for $reason', async ({ reason, arrange, step }) => {
+    const slot = await finishedSlot('exec-1');
+    await arrange(slot);
+
+    for (const mode of ['preview', 'cleanup'] as const) {
+      const decision = decisionOf(await pass({ mode }), slot.branch);
+      expect(decision).toMatchObject({ reason, outcome: 'preserved' });
+      expect(decision.detail).toMatch(AGAIN);
+      for (const text of step(slot)) expect(decision.detail).toContain(text);
+    }
+  });
+
+  it('names the next step for in_use, in preview and in cleanup', async () => {
+    const slot = await finishedSlot('exec-1');
+    const { spawn } = await import('node:child_process');
+    const occupant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: slot.worktreePath });
+    try {
+      for (const mode of ['preview', 'cleanup'] as const) {
+        const decision = decisionOf(await pass({ mode }), slot.branch);
+        expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
+        expect(decision.detail).toContain(`pid ${occupant.pid}`);
+        expect(decision.detail).toContain(`stop the processes working in ${slot.worktreePath}`);
+        expect(decision.detail).toMatch(AGAIN);
+      }
+    } finally {
+      occupant.kill('SIGKILL');
+    }
+  });
+
+  it('removes an abandoned slot once its stated git commands have run', async () => {
+    const slot = await finishedSlot('exec-1');
+    await fx.git(['commit', '-q', '--allow-empty', '-m', 'work to abandon'], slot.worktreePath);
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'unmerged_commits', outcome: 'preserved' });
+
+    await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
+    await fx.git(['branch', '-D', slot.branch]);
+
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'missing', outcome: 'removed' });
+    expect(fx.client.registrations.has(slot.branch)).toBe(false);
+  });
+
+  it('says the git-ignored files of a clean slot are deleted with it, in preview and in the removal', async () => {
+    await writeFile(join(fx.repoRoot, '.gitignore'), '.env\n');
+    await fx.git(['add', '.gitignore']);
+    await fx.git(['commit', '-q', '-m', 'ignore .env']);
+    const slot = await finishedSlot('exec-1');
+    await writeFile(join(slot.worktreePath, '.env'), 'SECRET=1\n');
+    const note = `git-ignored files in ${slot.worktreePath} are deleted with it`;
+
+    const preview = decisionOf(await pass({ mode: 'preview' }), slot.branch);
+    expect(preview).toMatchObject({ reason: 'eligible', outcome: 'eligible' });
+    expect(preview.detail).toContain(note);
+
+    const removed = decisionOf(await pass(), slot.branch);
+    expect(removed).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+    expect(removed.detail).toContain(note);
+    expect(await exists(slot.worktreePath)).toBe(false);
+  });
+});
+
 describe('cleanupCardSlots removal', () => {
   it('removes a merged clean slot: checkout, ref and registration', async () => {
     const slot = await finishedSlot('exec-1');
@@ -285,6 +451,53 @@ describe('cleanupCardSlots removal', () => {
     }
   });
 
+  it.runIf(process.platform === 'linux')(
+    'preserves a slot as in_use, in preview and cleanup, when one of the user’s own processes cannot be inspected',
+    async () => {
+      const slot = await finishedSlot('exec-1');
+      const { spawn } = await import('node:child_process');
+      const hidden = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: fx.scratch });
+      try {
+        const layer = hidingLayer(hidden.pid ?? 0);
+        for (const mode of ['preview', 'cleanup'] as const) {
+          const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
+          const decision = decisionOf(result, slot.branch);
+          expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
+          expect(decision.detail).toContain(`your own processes could not be inspected`);
+          expect(decision.detail).toContain(`(pid ${hidden.pid})`);
+          expect(decision.detail).toContain(`stop the processes working in ${slot.worktreePath}`);
+          expect(decision.detail).not.toMatch(/\bclean\b/);
+        }
+        expect(await exists(slot.worktreePath)).toBe(true);
+      } finally {
+        hidden.kill('SIGKILL');
+      }
+    }
+  );
+
+  it.runIf(process.platform === 'linux')(
+    'removes a slot past another user’s uninspectable process, counting it once for the pass and never in a detail',
+    async () => {
+      const slot = await finishedSlot('exec-1');
+      const { spawn } = await import('node:child_process');
+      const hidden = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: slot.worktreePath });
+      try {
+        // A prober whose uid is not the hidden process's owner sees it as another user's.
+        const layer = hidingLayer(hidden.pid ?? 0, (process.geteuid?.() ?? 0) + 1);
+        for (const mode of ['preview', 'cleanup'] as const) {
+          const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
+          const decision = decisionOf(result, slot.branch);
+          expect(decision).toMatchObject({ reason: 'eligible', outcome: mode === 'preview' ? 'eligible' : 'removed' });
+          expect(decision.detail).not.toMatch(/process|inspect|prob/);
+          expect(result.otherUsersNotInspected).toBeGreaterThanOrEqual(1);
+        }
+        expect(await exists(slot.worktreePath)).toBe(false);
+      } finally {
+        hidden.kill('SIGKILL');
+      }
+    }
+  );
+
   it('preserves a slot as in_use when the occupant probe itself fails', async () => {
     const slot = await finishedSlot('exec-1');
     const removal = fx.layer.seams.removal;
@@ -307,6 +520,37 @@ describe('cleanupCardSlots removal', () => {
     expect(await exists(slot.worktreePath)).toBe(true);
     expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
+  });
+
+  it('keeps the ref with the registration when the slot path is recreated during removal, then removes both', async () => {
+    const slot = await finishedSlot('exec-1');
+    const oid = await fx.git(['rev-parse', slot.branch]);
+    let recreated = false;
+    // An editor saves into the slot path after the checkout moved to quarantine.
+    fx.beforeGit = async (args, cwd) => {
+      if (recreated || args[0] !== 'status' || !cwd.includes('.deleting-')) return;
+      recreated = true;
+      await mkdir(slot.worktreePath);
+      await writeFile(join(slot.worktreePath, 'stray.txt'), 'editor save');
+    };
+
+    const blocked = decisionOf(await pass(), slot.branch);
+    fx.beforeGit = null;
+
+    expect(recreated).toBe(true);
+    expect(blocked).toMatchObject({ reason: 'removal_blocked', outcome: 'preserved' });
+    expect(blocked.detail).toMatch(/keep anything wanted from .* and remove it, then run Clean Up Worktrees again$/);
+    expect(await fx.git(['rev-parse', slot.branch])).toBe(oid);
+    expect(fx.client.registrations.has(slot.branch)).toBe(true);
+    expect(await readFile(join(slot.worktreePath, 'stray.txt'), 'utf8')).toBe('editor save');
+
+    // Following the detail clears the state: the next pass removes the merged ref and the registration.
+    await rm(slot.worktreePath, { recursive: true });
+    const removed = decisionOf(await pass(), slot.branch);
+
+    expect(removed).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+    expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
+    expect(fx.client.registrations.has(slot.branch)).toBe(false);
   });
 
   it('restores a slot whose held content changes during removal and reports it removal_restored', async () => {
@@ -427,7 +671,12 @@ describe('cleanupCardSlots failures and budget', () => {
   it('succeeds prepare-delete on a card without slots', async () => {
     const result = await pass({ mode: 'prepare-delete' });
 
-    expect(result).toEqual({ decisions: [], unknownLocks: { count: 0, unverifiedOwners: 0 }, ok: true });
+    expect(result).toEqual({
+      decisions: [],
+      unknownLocks: { count: 0, unverifiedOwners: 0 },
+      otherUsersNotInspected: 0,
+      ok: true
+    });
   });
 
   it('never removal-locks a slot it preserves, so concurrent launches reuse existing slots', async () => {

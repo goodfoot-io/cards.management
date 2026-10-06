@@ -8,6 +8,7 @@
  * @module
  */
 
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdir, readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { Logger } from '@cards.management/sdk';
@@ -162,6 +163,38 @@ describe('acquireSlot', () => {
     expect(slot.skipped.map((skip) => skip.ordinal)).toEqual([1, 2]);
     for (const skip of slot.skipped) expect(skip.reason).toMatch(/^lock_unavailable: .*EPERM/);
     expect(describeSkippedSlots(slot.skipped)).toMatch(/^2 slots skipped as unjudgeable: 1 \(lock_unavailable: /);
+    await slot.lock.release();
+  });
+
+  it('recovers quarantine residue that appeared after the scan, reading it again under the lock', async () => {
+    const first = await acquire('exec-1');
+    await first.lock.release();
+    const quarantine = `${first.worktreePath}.deleting-${randomUUID()}`;
+    const generations = join(fx.slotRoot, '.locks', '1');
+    let interrupted = false;
+    // An interrupted removal moves the checkout aside between this launch's scan and its lock.
+    const layer = {
+      ...fx.layer,
+      lockEnvironment: {
+        ...fx.layer.lockEnvironment,
+        fs: {
+          readFile: (path: string) => readFile(path, 'utf8'),
+          rename: async (from: string, to: string) => {
+            if (!interrupted && to.startsWith(`${generations}/`)) {
+              interrupted = true;
+              await fx.git(['worktree', 'move', first.worktreePath, quarantine]);
+            }
+            await rename(from, to);
+          }
+        }
+      }
+    };
+
+    const slot = await acquireSlot(fx.input('exec-2'), { client: fx.client, logger: new Logger(), layer });
+
+    expect(interrupted).toBe(true);
+    expect(slot).toMatchObject({ ordinal: 1, outcome: 'reused', worktreePath: first.worktreePath });
+    expect(await exists(quarantine)).toBe(false);
     await slot.lock.release();
   });
 

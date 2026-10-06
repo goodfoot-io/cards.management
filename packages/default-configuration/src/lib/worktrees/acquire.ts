@@ -186,16 +186,10 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
    * @param lock - The ordinal's freshly acquired lock.
    * @param previous - The generation judged before GC.
    * @param slotPath - The slot checkout path.
-   * @param residue - Quarantine paths beside the slot.
    * @throws When the slot is left unsettled, so it is neither used nor written into.
    */
-  const recoverPrevious = async (
-    lock: SlotLock,
-    previous: SlotLockPrevious,
-    slotPath: string,
-    residue: readonly string[]
-  ): Promise<void> => {
-    const recovery = await recoverSlot(lock, previous, slotPath, residue.length > 0, {
+  const recoverPrevious = async (lock: SlotLock, previous: SlotLockPrevious, slotPath: string): Promise<void> => {
+    const recovery = await recoverSlot(lock, previous, slotPath, {
       creation,
       removal: layer.seams.removal
     });
@@ -207,7 +201,6 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
    * Runs `check` under a fresh `work` lock of the ordinal, after recovery, as one slot operation.
    * @param ordinal - Slot to lock.
    * @param slotPath - Its checkout path.
-   * @param residue - Its quarantine paths.
    * @param judge - Shared judgement context of this call.
    * @param check - Returns a value to keep the lock, or null to decline.
    * @returns The held lock and value, or null after releasing a declined or failed candidate.
@@ -215,7 +208,6 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
   const underLock = async <T>(
     ordinal: number,
     slotPath: string,
-    residue: readonly string[],
     judge: SlotJudgeContext | undefined,
     check: (lock: SlotLock) => Promise<T | null>
   ): Promise<{ lock: SlotLock; value: T } | null> => {
@@ -231,7 +223,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
     const { lock, previous } = result;
     try {
       const value = await lock.operation(`acquire check of slot ${ordinal}`, async () => {
-        await recoverPrevious(lock, previous, slotPath, residue);
+        await recoverPrevious(lock, previous, slotPath);
         lock.checkpoint();
         return check(lock);
       });
@@ -433,7 +425,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
   // 3. Reuse the most recently used free checkout that is still registered and usable.
   const vacated = new Set<number>();
   for (const slot of ranked.filter((candidate) => candidate.directoryExists)) {
-    const held = await underLock(slot.ordinal, slot.path, slot.residue, judge, async () => {
+    const held = await underLock(slot.ordinal, slot.path, judge, async () => {
       // Recovery may have rolled back the checkout of an interrupted creation: reattach it below.
       if (!(await pathExists(slot.path))) {
         vacated.add(slot.ordinal);
@@ -462,7 +454,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
   // 4. Reattach a free slot whose checkout is gone and whose ref remains; failing that, recreate one whose ref is gone.
   for (const op of ['reattach', 'recreate'] as const) {
     for (const slot of ranked.filter((candidate) => !candidate.directoryExists || vacated.has(candidate.ordinal))) {
-      const held = await underLock(slot.ordinal, slot.path, slot.residue, judge, async (lock) => {
+      const held = await underLock(slot.ordinal, slot.path, judge, async (lock) => {
         const registration = await registrationOf(slot.branch);
         if (registration === null || (registration.worktree ?? slot.path) !== slot.path) return null;
         if (await pathExists(slot.path)) return null;
@@ -526,7 +518,7 @@ export async function acquireSlot(input: SlotActionInput, options: AcquireSlotOp
     const { lock, previous } = result;
     try {
       const created = await lock.operation(`create of slot ${ordinal}`, async () => {
-        await recoverPrevious(lock, previous, path, []);
+        await recoverPrevious(lock, previous, path);
         if ((await pathExists(path)) || (await registrationOf(branch)) !== null) return false;
         const parentOid = await refOid(git, repoRoot, parentBranch);
         if (parentOid === null) throw new Error(`Parent branch ${parentBranch} of card ${cardId} does not exist`);

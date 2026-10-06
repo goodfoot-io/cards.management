@@ -33,7 +33,7 @@ Based on discovery file + PID + TCP probe + health check result. Schema details 
 - **If EDH mode**: Check `~/.cards/edh/{edhId}/storage/cards-api.json` instead.
 - **If fresh install**: Run the setup wizard. The extension must activate at least once.
 - **If reload didn't help**: Check the extension host log for activation errors.
-- **Safe**: Reading discovery file, curl health check, reviewing logs. **Risky**: Deleting the database file (only if malformed — see below).
+- **Safe**: Read discovery, check health, review logs. Preserve the database and all sidecars; they hold acknowledged refresh work.
 
 **Post-fix verification**: `cat ~/.cards/cards-api.json` shows valid JSON. `curl http://127.0.0.1:<port>/health` returns 2xx.
 
@@ -61,9 +61,9 @@ Based on discovery file + PID + TCP probe + health check result. Schema details 
 
 **Evidence**: Server log contains `SQLITE_CORRUPT`, `SQLITE_NOTADB`, `disk I/O error`, or `vtable constructor failed`. Server may start but operations fail.
 
-**Recovery**: Automatic. The database is deleted and rebuilt from card repositories (Git repos are the source of truth). No user action required.
+**Recovery**: Startup fails closed. Preserve `cards.db` and every WAL/SHM/journal sidecar. The durable refresh queue cannot be rebuilt from Git. Correct storage availability or permissions; persistent corruption needs recovery assistance that preserves acknowledged requests. See [database recovery](cards-api-server.md#corruption-recovery).
 
-**Risk**: **Risky to intervene**. Do NOT manually delete `cards.db` while a server is running — SQLITE_BUSY is a liveness signal, not corruption. If you see `database is locked`, a live server holds the write lock.
+**Risk**: Never delete `cards.db` or its sidecars as cache cleanup. `SQLITE_BUSY` is also a liveness signal; a live connection may hold the lock.
 
 **Post-fix verification**: Server responds to health check. Card operations succeed.
 
@@ -89,7 +89,7 @@ Based on discovery file + PID + TCP probe + health check result. Schema details 
 
 File a bug report — load `interview-issue-report.md`, then `issue-report-guide.md`. Escalate if:
 - **Server won't start after 3 window reloads**: Include the last 100 lines of the Cards output channel and `find ~/.vscode-server/data/logs -name 'Cards.log' -exec tail -50 {} \;`.
-- **Database corruption recurs after rebuild**: Include `ls -la ~/.cards/cards.db*` and the server startup log showing the corruption error.
+- **Database remains unreadable**: Include `ls -la ~/.cards/cards.db*` and the server startup log showing the corruption error.
 - **Port conflict persists across reloads**: Include `lsof -i :<port>` output and the discovery file contents.
 - **Discovery file oscillates (created/deleted rapidly)**: Include `tail -100 ${HOOKS_LOG_ANCHOR}/.cards/logs/claude-code-cards-api-hooks.log` and `ls -la ~/.cards/cards-api.json*`.
 
