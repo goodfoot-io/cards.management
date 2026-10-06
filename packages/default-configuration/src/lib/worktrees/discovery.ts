@@ -1,7 +1,8 @@
 /**
  * Slot discovery: the union of a card's registrations, its slot refs, git's
- * worktree list and the names under its slot root. Lock directories are not a
- * discovery source; they only reserve ordinals for creation.
+ * worktree list and the names under its slot root. Lock directories and
+ * removed copies waiting under `.purge` are not a discovery source; they only
+ * reserve ordinals for creation.
  *
  * @summary Discovers a card's worktree slots and the next free ordinal
  * @module
@@ -12,6 +13,7 @@ import { join } from 'node:path';
 import type { BranchInfo } from '@cards.management/sdk/client';
 import { listSlotLockOrdinals } from '@cards.management/sdk/slot-lock';
 import { worktreeSlotNumber } from '@cards.management/sdk/worktree-path-policy';
+import { findRemovedSlotCopies } from '@cards.management/sdk/worktree-removal';
 import { checkedOutPaths, listWorktreeEntries, pathExists, refOid, samePath, type WorktreeEntry } from './checkout.js';
 import type { RegistrationClient } from './registration.js';
 import type { SlotGit } from './slot-git.js';
@@ -41,7 +43,7 @@ export interface DiscoveredSlot {
   /** Every path at which git has the slot branch checked out. */
   readonly checkedOutAt: readonly string[];
   readonly directoryExists: boolean;
-  /** Quarantine residue (`<n>.deleting-*`, `<n>.held*`) beside the slot path. */
+  /** Quarantine residue (`<n>.deleting-*`, with any `.submodules` set-aside) beside the slot path. */
   readonly residue: readonly string[];
 }
 
@@ -124,7 +126,7 @@ export async function discoverSlots(
 ): Promise<SlotInventory> {
   const { cardId, repoRoot, slotRoot } = place;
   let registrationError: string | null = null;
-  const [registrations, refs, entries, names, lockOrdinals] = await Promise.all([
+  const [registrations, refs, entries, names, lockOrdinals, copies] = await Promise.all([
     client.getBranches(cardId).catch((error: unknown) => {
       registrationError = error instanceof Error ? error.message : String(error);
       return { branches: [], invalidEntries: [] };
@@ -132,7 +134,8 @@ export async function discoverSlots(
     git.text(repoRoot, ['for-each-ref', '--format=%(refname)', `refs/heads/cards/${cardId}/`]),
     listWorktreeEntries(git, repoRoot),
     slotRootNames(slotRoot),
-    listSlotLockOrdinals(slotRoot)
+    listSlotLockOrdinals(slotRoot),
+    findRemovedSlotCopies(slotRoot)
   ]);
 
   let highest = 0;
@@ -180,7 +183,7 @@ export async function discoverSlots(
     const ordinal = slotOrdinal(cardId, slotBranch(cardId, Number(match[1])));
     if (match[2] === undefined) {
       found(ordinal);
-    } else if ((match[2].startsWith('.deleting-') || match[2].startsWith('.held')) && ordinal !== null) {
+    } else if (match[2].startsWith('.deleting-') && ordinal !== null) {
       reserve(ordinal);
       residue.set(ordinal, [...(residue.get(ordinal) ?? []), join(slotRoot, name)]);
     }
@@ -188,6 +191,8 @@ export async function discoverSlots(
   // Quarantine residue makes its slot a discovered slot: recovery runs under its lock.
   for (const ordinal of residue.keys()) ordinals.add(ordinal);
   for (const ordinal of lockOrdinals) reserve(ordinal);
+  // A new slot never takes the ordinal of a copy its purge has not deleted yet.
+  for (const { ordinal } of copies) reserve(ordinal);
 
   const slots: DiscoveredSlot[] = [];
   for (const ordinal of [...ordinals].sort((left, right) => left - right)) {

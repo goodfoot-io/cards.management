@@ -32,6 +32,7 @@ export function maintenanceReport(cardId: string, result: SlotCleanupResult): Wo
     decisions: result.decisions,
     unknownLocks: result.unknownLocks,
     processesNotInspected: result.processesNotInspected,
+    purge: result.purge,
     ...(result.failure === undefined ? {} : { failure: result.failure })
   };
 }

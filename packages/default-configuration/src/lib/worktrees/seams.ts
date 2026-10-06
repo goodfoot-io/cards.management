@@ -17,6 +17,7 @@ import { provisionSlotCheckout } from '@cards.management/sdk/slot-checkout';
 import {
   findSlotOccupants,
   findSlotResidue,
+  purgeRemovedSlots,
   quarantineSlot,
   recoverSlotResidueLocked,
   removeQuarantinedSlot,
@@ -37,7 +38,7 @@ export type {
 /** Materializes and binds a fresh slot checkout. */
 export type ProvisionSlotCheckout = typeof provisionSlotCheckout;
 
-/** Verified removal, residue recovery and the occupant probe the slot layer drives. */
+/** Verified removal, residue recovery, the occupant probe and the purge of removed copies the slot layer drives. */
 export interface SlotRemoval {
   readonly quarantineSlot: typeof quarantineSlot;
   readonly removeQuarantinedSlot: typeof removeQuarantinedSlot;
@@ -45,6 +46,7 @@ export interface SlotRemoval {
   readonly recoverSlotResidueLocked: typeof recoverSlotResidueLocked;
   readonly stopSlotFsmonitor: typeof stopSlotFsmonitor;
   readonly findSlotOccupants: typeof findSlotOccupants;
+  readonly purgeRemovedSlots: typeof purgeRemovedSlots;
 }
 
 /** The SDK operations the slot layer is bound to. */
@@ -70,6 +72,7 @@ export const defaultSlotSeams: SlotSeams = {
     findSlotResidue,
     recoverSlotResidueLocked,
     stopSlotFsmonitor,
-    findSlotOccupants
+    findSlotOccupants,
+    purgeRemovedSlots
   }
 };

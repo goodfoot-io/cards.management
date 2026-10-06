@@ -19,7 +19,7 @@ import {
   type ProcReader,
   removeQuarantinedSlot
 } from '@cards.management/sdk/worktree-removal';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type AcquiredSlot,
   acquireSlot,
@@ -599,13 +599,13 @@ describe('cleanupCardSlots removal', () => {
     expect(fx.client.registrations.has(slot.branch)).toBe(false);
   });
 
-  it('restores a slot whose held content changes during removal and reports it removal_restored', async () => {
+  it('keeps a removed copy that changed after its removal, reports it on every pass and logs it', async () => {
     await writeFile(join(fx.repoRoot, 'notes.txt'), 'notes\n');
     await fx.git(['add', 'notes.txt']);
     await fx.git(['commit', '-q', '-m', 'notes']);
     const slot = await finishedSlot('exec-1');
     const removal = fx.layer.seams.removal;
-    let wrote = false;
+    let copy: string | null = null;
     const layer: SlotLayer = {
       ...fx.layer,
       seams: {
@@ -615,35 +615,75 @@ describe('cleanupCardSlots removal', () => {
           removeQuarantinedSlot: (target, options) =>
             removal.removeQuarantinedSlot(target, {
               ...options,
-              // The Git marker is taken last, so every other entry is already held: write into the held notes.
-              checkpoint: async (entryPath) => {
-                if (wrote || basename(entryPath) !== '.git') return;
-                const holding = `${target.quarantine}.held`;
-                for (const name of await readdir(holding)) {
-                  if (!/^\d+$/.test(name)) continue;
-                  const held = join(holding, name);
-                  if ((await readFile(held, 'utf8')) !== 'notes\n') continue;
-                  await writeFile(held, 'notes\nlate write\n');
-                  wrote = true;
-                }
+              // Recorded but not yet committed: a late write lands in what becomes the removed copy.
+              checkpoint: async (step) => {
+                if (step === 'recorded') await writeFile(join(target.quarantine, 'notes.txt'), 'notes\nlate write\n');
               }
             })
         }
       }
     };
+    const logger = new Logger();
+    const warn = vi.spyOn(logger, 'warn');
+    const run = (mode: 'preview' | 'cleanup') =>
+      cleanupCardSlots(
+        { ...fx.cleanupContext(), logger, layer },
+        { requester: null, mode, budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+      );
 
-    const result = await cleanupCardSlots(
-      { ...fx.cleanupContext(), layer },
-      { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
-    );
+    const removing = await run('cleanup');
+    expect(decisionOf(removing, slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+    const [name] = (await readdir(join(fx.slotRoot, '.purge'))).filter((entry) => !entry.endsWith('.json'));
+    copy = join(fx.slotRoot, '.purge', name ?? '');
 
-    expect(wrote).toBe(true);
-    expect(decisionOf(result, slot.branch)).toMatchObject({ reason: 'removal_restored', outcome: 'preserved' });
-    expect(await readFile(join(slot.worktreePath, 'notes.txt'), 'utf8')).toBe('notes\nlate write\n');
-    expect((await readdir(fx.slotRoot)).filter((name) => name.includes('.deleting-'))).toEqual([]);
-    expect(await fx.git(['worktree', 'list', '--porcelain'])).toContain(slot.worktreePath);
-    expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
-    expect(fx.client.registrations.has(slot.branch)).toBe(true);
+    // The removing pass's own purge keeps it, and so does every later pass.
+    for (const purge of [removing.purge, (await run('cleanup')).purge]) {
+      expect(purge).toEqual({
+        purged: 0,
+        pending: 0,
+        kept: [
+          {
+            path: copy,
+            detail: expect.stringMatching(
+              new RegExp(
+                `^It changed after its removal: .*notes\\.txt.*\\. Check its contents, then delete ${copy} by hand$`
+              )
+            )
+          }
+        ]
+      });
+    }
+    expect(await readFile(join(copy, 'checkout', 'notes.txt'), 'utf8')).toBe('notes\nlate write\n');
+    expect(warn).toHaveBeenCalledWith('Removed slot copy kept', {
+      cardId: fx.cardId,
+      path: copy,
+      detail: expect.stringContaining('It changed after its removal')
+    });
+    // A preview purges nothing and reports nothing of it.
+    expect((await run('preview')).purge).toEqual({ purged: 0, pending: 0, kept: [] });
+  });
+
+  it('purges an unchanged removed copy after the slot loop of the pass that removed it', async () => {
+    const slot = await finishedSlot('exec-1');
+
+    const result = await pass();
+
+    expect(decisionOf(result, slot.branch)).toMatchObject({ outcome: 'removed' });
+    expect(result.purge).toEqual({ purged: 1, pending: 0, kept: [] });
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+  });
+
+  it('leaves a removed copy pending when the budget left after the slots is within the purge reserve', async () => {
+    const slot = await finishedSlot('exec-1');
+
+    // Every slot starts within this budget, but nothing remains for the purge once the 5 s reserve is set aside.
+    const result = await pass({ budgetMs: 4_000 });
+
+    expect(decisionOf(result, slot.branch)).toMatchObject({ outcome: 'removed' });
+    expect(result.purge).toEqual({ purged: 0, pending: 1, kept: [] });
+    expect((await readdir(join(fx.slotRoot, '.purge'))).length).toBeGreaterThan(0);
+    // The next pass, with budget to spare, deletes it.
+    expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [] });
   });
 
   it('recovers residue under the lock', async () => {
@@ -724,6 +764,7 @@ describe('cleanupCardSlots failures and budget', () => {
       decisions: [],
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       processesNotInspected: 0,
+      purge: { purged: 0, pending: 0, kept: [] },
       ok: true
     });
   });

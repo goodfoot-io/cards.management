@@ -13,9 +13,10 @@ import type {
   WorktreeCleanupDecision,
   WorktreeCleanupReason,
   WorktreeMaintenanceStageFailure,
+  WorktreePurgeSummary,
   WorktreeUnknownLocks
 } from '@cards.management/sdk';
-import { resolveMainRepoRoot, resolveSlotRoot } from '@cards.management/sdk/cards-config';
+import { resolveMainRepoRoot, resolveSlotNamespace, resolveSlotRoot } from '@cards.management/sdk/cards-config';
 import { clearsCardDeletion } from '@cards.management/sdk/protocol';
 import {
   createSlotJudgeContext,
@@ -28,7 +29,13 @@ import {
   slotLockPids,
   withSlotLock
 } from '@cards.management/sdk/slot-lock';
-import { processesNotInspected, type SlotOccupantProbe, slotOccupied } from '@cards.management/sdk/worktree-removal';
+import {
+  processesNotInspected,
+  type SlotOccupantProbe,
+  type SlotResidueLocker,
+  slotOccupied,
+  summarizeRemovedSlotPurge
+} from '@cards.management/sdk/worktree-removal';
 import type { SlotClient } from './acquire.js';
 import { judgeUsability, pathExists, refOid, samePath } from './checkout.js';
 import { type DiscoveredSlot, discoverSlots, type SlotInventory, type SlotPlace } from './discovery.js';
@@ -43,6 +50,12 @@ export type SlotCleanupMode = 'preview' | 'cleanup' | 'prepare-delete';
 
 /** Budget of an in-handler start or end pass; maintenance passes take theirs from the command input. */
 export const SLOT_CLEANUP_PASS_BUDGET_MS = 60_000;
+
+/** Part of a pass's budget the purge of removed copies leaves for reporting. */
+const PURGE_RESERVE_MS = 5_000;
+
+/** What a preview, which purges nothing, reports for the purge. */
+const NO_PURGE: WorktreePurgeSummary = { purged: 0, pending: 0, kept: [] };
 
 /** Budget of a pass's batched identity read, and of its one retry; cleanup is off the launch path. */
 const CLEANUP_JUDGE_TIMEOUT_MS = 15_000;
@@ -90,6 +103,12 @@ export interface SlotCleanupResult {
    * report and log, never to a slot's detail.
    */
   readonly processesNotInspected: number;
+  /**
+   * The purge, after the slots, of every removed slot copy the repository's
+   * earlier passes left, deleted cards included; {@link NO_PURGE} in a
+   * preview or when the pass stopped before it. It plays no part in `ok`.
+   */
+  readonly purge: WorktreePurgeSummary;
   /**
    * Whether the pass met its mode's bar: for `prepare-delete`, the SDK's
    * `clearsCardDeletion` (no stage failed, no lock unknown, every slot
@@ -250,6 +269,7 @@ export async function cleanupCardSlots(
   const decisions: WorktreeCleanupDecision[] = [];
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
   let uninspected = 0;
+  let purge = NO_PURGE;
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
     const ok =
@@ -264,12 +284,14 @@ export async function cleanupCardSlots(
       decisions: decisions.length,
       unknownLocks,
       processesNotInspected: uninspected,
+      purge: { purged: purge.purged, pending: purge.pending, kept: purge.kept.length },
       ...(failure === undefined ? {} : { failure })
     });
     return {
       decisions,
       unknownLocks,
       processesNotInspected: uninspected,
+      purge,
       ok,
       ...(failure === undefined ? {} : { failure })
     };
@@ -643,6 +665,30 @@ export async function cleanupCardSlots(
       }
     } catch (error) {
       record(slot, 'cleanup_failed', describe(error), 'failed');
+    }
+  }
+  if (mode !== 'preview') {
+    // Copies are deleted a pass after their removal, so a slot removed above is never purged in the same pass.
+    const lockerFor =
+      (root: string): SlotResidueLocker =>
+      (ordinal, purpose, fn) =>
+        withSlotLock(
+          root,
+          ordinal,
+          purpose,
+          { executionId: context.executionId, cardId, context: judge, ...environment },
+          fn
+        );
+    try {
+      const outcomes = await removal.purgeRemovedSlots(resolveSlotNamespace(repoRoot), lockerFor, {
+        repoRoot,
+        deadline: deadline - PURGE_RESERVE_MS
+      });
+      for (const outcome of outcomes) uninspected = Math.max(uninspected, outcome.processesNotInspected);
+      purge = summarizeRemovedSlotPurge(outcomes);
+      for (const { path, detail } of purge.kept) logger.warn('Removed slot copy kept', { cardId, path, detail });
+    } catch (error) {
+      logger.error('Purge of removed slot copies failed', { cardId, error: describe(error) });
     }
   }
   return conclude();

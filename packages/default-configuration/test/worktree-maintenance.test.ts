@@ -121,7 +121,8 @@ describe('worktreeMaintenance preview', () => {
       decisions: [expect.objectContaining({ branch: slot.branch, reason: 'eligible', outcome: 'eligible' })],
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       // The host's real processes decide how many the probe could not inspect.
-      processesNotInspected: expect.any(Number)
+      processesNotInspected: expect.any(Number),
+      purge: { purged: 0, pending: 0, kept: [] }
     });
     expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
@@ -222,7 +223,8 @@ describe('worktreeMaintenance prepare-delete', () => {
       decisions: [],
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       // No slot, so no probe ran.
-      processesNotInspected: 0
+      processesNotInspected: 0,
+      purge: { purged: 0, pending: 0, kept: [] }
     });
   });
 
