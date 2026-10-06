@@ -22,8 +22,8 @@ const GITLINK_MODE = '160000';
 export type SubmoduleJudgement =
   /**
    * Nothing a removal would lose. `repositories` lists the module
-   * repositories under the slot's git directory, which git will not move or
-   * remove a worktree past; empty when there are none.
+   * repositories under the slot's git directory, which the SDK's quarantine
+   * sets aside and deletes with the checkout; empty when there are none.
    */
   | { readonly status: 'clean'; readonly repositories: readonly string[] }
   /** Something a removal would lose, what it is, and how to resolve it. */
@@ -36,7 +36,7 @@ type Finding = { readonly detail: string; readonly step: string };
  * Judges the submodules of a slot checkout.
  * @param git - Slot git.
  * @param checkout - The slot's checkout, which exists.
- * @returns `clean` with the module repositories to set aside, or `kept` with the first finding.
+ * @returns `clean` with the module repositories the removal sets aside, or `kept` with the first finding.
  */
 export async function judgeSubmodules(git: SlotGit, checkout: string): Promise<SubmoduleJudgement> {
   const gitDir = (await git.text(checkout, ['rev-parse', '--absolute-git-dir'])).trim();

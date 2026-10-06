@@ -425,6 +425,7 @@ export async function cleanupCardSlots(
       return refusal('unmerged_commits', slot, `${slot.branch} has commits not in ${parent}`, parent);
     if (merged.exitCode !== 0 || merged.timedOut || merged.aborted)
       throw new Error(`git merge-base --is-ancestor failed: ${merged.stderr.trim()}`);
+    let submodulesInitialized = false;
     if (slot.directoryExists) {
       // Submodules are judged first, so the slot's own status can ignore them.
       const submodules = await judgeSubmodules(git, slot.path);
@@ -438,25 +439,19 @@ export async function cleanupCardSlots(
       ]);
       if (status.trim() !== '')
         return refusal('uncommitted_changes', slot, `${slot.path} has uncommitted or untracked changes`, parent);
-      if (submodules.repositories.length > 0)
-        return refusal(
-          'submodules',
-          slot,
-          `${slot.path} has initialized submodules, which are clean and pushed, but git cannot remove a worktree that holds their repositories until the SDK sets them aside`,
-          parent,
-          `awaiting set-aside; ${RUN_AGAIN}`
-        );
+      submodulesInitialized = submodules.repositories.length > 0;
     }
     const merged_ =
       slot.registration === null
         ? 'unregistered slot ref or checkout is clean and merged into the card parent'
         : `clean and merged into ${parent}`;
-    return {
-      reason: 'eligible',
-      oid: slot.oid,
-      // Removal deletes git-ignored content (.env files, nested repositories, build output) with the checkout.
-      detail: slot.directoryExists ? `${merged_}; git-ignored files in ${slot.path} are deleted with it` : merged_
-    };
+    if (!slot.directoryExists) return { reason: 'eligible', oid: slot.oid, detail: merged_ };
+    // Removal deletes git-ignored content (.env files, nested repositories, build output) with the checkout,
+    // and the SDK sets initialized submodules aside to be deleted with it.
+    const deleted = submodulesInitialized
+      ? `git-ignored files and the submodule checkouts in ${slot.path} are deleted with it`
+      : `git-ignored files in ${slot.path} are deleted with it`;
+    return { reason: 'eligible', oid: slot.oid, detail: `${merged_}; ${deleted}` };
   };
 
   /**

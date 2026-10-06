@@ -16,7 +16,13 @@ import { isProcessAbsent } from '@cards.management/sdk/process-identity';
 import { acquireSlotLock, readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import { captureOriginalHooksPath } from '@cards.management/sdk/worktree';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { type AcquiredSlot, acquireSlot, describeSkippedSlots } from '../src/lib/worktrees/index.js';
+import {
+  type AcquiredSlot,
+  acquireSlot,
+  cleanupCardSlots,
+  describeSkippedSlots,
+  SLOT_CLEANUP_PASS_BUDGET_MS
+} from '../src/lib/worktrees/index.js';
 import { abandonSlotLock, createSlotFixture, type SlotFixture } from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
@@ -281,6 +287,23 @@ describe('acquireSlot', () => {
 
     expect(slot.ordinal).toBe(8);
     expect(await oidOf('cards/card-1/3')).toBe(unmerged);
+  });
+
+  it('never creates a slot at the ordinal of a removed copy still waiting for its purge', async () => {
+    // A copy whose ordinal no ref, entry, directory or lock names: only the copy reserves it.
+    await mkdir(join(fx.slotRoot, '.purge', `3.${randomUUID()}`, 'checkout'), { recursive: true });
+
+    const slot = await acquire('exec-1');
+
+    expect(slot.ordinal).toBe(4);
+    // `.purge` is neither a slot nor residue: the card's only slot is the one just created.
+    await slot.lock.release();
+    const { decisions } = await cleanupCardSlots(fx.cleanupContext(), {
+      requester: null,
+      mode: 'preview',
+      budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS
+    });
+    expect(decisions.map((decision) => decision.branch)).toEqual([slot.branch]);
   });
 
   it('leaves a ref created behind its back untouched and moves to the next ordinal (create-only)', async () => {

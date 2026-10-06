@@ -2,7 +2,7 @@
  * Witness of the submodule rule: a real workspace whose `main` records a
  * submodule that itself records a nested one, both cloned from bare remotes.
  * Each way a removal would lose submodule work keeps the slot with a remedy,
- * and running that remedy clears it.
+ * and running that remedy lets the next pass remove it, submodules included.
  *
  * @summary Slot cleanup submodule rule witness tests
  *
@@ -10,7 +10,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readdir, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -123,6 +123,18 @@ function decisionOf(result: SlotCleanupResult, slot: AcquiredSlot): WorktreeClea
 }
 
 /**
+ * Whether a path exists.
+ * @param path - The path tested.
+ * @returns True when it exists.
+ */
+async function exists(path: string): Promise<boolean> {
+  return lstat(path).then(
+    () => true,
+    () => false
+  );
+}
+
+/**
  * Runs every git command a detail names, as the user would.
  * @param detail - The decision's detail, whose backticked git commands are run.
  * @returns Each git command line, in the order run.
@@ -133,12 +145,22 @@ async function runStatedCommands(detail: string): Promise<string[]> {
   return commands;
 }
 
-/** What a slot whose initialized submodules are clean and pushed gets until the SDK sets them aside. */
-const AWAITING_SET_ASIDE = {
-  reason: 'submodules',
-  outcome: 'preserved',
-  detail: expect.stringContaining('awaiting set-aside')
-};
+/**
+ * Checks a slot is gone with everything of it: ref, checkout, git's worktree
+ * record with its module repositories, and the removed copy, which the same
+ * pass purges. The main repository's submodule configuration stays.
+ * @param slot - The removed slot.
+ */
+async function expectGone(slot: AcquiredSlot): Promise<void> {
+  expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
+  expect(await fx.git(['worktree', 'list', '--porcelain'])).not.toContain(slot.worktreePath);
+  expect(await exists(slot.worktreePath)).toBe(false);
+  expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+  expect(await fx.git(['config', 'submodule.sub.url'])).toBe(join(remotes, 'sub.git'));
+}
+
+/** A removed slot's decision. */
+const REMOVED = { reason: 'eligible', outcome: 'removed' };
 
 describe('cleanupCardSlots submodules', () => {
   it(
@@ -154,13 +176,18 @@ describe('cleanupCardSlots submodules', () => {
   );
 
   it(
-    'keeps a slot whose initialized submodules are clean and pushed until they can be set aside',
+    'removes a slot whose initialized submodules are clean and pushed, with their checkouts',
     async () => {
       const slot = await finishedSlot();
       await initialize(slot);
 
-      expect(decisionOf(await pass('preview'), slot)).toMatchObject(AWAITING_SET_ASIDE);
-      expect(decisionOf(await pass(), slot)).toMatchObject(AWAITING_SET_ASIDE);
+      const preview = decisionOf(await pass('preview'), slot);
+      expect(preview).toMatchObject({ reason: 'eligible', outcome: 'eligible' });
+      expect(preview.detail).toContain(
+        `git-ignored files and the submodule checkouts in ${slot.worktreePath} are deleted with it`
+      );
+      expect(decisionOf(await pass(), slot)).toMatchObject(REMOVED);
+      await expectGone(slot);
     },
     GIT_HEAVY_TIMEOUT_MS
   );
@@ -185,8 +212,7 @@ describe('cleanupCardSlots submodules', () => {
         await fx.git(['checkout', '-q', '--detach', 'HEAD~'], nested);
         const commit = (await fx.git(['rev-parse', 'side'], nested)).slice(0, 12);
         return [`sub/nested has commit ${commit}`, 'refs/heads/side', `\`git -C ${nested} push origin side\``];
-      },
-      after: 'awaiting'
+      }
     },
     {
       finding: 'a stash',
@@ -196,8 +222,7 @@ describe('cleanupCardSlots submodules', () => {
         await writeFile(join(sub, 'file.txt'), 'edited');
         await fx.git(['stash', '-q'], sub);
         return ['sub has stashed changes', `\`git -C ${sub} stash clear\``];
-      },
-      after: 'awaiting'
+      }
     },
     {
       finding: 'a change the parent is configured to ignore',
@@ -206,8 +231,7 @@ describe('cleanupCardSlots submodules', () => {
         await fx.git(['config', 'submodule.sub.ignore', 'all'], slot.worktreePath);
         await writeFile(join(slot.worktreePath, 'sub', 'file.txt'), 'edited');
         return ['sub has uncommitted or untracked changes'];
-      },
-      after: 'awaiting'
+      }
     },
     {
       finding: 'a checkout off the recorded commit',
@@ -215,8 +239,7 @@ describe('cleanupCardSlots submodules', () => {
       arrange: async (slot: AcquiredSlot) => {
         await fx.git(['commit', '-q', '--allow-empty', '-m', 'moved'], join(slot.worktreePath, 'sub'));
         return ['sub is at', 'checkout --detach'];
-      },
-      after: 'awaiting'
+      }
     },
     {
       finding: 'a repository kept inside the checkout',
@@ -228,8 +251,7 @@ describe('cleanupCardSlots submodules', () => {
           slot.worktreePath
         );
         return ['sub keeps its repository inside its checkout', 'submodule absorbgitdirs -- sub'];
-      },
-      after: 'awaiting'
+      }
     },
     {
       finding: 'a repository kept inside the checkout over an absorbed one',
@@ -239,8 +261,7 @@ describe('cleanupCardSlots submodules', () => {
         await fx.git([...FILE_PROTOCOL, 'clone', '-q', join(remotes, 'sub.git'), 'sub'], slot.worktreePath);
         return ['sub keeps its repository inside its checkout', 'then empty that directory'];
       },
-      remedy: emptySub,
-      after: 'awaiting'
+      remedy: emptySub
     },
     {
       finding: 'untracked files in an uninitialized submodule directory',
@@ -251,12 +272,11 @@ describe('cleanupCardSlots submodules', () => {
       },
       remedy: async (slot: AcquiredSlot) => {
         await rename(join(slot.worktreePath, 'sub', 'notes.txt'), join(fx.scratch, 'notes.txt'));
-      },
-      after: 'removed'
+      }
     }
   ])(
     'keeps a slot with $finding, and its remedy clears it',
-    async ({ initialized, arrange, remedy, after }) => {
+    async ({ initialized, arrange, remedy }) => {
       const slot = await finishedSlot();
       if (initialized) await initialize(slot);
       const expected = await arrange(slot);
@@ -266,15 +286,13 @@ describe('cleanupCardSlots submodules', () => {
         expect(decision).toMatchObject({ reason: 'submodules', outcome: 'preserved' });
         for (const text of expected) expect(decision.detail).toContain(text);
         expect(decision.detail).toMatch(/run Clean Up Worktrees again$/);
-        expect(decision.detail).not.toContain('awaiting set-aside');
       }
 
       await runStatedCommands(decisionOf(await pass('preview'), slot).detail);
       await remedy?.(slot);
 
-      expect(decisionOf(await pass(), slot)).toMatchObject(
-        after === 'removed' ? { reason: 'eligible', outcome: 'removed' } : AWAITING_SET_ASIDE
-      );
+      expect(decisionOf(await pass(), slot)).toMatchObject(REMOVED);
+      await expectGone(slot);
     },
     GIT_HEAVY_TIMEOUT_MS
   );
@@ -296,7 +314,8 @@ describe('cleanupCardSlots submodules', () => {
       expect(decision.detail).toContain('modules/sub has stashed changes');
       expect(decision.detail).toContain('update-ref -d refs/stash');
       await runStatedCommands(decision.detail);
-      expect(decisionOf(await pass(), slot)).toMatchObject(AWAITING_SET_ASIDE);
+      expect(decisionOf(await pass(), slot)).toMatchObject(REMOVED);
+      await expectGone(slot);
     },
     GIT_HEAVY_TIMEOUT_MS
   );
