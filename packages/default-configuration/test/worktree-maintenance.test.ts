@@ -122,7 +122,7 @@ describe('worktreeMaintenance preview', () => {
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       // The host's real processes decide how many the probe could not inspect.
       processesNotInspected: expect.any(Number),
-      purge: { purged: 0, pending: 0, kept: [] }
+      purge: { purged: 0, pending: 0, kept: [], failure: null }
     });
     expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
@@ -224,7 +224,7 @@ describe('worktreeMaintenance prepare-delete', () => {
       unknownLocks: { count: 0, unverifiedOwners: 0 },
       // No slot, so no probe ran.
       processesNotInspected: 0,
-      purge: { purged: 0, pending: 0, kept: [] }
+      purge: { purged: 0, pending: 0, kept: [], failure: null }
     });
   });
 

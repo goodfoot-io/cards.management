@@ -147,7 +147,7 @@ async function runStatedCommands(detail: string): Promise<string[]> {
 
 /**
  * Checks a slot is gone with everything of it: ref, checkout, git's worktree
- * record with its module repositories, and the removed copy, which the same
+ * record with its module repositories, and the removed copy, which the next
  * pass purges. The main repository's submodule configuration stays.
  * @param slot - The removed slot.
  */
@@ -155,6 +155,7 @@ async function expectGone(slot: AcquiredSlot): Promise<void> {
   expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
   expect(await fx.git(['worktree', 'list', '--porcelain'])).not.toContain(slot.worktreePath);
   expect(await exists(slot.worktreePath)).toBe(false);
+  expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
   expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
   expect(await fx.git(['config', 'submodule.sub.url'])).toBe(join(remotes, 'sub.git'));
 }

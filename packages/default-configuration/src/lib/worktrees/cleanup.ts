@@ -55,7 +55,7 @@ export const SLOT_CLEANUP_PASS_BUDGET_MS = 60_000;
 const PURGE_RESERVE_MS = 5_000;
 
 /** What a preview, which purges nothing, reports for the purge. */
-const NO_PURGE: WorktreePurgeSummary = { purged: 0, pending: 0, kept: [] };
+const NO_PURGE: WorktreePurgeSummary = { purged: 0, pending: 0, kept: [], failure: null };
 
 /** Budget of a pass's batched identity read, and of its one retry; cleanup is off the launch path. */
 const CLEANUP_JUDGE_TIMEOUT_MS = 15_000;
@@ -105,8 +105,9 @@ export interface SlotCleanupResult {
   readonly processesNotInspected: number;
   /**
    * The purge, after the slots, of every removed slot copy the repository's
-   * earlier passes left, deleted cards included; {@link NO_PURGE} in a
-   * preview or when the pass stopped before it. It plays no part in `ok`.
+   * earlier passes left, deleted cards included, with why it stopped early if
+   * it did; {@link NO_PURGE} in a preview or when the pass stopped before it.
+   * It plays no part in `ok`.
    */
   readonly purge: WorktreePurgeSummary;
   /**
@@ -270,6 +271,8 @@ export async function cleanupCardSlots(
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
   let uninspected = 0;
   let purge = NO_PURGE;
+  /** Copies this pass's removals made, left for the next pass's purge. */
+  const removedCopies = new Set<string>();
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
     const ok =
@@ -284,7 +287,7 @@ export async function cleanupCardSlots(
       decisions: decisions.length,
       unknownLocks,
       processesNotInspected: uninspected,
-      purge: { purged: purge.purged, pending: purge.pending, kept: purge.kept.length },
+      purge: { purged: purge.purged, pending: purge.pending, kept: purge.kept.length, failure: purge.failure },
       ...(failure === undefined ? {} : { failure })
     });
     return {
@@ -526,6 +529,7 @@ export async function cleanupCardSlots(
         removalGit
       );
       uninspected = Math.max(uninspected, removed.processesNotInspected);
+      if (removed.status === 'removed') removedCopies.add(removed.copy);
       if (removed.status === 'refused')
         // The quarantined checkout is probed again, so a process that entered after the probe above refuses too.
         return removed.reason === 'in_use'
@@ -663,7 +667,7 @@ export async function cleanupCardSlots(
     }
   }
   if (mode !== 'preview') {
-    // Copies are deleted a pass after their removal, so a slot removed above is never purged in the same pass.
+    // Copies are deleted a pass after their removal, so the copies of slots removed above are skipped.
     const lockerFor =
       (root: string): SlotResidueLocker =>
       (ordinal, purpose, fn) =>
@@ -674,17 +678,15 @@ export async function cleanupCardSlots(
           { executionId: context.executionId, cardId, context: judge, ...environment },
           fn
         );
-    try {
-      const outcomes = await removal.purgeRemovedSlots(resolveSlotNamespace(repoRoot), lockerFor, {
-        repoRoot,
-        deadline: deadline - PURGE_RESERVE_MS
-      });
-      for (const outcome of outcomes) uninspected = Math.max(uninspected, outcome.processesNotInspected);
-      purge = summarizeRemovedSlotPurge(outcomes);
-      for (const { path, detail } of purge.kept) logger.warn('Removed slot copy kept', { cardId, path, detail });
-    } catch (error) {
-      logger.error('Purge of removed slot copies failed', { cardId, error: describe(error) });
-    }
+    const result = await removal.purgeRemovedSlots(resolveSlotNamespace(repoRoot), lockerFor, {
+      repoRoot,
+      deadline: deadline - PURGE_RESERVE_MS,
+      skip: removedCopies
+    });
+    for (const outcome of result.outcomes) uninspected = Math.max(uninspected, outcome.processesNotInspected);
+    purge = summarizeRemovedSlotPurge(result);
+    for (const { path, detail } of purge.kept) logger.warn('Removed slot copy kept', { cardId, path, detail });
+    if (purge.failure !== null) logger.error('Purge of removed slot copies failed', { cardId, error: purge.failure });
   }
   return conclude();
 }
