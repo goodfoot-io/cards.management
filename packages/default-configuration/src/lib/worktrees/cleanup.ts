@@ -36,6 +36,7 @@ import type { CreationContext } from './intent.js';
 import { defaultSlotLayer, type SlotLayer } from './layer.js';
 import { recoverSlot } from './recovery.js';
 import { unregisterSlot } from './registration.js';
+import { judgeSubmodules } from './submodules.js';
 
 /** What a pass does: report only, remove, or remove and require that nothing remains. */
 export type SlotCleanupMode = 'preview' | 'cleanup' | 'prepare-delete';
@@ -208,7 +209,7 @@ function nextStep(
     case 'in_use':
       return `stop the processes working in ${slot.path} or wait for them to exit; ${RUN_AGAIN}`;
     case 'submodules':
-      return `cleanup cannot prove a checkout with submodules clean, so while ${target} has submodules no pass removes this slot; if they were added on ${slot.branch} only, ${abandon}; ${RUN_AGAIN}`;
+      return `resolve what the detail names inside the submodule, or ${abandon}; ${RUN_AGAIN}`;
   }
 }
 
@@ -403,11 +404,26 @@ export async function cleanupCardSlots(
     if (merged.exitCode !== 0 || merged.timedOut || merged.aborted)
       throw new Error(`git merge-base --is-ancestor failed: ${merged.stderr.trim()}`);
     if (slot.directoryExists) {
-      if ((await git.text(slot.path, ['status', '--porcelain', '--untracked-files=all'])).trim() !== '')
+      // Submodules are judged first, so the slot's own status can ignore them.
+      const submodules = await judgeSubmodules(git, slot.path);
+      if (submodules.status === 'kept')
+        return refusal('submodules', slot, submodules.detail, parent, `${submodules.step}; ${RUN_AGAIN}`);
+      const status = await git.text(slot.path, [
+        'status',
+        '--porcelain',
+        '--untracked-files=all',
+        '--ignore-submodules=all'
+      ]);
+      if (status.trim() !== '')
         return refusal('uncommitted_changes', slot, `${slot.path} has uncommitted or untracked changes`, parent);
-      const staged = await git.text(slot.path, ['ls-files', '--stage']);
-      if (staged.split('\n').some((line) => line.startsWith('160000 ')))
-        return refusal('submodules', slot, `${slot.path} contains submodules`, parent);
+      if (submodules.repositories.length > 0)
+        return refusal(
+          'submodules',
+          slot,
+          `${slot.path} has initialized submodules, which are clean and pushed, but git cannot remove a worktree that holds their repositories until the SDK sets them aside`,
+          parent,
+          `awaiting set-aside; ${RUN_AGAIN}`
+        );
     }
     const merged_ =
       slot.registration === null

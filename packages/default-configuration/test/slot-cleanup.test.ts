@@ -366,14 +366,12 @@ describe('cleanupCardSlots next steps', () => {
         const head = await fx.git(['rev-parse', 'HEAD'], slot.worktreePath);
         await fx.git(['update-index', '--add', '--cacheinfo', `160000,${head},sub`], slot.worktreePath);
         await fx.git(['commit', '-q', '-m', 'gitlink'], slot.worktreePath);
-        // An uninitialized submodule is an empty directory; without it, status reports the gitlink deleted.
+        // An uninitialized submodule's directory must be empty; git status never shows what it holds.
         await mkdir(join(slot.worktreePath, 'sub'));
+        await writeFile(join(slot.worktreePath, 'sub', 'notes.txt'), 'notes');
         await fx.git(['merge', '-q', '--ff-only', slot.branch]);
       },
-      step: (slot: AcquiredSlot) => [
-        'while main has submodules no pass removes this slot',
-        `\`git -C ${slot.worktreePath} reset --hard main\``
-      ]
+      step: (slot: AcquiredSlot) => [`move the files in ${join(slot.worktreePath, 'sub')} out of the slot`]
     }
   ])('names the next step for $reason', async ({ reason, arrange, step }) => {
     const slot = await finishedSlot('exec-1');
