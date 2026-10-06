@@ -63,6 +63,8 @@ export interface SlotRemovalOptions {
   readonly witness?: CheckoutWitness;
   /** Timing seam passed to verified removal. */
   readonly checkpoint?: (entryPath: string) => Promise<void>;
+  /** Overrides of the occupant probe the quarantined checkout must pass. */
+  readonly occupants?: OccupantProbeOptions;
 }
 
 /** A slot git call that exited non-zero or timed out. */
@@ -165,7 +167,7 @@ export type SlotRemovalOutcome =
   | { readonly status: 'removed' }
   | {
       readonly status: 'refused';
-      readonly reason: 'uncommitted_changes' | 'removal_blocked' | 'removal_restored';
+      readonly reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'removal_restored';
       readonly detail: string;
       /** Where the checkout now is: the slot path after a move-back, otherwise the quarantine. */
       readonly checkoutPath: string;
@@ -202,8 +204,10 @@ export async function quarantineSlot(
 
 /**
  * Deletes a quarantined slot checkout under its lock, then drops git's record
- * of it. A refusal restores the checkout and moves it back only while the slot
- * path is absent; otherwise it stays at the quarantine as `removal_restored`.
+ * of it. The cleanliness proof runs on the quarantine and includes the occupant
+ * probe, so a process that entered after the caller's own probe refuses as
+ * `in_use`. A refusal restores the checkout and moves it back only while the
+ * slot path is absent; otherwise it stays at the quarantine as `removal_restored`.
  * @param target - The repository, the slot path, its quarantine and the held lock.
  * @param target.repoRoot - Repository owning the checkout's administrative metadata.
  * @param target.slotPath - Path the checkout returns to on refusal.
@@ -236,6 +240,9 @@ export async function removeQuarantinedSlot(
             .filter((line) => line.length > 0)
             .map((line) => line.slice(3));
           if (changed.length > 0) throw new CheckoutContentChangedError('Checkout has uncommitted changes', changed);
+          // A process that entered between the caller's probe and the move is inside the quarantine now.
+          const probe = await findSlotOccupants(quarantine, options.occupants);
+          if (slotOccupied(probe)) throw new SlotOccupiedError(probe);
         },
         requireCurrent: () => requireCurrentSlotLock(lock),
         ...(options.checkpoint === undefined ? {} : { checkpoint: options.checkpoint }),
@@ -243,8 +250,9 @@ export async function removeQuarantinedSlot(
       }
     );
   } catch (error) {
-    let reason: 'uncommitted_changes' | 'removal_blocked' | 'removal_restored';
+    let reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'removal_restored';
     if (error instanceof CheckoutContentChangedError) reason = 'uncommitted_changes';
+    else if (error instanceof SlotOccupiedError || error instanceof OccupantProbeError) reason = 'in_use';
     else if (error instanceof CheckoutRemovalBlockedError) reason = 'removal_blocked';
     else if (error instanceof CheckoutRestoredError) reason = 'removal_restored';
     else throw error;
@@ -491,7 +499,7 @@ export async function recoverSlotResidue(
 // Occupants
 // ============================================================================
 
-/** A process whose cwd or an open file is inside the slot. */
+/** A process whose cwd, root or an open file is inside the slot. */
 export interface SlotOccupant {
   readonly pid: number;
   readonly command: string;
@@ -500,8 +508,58 @@ export interface SlotOccupant {
 /** Result of {@link findSlotOccupants}. */
 export interface SlotOccupantProbe {
   readonly occupants: readonly SlotOccupant[];
-  /** Processes skipped because the OS refused to show them (`EACCES`/`EPERM`). */
-  readonly unprobed: number;
+  /**
+   * Processes of the prober's own user (or of any user when the prober is root)
+   * whose cwd, root or descriptors the OS would not show. Each blocks removal,
+   * since nothing proves it is outside the slot.
+   */
+  readonly uninspectable: readonly SlotOccupant[];
+  /**
+   * Processes owned by other users, which an unprivileged prober cannot inspect.
+   * They never block removal: a slot can be removed from under another user's
+   * process. Reported as a count so callers can say so once.
+   */
+  readonly otherUsers: number;
+}
+
+/**
+ * Whether a probe leaves the slot in use: an occupant, or an own process it could not inspect.
+ * @param probe - The probe result.
+ * @returns True when removal must not proceed.
+ */
+export function slotOccupied(probe: SlotOccupantProbe): boolean {
+  return probe.occupants.length > 0 || probe.uninspectable.length > 0;
+}
+
+/**
+ * Describes why a probe leaves a slot in use.
+ * @param probe - A probe for which {@link slotOccupied} holds.
+ * @returns The occupants and uninspectable processes, by command and pid.
+ */
+export function describeSlotOccupancy(probe: SlotOccupantProbe): string {
+  const name = (process: SlotOccupant): string =>
+    `${process.command === '' ? 'process' : process.command} (pid ${String(process.pid)})`;
+  const parts: string[] = [];
+  if (probe.occupants.length > 0) parts.push(`in use by ${probe.occupants.map(name).join(', ')}`);
+  if (probe.uninspectable.length > 0)
+    parts.push(
+      `your own processes could not be inspected, so they may be inside it: ${probe.uninspectable.map(name).join(', ')}`
+    );
+  return parts.join('; ');
+}
+
+/** A quarantined slot's occupant probe found it in use, so removal was refused. */
+export class SlotOccupiedError extends Error {
+  readonly probe: SlotOccupantProbe;
+  /**
+   * Records the probe that refused removal.
+   * @param probe - A probe for which {@link slotOccupied} holds.
+   */
+  constructor(probe: SlotOccupantProbe) {
+    super(`The slot is ${describeSlotOccupancy(probe)}`);
+    this.name = 'SlotOccupiedError';
+    this.probe = probe;
+  }
 }
 
 /** The probe could not decide whether the slot is occupied. */
@@ -527,7 +585,9 @@ export interface ProcReader {
 export interface OccupantProbeOptions {
   readonly platform?: NodeJS.Platform;
   readonly proc?: ProcReader;
-  /** Runs `lsof` on macOS. */
+  /** The prober's effective uid; defaults to `process.geteuid()`. */
+  readonly uid?: number;
+  /** Runs `lsof` and `ps` on macOS. */
   readonly runCommand?: (
     file: string,
     args: readonly string[],
@@ -535,10 +595,12 @@ export interface OccupantProbeOptions {
   ) => Promise<BoundedCommandResult>;
   /** The `lsof` executable; defaults to `lsof`. */
   readonly lsof?: string;
+  /** The `ps` executable; defaults to `ps`. */
+  readonly ps?: string;
   readonly timeoutMs?: number;
 }
 
-/** Default deadline of the macOS `lsof` probe. */
+/** Default deadline of each macOS probe command. */
 const OCCUPANT_PROBE_TIMEOUT_MS = 10_000;
 
 const HOST_PROC: ProcReader = {
@@ -547,14 +609,31 @@ const HOST_PROC: ProcReader = {
   readFile: (path) => nodeFs.readFile(path, 'utf8')
 };
 
+const NO_OCCUPANTS: SlotOccupantProbe = { occupants: [], uninspectable: [], otherUsers: 0 };
+
 /**
- * Walks `/proc` for processes whose cwd or an open descriptor resolves inside the slot.
+ * The prober's effective uid.
+ * @param options - The probe options.
+ * @returns The uid probed processes are compared with.
+ * @throws {OccupantProbeError} When the platform reports no uid.
+ */
+const proberUid = (options: OccupantProbeOptions): number => {
+  const uid = options.uid ?? process.geteuid?.();
+  if (uid === undefined) throw new OccupantProbeError('the prober has no effective uid');
+  return uid;
+};
+
+/**
+ * Walks `/proc` for processes whose cwd, root or an open descriptor resolves inside the slot.
+ * A process the kernel will not show is attributed by the effective uid in its world-readable
+ * `status`: another user's is counted, the prober's own (or any, when the prober is root) blocks.
  * @param slot - Real path of the slot.
  * @param proc - The `/proc` reader.
- * @returns The occupants and the count of processes the kernel would not show.
+ * @param uid - The prober's effective uid.
+ * @returns The occupants, the own processes it could not inspect, and the other users' count.
  * @throws {OccupantProbeError} When `/proc` is unreadable or a read fails unexpectedly.
  */
-const probeProc = async (slot: string, proc: ProcReader): Promise<SlotOccupantProbe> => {
+const probeProc = async (slot: string, proc: ProcReader, uid: number): Promise<SlotOccupantProbe> => {
   const inside = (link: string): boolean => {
     const path = link.endsWith(' (deleted)') ? link.slice(0, -' (deleted)'.length) : link;
     return path === slot || path.startsWith(`${slot}${sep}`);
@@ -566,11 +645,50 @@ const probeProc = async (slot: string, proc: ProcReader): Promise<SlotOccupantPr
     throw new OccupantProbeError(`/proc is unreadable: ${codeOf(error) ?? String(error)}`);
   }
   const occupants: SlotOccupant[] = [];
-  let unprobed = 0;
+  const uninspectable: SlotOccupant[] = [];
+  let otherUsers = 0;
+  const unexpected = (path: string, error: unknown): OccupantProbeError =>
+    new OccupantProbeError(`Reading ${path} failed: ${codeOf(error) ?? String(error)}`);
+  const commandOf = async (base: string): Promise<string> => {
+    try {
+      return (await proc.readFile(`${base}/comm`)).trim();
+    } catch (error) {
+      const code = codeOf(error);
+      if (code === 'ENOENT' || code === 'ESRCH' || code === 'EACCES' || code === 'EPERM') return '';
+      throw unexpected(`${base}/comm`, error);
+    }
+  };
+  /**
+   * Attributes a process whose links the kernel refused; returns without effect if it exited.
+   * @param pid - The hidden process.
+   * @param base - Its `/proc` directory.
+   */
+  const attribute = async (pid: number, base: string): Promise<void> => {
+    let status: string;
+    try {
+      status = await proc.readFile(`${base}/status`);
+    } catch (error) {
+      const code = codeOf(error);
+      if (code === 'ENOENT' || code === 'ESRCH') return;
+      // An owner that cannot be read cannot be shown to be another user.
+      if (code === 'EACCES' || code === 'EPERM') {
+        uninspectable.push({ pid, command: await commandOf(base) });
+        return;
+      }
+      throw unexpected(`${base}/status`, error);
+    }
+    const owner = /^Uid:\s+\d+\s+(\d+)/m.exec(status)?.[1];
+    if (owner === undefined) throw new OccupantProbeError(`${base}/status has no Uid line`);
+    if (uid !== 0 && Number(owner) !== uid) {
+      otherUsers++;
+      return;
+    }
+    uninspectable.push({ pid, command: await commandOf(base) });
+  };
   const probe = async (pid: number): Promise<void> => {
     const base = `/proc/${String(pid)}`;
     try {
-      let hit = inside(await proc.readlink(`${base}/cwd`));
+      let hit = inside(await proc.readlink(`${base}/cwd`)) || inside(await proc.readlink(`${base}/root`));
       if (!hit) {
         for (const fd of await proc.readdir(`${base}/fd`)) {
           let target: string;
@@ -587,37 +705,55 @@ const probeProc = async (slot: string, proc: ProcReader): Promise<SlotOccupantPr
           }
         }
       }
-      if (hit) occupants.push({ pid, command: (await proc.readFile(`${base}/comm`)).trim() });
+      if (hit) occupants.push({ pid, command: await commandOf(base) });
     } catch (error) {
       const code = codeOf(error);
       if (code === 'ENOENT' || code === 'ESRCH') return;
-      if (code === 'EACCES' || code === 'EPERM') {
-        unprobed++;
-        return;
-      }
-      throw new OccupantProbeError(`Reading ${base} failed: ${code ?? String(error)}`);
+      if (code === 'EACCES' || code === 'EPERM') return attribute(pid, base);
+      if (error instanceof OccupantProbeError) throw error;
+      throw unexpected(base, error);
     }
   };
   for (let index = 0; index < pids.length; index += 64) await Promise.all(pids.slice(index, index + 64).map(probe));
-  return { occupants: occupants.sort((left, right) => left.pid - right.pid), unprobed };
+  const byPid = (left: SlotOccupant, right: SlotOccupant): number => left.pid - right.pid;
+  return { occupants: occupants.sort(byPid), uninspectable: uninspectable.sort(byPid), otherUsers };
 };
 
 /**
- * Asks `lsof` for processes with the slot as cwd or with files open beneath it.
+ * Runs one macOS probe command and rejects any incomplete answer.
+ * @param file - The executable.
+ * @param args - Its arguments.
+ * @param options - Command runner and deadline.
+ * @returns The completed result.
+ * @throws {OccupantProbeError} When the command is missing, timed out or truncated.
+ */
+const runProbeCommand = async (
+  file: string,
+  args: readonly string[],
+  options: OccupantProbeOptions
+): Promise<BoundedCommandResult> => {
+  const result = await (options.runCommand ?? runBoundedCommand)(file, args, {
+    timeoutMs: options.timeoutMs ?? OCCUPANT_PROBE_TIMEOUT_MS
+  });
+  if (result.error !== undefined) throw new OccupantProbeError(`${file} could not run: ${result.error}`);
+  if (result.timedOut) throw new OccupantProbeError(`${file} timed out`);
+  if (!result.outputComplete) throw new OccupantProbeError(`${file} output was truncated`);
+  return result;
+};
+
+/**
+ * Asks `lsof` for processes with the slot as cwd or root or with files open beneath it, and `ps`
+ * for the processes it cannot have inspected. macOS shows a process's descriptors and vnode paths
+ * only to its own user or root, and `lsof` drops the rest silently, so every process `ps` lists
+ * under another uid is counted as another user's; the prober's own processes are all visible to it.
  * @param slotPath - The slot checkout.
- * @param options - Command runner, executable and deadline.
- * @returns The occupants; `lsof` reports no hidden processes.
- * @throws {OccupantProbeError} When `lsof` is missing, timed out, truncated or failed.
+ * @param options - Command runners, executables, deadline and uid.
+ * @returns The occupants and the other users' count; nothing of the prober's is hidden.
+ * @throws {OccupantProbeError} When `lsof` or `ps` is missing, timed out, truncated or failed.
  */
 const probeLsof = async (slotPath: string, options: OccupantProbeOptions): Promise<SlotOccupantProbe> => {
-  const result = await (options.runCommand ?? runBoundedCommand)(
-    options.lsof ?? 'lsof',
-    ['-n', '-P', '-w', '-F', 'pc', '+D', slotPath],
-    { timeoutMs: options.timeoutMs ?? OCCUPANT_PROBE_TIMEOUT_MS }
-  );
-  if (result.error !== undefined) throw new OccupantProbeError(`lsof could not run: ${result.error}`);
-  if (result.timedOut) throw new OccupantProbeError('lsof timed out');
-  if (!result.outputComplete) throw new OccupantProbeError('lsof output was truncated');
+  const uid = proberUid(options);
+  const result = await runProbeCommand(options.lsof ?? 'lsof', ['-n', '-P', '-w', '-F', 'pc', '+D', slotPath], options);
   const occupants = new Map<number, string>();
   let current: number | undefined;
   for (const line of result.stdout.split('\n')) {
@@ -627,22 +763,34 @@ const probeLsof = async (slotPath: string, options: OccupantProbeOptions): Promi
     } else if (line.startsWith('c') && current !== undefined) occupants.set(current, line.slice(1));
   }
   // lsof exits 1 both for "nothing found" and for errors, so only an empty answer means none.
-  if (result.exitCode === 1 && occupants.size === 0) return { occupants: [], unprobed: 0 };
-  if (result.exitCode !== 0)
+  if (!(result.exitCode === 1 && occupants.size === 0) && result.exitCode !== 0)
     throw new OccupantProbeError(`lsof exited ${String(result.exitCode)}: ${result.stderr.trim()}`);
+  let otherUsers = 0;
+  if (uid !== 0) {
+    const listing = await runProbeCommand(options.ps ?? 'ps', ['-ax', '-o', 'uid='], options);
+    if (listing.exitCode !== 0)
+      throw new OccupantProbeError(`ps exited ${String(listing.exitCode)}: ${listing.stderr.trim()}`);
+    for (const line of listing.stdout.split('\n')) {
+      const owner = line.trim();
+      if (owner === '') continue;
+      if (!/^\d+$/.test(owner)) throw new OccupantProbeError(`ps listed an unreadable uid: ${owner}`);
+      if (Number(owner) !== uid) otherUsers++;
+    }
+  }
   return {
     occupants: [...occupants.entries()]
       .sort(([left], [right]) => left - right)
       .map(([pid, command]) => ({ pid, command })),
-    unprobed: 0
+    uninspectable: [],
+    otherUsers
   };
 };
 
 /**
- * Lists processes whose cwd or open files are inside a slot. Never signals.
+ * Lists processes whose cwd, root or open files are inside a slot. Never signals.
  * @param slotPath - The slot checkout.
- * @param options - Platform, `/proc` reader and command overrides.
- * @returns The occupants and the count of processes the OS would not show.
+ * @param options - Platform, `/proc` reader, uid and command overrides.
+ * @returns The occupants, the prober's own processes it could not inspect, and the other users' count.
  * @throws {OccupantProbeError} When the probe itself failed.
  */
 export async function findSlotOccupants(
@@ -651,16 +799,16 @@ export async function findSlotOccupants(
 ): Promise<SlotOccupantProbe> {
   const platform = options.platform ?? process.platform;
   // Windows refuses to rename or delete an open file, so removal itself reports `removal_blocked`.
-  if (platform === 'win32') return { occupants: [], unprobed: 0 };
+  if (platform === 'win32') return NO_OCCUPANTS;
   if (platform !== 'linux') return probeLsof(slotPath, options);
   let slot: string;
   try {
     slot = await nodeFs.realpath(slotPath);
   } catch (error) {
-    if (codeOf(error) === 'ENOENT') return { occupants: [], unprobed: 0 };
+    if (codeOf(error) === 'ENOENT') return NO_OCCUPANTS;
     throw new OccupantProbeError(`Resolving ${slotPath} failed: ${codeOf(error) ?? String(error)}`);
   }
-  return probeProc(slot, options.proc ?? HOST_PROC);
+  return probeProc(slot, options.proc ?? HOST_PROC, proberUid(options));
 }
 
 /**

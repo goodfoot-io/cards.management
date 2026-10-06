@@ -13,9 +13,10 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GitBoundedResult } from '../src/bounded-git.js';
 import { ShutdownError } from '../src/config/runtime-shutdown.js';
-import type { BoundedCommandResult } from '../src/process-identity.js';
+import { type BoundedCommandResult, runBoundedCommand } from '../src/process-identity.js';
 import { acquireSlotLock, type SlotLock, withSlotLock } from '../src/slot-lock.js';
 import {
+  describeSlotOccupancy,
   findSlotOccupants,
   findSlotResidue,
   OccupantProbeError,
@@ -30,6 +31,7 @@ import {
   type SlotGitError,
   type SlotRemovalGit,
   type SlotResidueLocker,
+  slotOccupied,
   stopSlotFsmonitor
 } from '../src/worktree-removal.js';
 import { fakeWorld, lockEnvironment, ownerFile, writeGeneration } from './helpers/slot-lock-fixtures.js';
@@ -210,6 +212,70 @@ describe('slot removal', () => {
       expect(await readFile(join(slotPath, 'untracked.txt'), 'utf8')).toBe('work in progress\n');
       expect(existsSync(quarantine)).toBe(false);
       expect(worktreePaths(repo)).toContain(slotPath);
+    });
+
+    it.runIf(process.platform === 'linux')(
+      'refuses as in use when a real process entered the slot after the caller probed it, and moves it back',
+      async () => {
+        const { lock } = await removalLock();
+        // The caller's own probe found the slot empty; a process enters before the quarantine move.
+        expect(slotOccupied(await findSlotOccupants(slotPath))).toBe(false);
+        const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+          cwd: join(slotPath),
+          detached: true,
+          stdio: 'ignore'
+        });
+        children.push(child);
+        await new Promise((resolve) => child.once('spawn', resolve));
+        const quarantine = await quarantineSlot(repo, slotPath);
+        const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+        expect(outcome).toMatchObject({ status: 'refused', reason: 'in_use', checkoutPath: slotPath });
+        expect(outcome.status === 'refused' && outcome.detail).toContain(`(pid ${String(child.pid)})`);
+        expect(await readFile(join(slotPath, 'tracked.txt'), 'utf8')).toBe('tracked\n');
+        expect(worktreePaths(repo)).toContain(slotPath);
+      }
+    );
+
+    it('refuses as in use when its own uninspectable process is reported in the quarantine', async () => {
+      const { lock } = await removalLock();
+      const quarantine = await quarantineSlot(repo, slotPath);
+      const hidden: ProcReader = {
+        readdir: async (path) => {
+          if (path === '/proc') return ['77'];
+          throw errno('EACCES');
+        },
+        readlink: async () => {
+          throw errno('EACCES');
+        },
+        readFile: async (path) => (path.endsWith('status') ? 'Uid:\t1000\t1000\t1000\t1000\n' : 'sudo\n')
+      };
+      const outcome = await removeQuarantinedSlot(
+        { repoRoot: repo, slotPath, quarantine, lock },
+        { occupants: { platform: 'linux', uid: 1000, proc: hidden } }
+      );
+      expect(outcome).toMatchObject({ status: 'refused', reason: 'in_use', checkoutPath: slotPath });
+      expect(worktreePaths(repo)).toContain(slotPath);
+    });
+
+    it('removes the quarantine when only other users’ processes were hidden', async () => {
+      const { lock } = await removalLock();
+      const quarantine = await quarantineSlot(repo, slotPath);
+      const others: ProcReader = {
+        readdir: async (path) => {
+          if (path === '/proc') return ['78'];
+          throw errno('EACCES');
+        },
+        readlink: async () => {
+          throw errno('EACCES');
+        },
+        readFile: async (path) => (path.endsWith('status') ? 'Uid:\t0\t0\t0\t0\n' : 'tailscaled\n')
+      };
+      await expect(
+        removeQuarantinedSlot(
+          { repoRoot: repo, slotPath, quarantine, lock },
+          { occupants: { platform: 'linux', uid: 1000, proc: others } }
+        )
+      ).resolves.toEqual({ status: 'removed' });
     });
 
     it('never nests the checkout into a recreated slot path, leaving it at the quarantine', async () => {
@@ -412,77 +478,128 @@ describe('slot removal', () => {
   });
 
   describe('occupants', () => {
+    /** One fake `/proc/<pid>`: its links, owner, command, and which reads the kernel refuses. */
+    interface FakeProcess {
+      readonly cwd?: string;
+      readonly root?: string;
+      readonly fds?: string[];
+      readonly comm?: string;
+      /** Effective uid in `status`; the prober's 1000 by default. */
+      readonly uid?: number;
+      /** Errno for every link read; the process hides or exited. */
+      readonly fail?: string;
+      /** Errno for the `status` read. */
+      readonly failStatus?: string;
+    }
+
     /**
-     * An injected `/proc` with the given processes.
-     * @param processes - Per PID: cwd, open file targets, command, or an errno for every read.
+     * A `/proc` stand-in over fake processes.
+     * @param processes - Processes by pid.
      * @returns The reader.
      */
-    function proc(
-      processes: Record<string, { cwd?: string; fds?: string[]; comm?: string; fail?: string }>
-    ): ProcReader {
-      const entry = (path: string): { pid: string; rest: string[] } => {
+    function proc(processes: Record<string, FakeProcess>): ProcReader {
+      const entry = (path: string): { info: FakeProcess; rest: string[] } => {
         const [, , pid = '', ...rest] = path.split('/');
-        return { pid, rest };
+        const info = processes[pid];
+        if (info === undefined) throw errno('ENOENT');
+        return { info, rest };
       };
       return {
         readdir: async (path) => {
           if (path === '/proc') return ['self', 'meminfo', ...Object.keys(processes)];
-          const { pid } = entry(path);
-          const info = processes[pid];
-          if (info === undefined) throw errno('ENOENT');
+          const { info } = entry(path);
           if (info.fail !== undefined) throw errno(info.fail);
           return (info.fds ?? []).map((_, index) => String(index));
         },
         readlink: async (path) => {
-          const { pid, rest } = entry(path);
-          const info = processes[pid];
-          if (info === undefined) throw errno('ENOENT');
+          const { info, rest } = entry(path);
           if (info.fail !== undefined) throw errno(info.fail);
           if (rest[0] === 'cwd') return info.cwd ?? '/';
+          if (rest[0] === 'root') return info.root ?? '/';
           return info.fds?.[Number(rest[1])] ?? '/dev/null';
         },
         readFile: async (path) => {
-          const { pid } = entry(path);
-          const info = processes[pid];
-          if (info === undefined) throw errno('ENOENT');
+          const { info, rest } = entry(path);
+          if (rest[0] === 'status') {
+            if (info.failStatus !== undefined) throw errno(info.failStatus);
+            const uid = String(info.uid ?? 1000);
+            return `Name:\t${info.comm ?? 'proc'}\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`;
+          }
           return `${info.comm ?? 'proc'}\n`;
         }
       };
     }
 
-    it('finds processes whose cwd or open file is inside the slot, and nothing beside it', async () => {
-      const probe = await findSlotOccupants(slotPath, {
-        platform: 'linux',
-        proc: proc({
+    const linux = (processes: Record<string, FakeProcess>, uid = 1000) =>
+      findSlotOccupants(slotPath, { platform: 'linux', uid, proc: proc(processes) });
+
+    it('finds processes whose cwd, root or open file is inside the slot, and nothing beside it', async () => {
+      await expect(
+        linux({
           10: { cwd: join(slotPath, 'src'), comm: 'node' },
           11: { cwd: '/', fds: ['/dev/null', `${join(slotPath, 'tracked.txt')} (deleted)`], comm: 'vim' },
           12: { cwd: `${slotPath}-other`, fds: [`${slotPath}.deleting-x/file`], comm: 'bash' },
-          13: { cwd: slotPath, comm: 'git' }
+          13: { cwd: slotPath, comm: 'git' },
+          14: { root: slotPath, comm: 'chrooted' }
         })
-      });
-      expect(probe).toEqual({
+      ).resolves.toEqual({
         occupants: [
           { pid: 10, command: 'node' },
           { pid: 11, command: 'vim' },
-          { pid: 13, command: 'git' }
+          { pid: 13, command: 'git' },
+          { pid: 14, command: 'chrooted' }
         ],
-        unprobed: 0
+        uninspectable: [],
+        otherUsers: 0
       });
     });
 
-    it('skips processes the OS hides or that exited, counting only the hidden ones', async () => {
+    it('counts hidden processes of other users without blocking, and skips exited ones', async () => {
+      const probe = await linux({
+        20: { fail: 'EACCES', uid: 0, comm: 'tailscaled' },
+        21: { fail: 'EPERM', uid: 1001 },
+        22: { fail: 'ESRCH' },
+        23: { fail: 'ENOENT' },
+        24: { fail: 'EACCES', failStatus: 'ENOENT' }
+      });
+      expect(probe).toEqual({ occupants: [], uninspectable: [], otherUsers: 2 });
+      expect(slotOccupied(probe)).toBe(false);
+    });
+
+    it.each([
+      ['a hidden process of its own user', { fail: 'EACCES', comm: 'sudo-child' }],
+      ['an own process hiding only its descriptors', { fail: 'EPERM', comm: 'sudo-child' }],
+      [
+        'a hidden process whose owner cannot be read',
+        { fail: 'EACCES', uid: 0, failStatus: 'EACCES', comm: 'sudo-child' }
+      ]
+    ])('blocks on %s', async (_case, process) => {
+      const probe = await linux({ 30: process });
+      expect(probe).toEqual({ occupants: [], uninspectable: [{ pid: 30, command: 'sudo-child' }], otherUsers: 0 });
+      expect(slotOccupied(probe)).toBe(true);
+      expect(describeSlotOccupancy(probe)).toBe(
+        'your own processes could not be inspected, so they may be inside it: sudo-child (pid 30)'
+      );
+    });
+
+    it('treats every hidden process as its own when the prober is root', async () => {
+      await expect(linux({ 31: { fail: 'EACCES', uid: 1000, comm: 'x' } }, 0)).resolves.toEqual({
+        occupants: [],
+        uninspectable: [{ pid: 31, command: 'x' }],
+        otherUsers: 0
+      });
+    });
+
+    it('throws on any other errno, or a status without an owner', async () => {
+      await expect(linux({ 40: { fail: 'ENOTDIR' } })).rejects.toThrow(OccupantProbeError);
+      await expect(linux({ 41: { fail: 'EACCES', failStatus: 'EIO' } })).rejects.toThrow(OccupantProbeError);
       await expect(
         findSlotOccupants(slotPath, {
           platform: 'linux',
-          proc: proc({ 20: { fail: 'EACCES' }, 21: { fail: 'EPERM' }, 22: { fail: 'ESRCH' }, 23: { fail: 'ENOENT' } })
+          uid: 1000,
+          proc: { ...proc({ 42: { fail: 'EACCES' } }), readFile: async () => 'Name:\tx\n' }
         })
-      ).resolves.toEqual({ occupants: [], unprobed: 2 });
-    });
-
-    it('throws on any other errno', async () => {
-      await expect(
-        findSlotOccupants(slotPath, { platform: 'linux', proc: proc({ 30: { fail: 'ENOTDIR' } }) })
-      ).rejects.toThrow(OccupantProbeError);
+      ).rejects.toThrow(/no Uid line/);
     });
 
     it('throws when /proc itself is unreadable', async () => {
@@ -501,11 +618,12 @@ describe('slot removal', () => {
     });
 
     it.runIf(process.platform === 'linux')(
-      'finds no occupant of an empty slot among the host’s real processes',
+      'finds no occupant of an empty slot among the host’s real processes, and inspects all of its own',
       async () => {
         const probe = await findSlotOccupants(slotPath);
         expect(probe.occupants).toEqual([]);
-        expect(probe.unprobed).toBeGreaterThanOrEqual(0);
+        expect(probe.uninspectable).toEqual([]);
+        expect(slotOccupied(probe)).toBe(false);
       }
     );
 
@@ -521,12 +639,26 @@ describe('slot removal', () => {
       expect(probe.occupants).toContainEqual({ pid: child.pid, command: expect.any(String) });
     });
 
+    it.runIf(process.platform === 'linux')(
+      'counts the host’s real processes of other users as other users when probing as a different uid',
+      async () => {
+        // The prober claims an unused uid, so every process the kernel hides is someone else's.
+        const probe = await findSlotOccupants(slotPath, { uid: 54_321 });
+        expect(probe.uninspectable).toEqual([]);
+        expect(probe.otherUsers).toBeGreaterThanOrEqual(0);
+      }
+    );
+
     /**
-     * An `lsof` stand-in returning one canned result and recording its argv.
-     * @param result - Fields overriding a clean exit with empty output.
+     * `lsof` and `ps` stand-ins returning canned results and recording their argv.
+     * @param lsofResult - Fields overriding a clean `lsof` exit with empty output.
+     * @param psResult - Fields overriding a clean `ps` exit listing uids 1000, 0 and 1000.
      * @returns The runner and its calls.
      */
-    function lsof(result: Partial<BoundedCommandResult>): {
+    function commands(
+      lsofResult: Partial<BoundedCommandResult>,
+      psResult: Partial<BoundedCommandResult> = {}
+    ): {
       runCommand: NonNullable<Parameters<typeof findSlotOccupants>[1]>['runCommand'];
       calls: Array<{ file: string; args: readonly string[] }>;
     } {
@@ -535,32 +667,57 @@ describe('slot removal', () => {
         calls,
         runCommand: async (file, args) => {
           calls.push({ file, args });
-          return { stdout: '', stderr: '', exitCode: 0, timedOut: false, outputComplete: true, ...result };
+          const clean = { stdout: '', stderr: '', exitCode: 0, timedOut: false, outputComplete: true };
+          return file === 'ps'
+            ? { ...clean, stdout: ' 1000\n    0\n 1000\n  501\n', ...psResult }
+            : { ...clean, ...lsofResult };
         }
       };
     }
 
-    it('parses lsof process records on macOS', async () => {
-      const { runCommand, calls } = lsof({ stdout: 'p123\ncnode\np456\ncgit\n' });
-      await expect(findSlotOccupants(slotPath, { platform: 'darwin', runCommand })).resolves.toEqual({
+    const darwin = (runCommand: ReturnType<typeof commands>['runCommand'], uid = 1000) =>
+      findSlotOccupants(slotPath, { platform: 'darwin', uid, runCommand });
+
+    it('parses lsof process records on macOS and counts the processes of other uids ps lists', async () => {
+      const { runCommand, calls } = commands({ stdout: 'p123\ncnode\np456\ncgit\n' });
+      await expect(darwin(runCommand)).resolves.toEqual({
         occupants: [
           { pid: 123, command: 'node' },
           { pid: 456, command: 'git' }
         ],
-        unprobed: 0
+        uninspectable: [],
+        otherUsers: 2
       });
-      expect(calls).toEqual([{ file: 'lsof', args: ['-n', '-P', '-w', '-F', 'pc', '+D', slotPath] }]);
+      expect(calls).toEqual([
+        { file: 'lsof', args: ['-n', '-P', '-w', '-F', 'pc', '+D', slotPath] },
+        { file: 'ps', args: ['-ax', '-o', 'uid='] }
+      ]);
     });
+
+    it('skips ps as root, which lsof inspects fully', async () => {
+      const { runCommand, calls } = commands({});
+      await expect(darwin(runCommand, 0)).resolves.toEqual({ occupants: [], uninspectable: [], otherUsers: 0 });
+      expect(calls.map(({ file }) => file)).toEqual(['lsof']);
+    });
+
+    it.runIf(process.platform !== 'win32')(
+      'reads the real ps listing in the shape the macOS probe parses',
+      async () => {
+        const lsofLess: ReturnType<typeof commands>['runCommand'] = async (file, args, options) =>
+          file === 'ps'
+            ? runBoundedCommand(file, args, options)
+            : { stdout: '', stderr: '', exitCode: 1, timedOut: false, outputComplete: true };
+        const probe = await darwin(lsofLess, 54_321);
+        expect(probe.otherUsers).toBeGreaterThan(0);
+      }
+    );
 
     it.each([
       ['empty', ''],
       ['warning-only', 'lsof: WARNING: can’t stat() fuse file system /run/user/1000/doc\n']
     ])('treats lsof exit 1 with %s output as no occupants', async (_kind, stderr) => {
-      const { runCommand } = lsof({ exitCode: 1, stderr });
-      await expect(findSlotOccupants(slotPath, { platform: 'darwin', runCommand })).resolves.toEqual({
-        occupants: [],
-        unprobed: 0
-      });
+      const { runCommand } = commands({ exitCode: 1, stderr });
+      await expect(darwin(runCommand)).resolves.toEqual({ occupants: [], uninspectable: [], otherUsers: 2 });
     });
 
     it.each([
@@ -569,13 +726,26 @@ describe('slot removal', () => {
       ['a timeout', { exitCode: null, timedOut: true }],
       ['a missing binary', { exitCode: null, error: 'spawn lsof ENOENT' }],
       ['truncated output', { stdout: 'p123\ncnode\n', outputComplete: false }]
-    ])('throws on %s', async (_kind, result) => {
-      const { runCommand } = lsof(result);
-      await expect(findSlotOccupants(slotPath, { platform: 'darwin', runCommand })).rejects.toThrow(OccupantProbeError);
+    ])('throws on lsof %s', async (_kind, result) => {
+      await expect(darwin(commands(result).runCommand)).rejects.toThrow(OccupantProbeError);
+    });
+
+    it.each([
+      ['a failed exit', { exitCode: 1, stderr: 'ps: bad option\n' }],
+      ['a missing binary', { exitCode: null, error: 'spawn ps ENOENT' }],
+      ['a timeout', { exitCode: null, timedOut: true }],
+      ['truncated output', { outputComplete: false }],
+      ['a non-numeric uid', { stdout: 'root\n' }]
+    ])('throws on ps %s, since other users could then go uncounted', async (_kind, result) => {
+      await expect(darwin(commands({}, result).runCommand)).rejects.toThrow(OccupantProbeError);
     });
 
     it('reports no occupants on Windows, where the OS refuses the removal itself', async () => {
-      await expect(findSlotOccupants(slotPath, { platform: 'win32' })).resolves.toEqual({ occupants: [], unprobed: 0 });
+      await expect(findSlotOccupants(slotPath, { platform: 'win32' })).resolves.toEqual({
+        occupants: [],
+        uninspectable: [],
+        otherUsers: 0
+      });
     });
   });
 
