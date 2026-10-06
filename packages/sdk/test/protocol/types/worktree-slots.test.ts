@@ -28,7 +28,8 @@ const PREVIEW = {
     },
     { branch: 'implement/main-1/slot-2', worktreePath: null, reason: 'missing', detail: '', outcome: 'eligible' }
   ],
-  unknownLocks: { count: 2, unverifiedOwners: 1 }
+  unknownLocks: { count: 2, unverifiedOwners: 1 },
+  processesNotInspected: 5
 } as const satisfies WorktreeCleanupPreview;
 
 describe('worktreeCleanupPreviewSchema', () => {
@@ -104,7 +105,9 @@ describe('worktreeCleanupPreviewSchema', () => {
         },
         { branch: 'cards/main-1/2', worktreePath: null, reason: 'missing', detail: '', outcome: 'eligible' }
       ],
-      unknownLocks: { count: 0, unverifiedOwners: 0 }
+      unknownLocks: { count: 0, unverifiedOwners: 0 },
+      // Uninspected processes never block, so a clear report may still count some.
+      processesNotInspected: 3
     } as const satisfies WorktreeCleanupPreview;
 
     it('accepts a clear report that allows deletion, and the same report refusing it is rejected', () => {
@@ -117,7 +120,10 @@ describe('worktreeCleanupPreviewSchema', () => {
       expect(worktreeCleanupPreviewSchema.safeParse({ ...CLEAR, decisions: [] }).success).toBe(true);
     });
 
-    const violations: readonly (readonly [string, Partial<WorktreeCleanupPreview>])[] = [
+    const violations: readonly (readonly [
+      string,
+      Partial<Pick<WorktreeCleanupPreview, 'failure' | 'unknownLocks' | 'decisions'>>
+    ])[] = [
       ['a stage failure', { failure: { stage: 'discovery', message: 'git failed' } }],
       ['an unknown lock', { unknownLocks: { count: 1, unverifiedOwners: 0 } }],
       ['an unknown lock with an unverified owner', { unknownLocks: { count: 1, unverifiedOwners: 1 } }],
@@ -140,6 +146,10 @@ describe('worktreeCleanupPreviewSchema', () => {
 
   it('rejects unknown top-level fields and an empty card ID', () => {
     expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, mode: 'cleanup' }).success).toBe(false);
+    expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, processesNotInspected: -1 }).success).toBe(false);
+    expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, processesNotInspected: 1.5 }).success).toBe(false);
+    const { processesNotInspected: _omitted, ...withoutCount } = PREVIEW;
+    expect(worktreeCleanupPreviewSchema.safeParse(withoutCount).success).toBe(false);
     expect(worktreeCleanupPreviewSchema.safeParse({ ...PREVIEW, cardId: '' }).success).toBe(false);
   });
 });
