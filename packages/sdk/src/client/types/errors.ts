@@ -47,6 +47,27 @@ export class ApiError extends Error {
 }
 
 /**
+ * Error thrown when the server refuses to delete a card because executions on
+ * it are still running (409 `running_execution`). It names those executions so
+ * a caller can say which to stop.
+ */
+export class RunningExecutionError extends ApiError {
+  /**
+   * Creates a new RunningExecutionError instance.
+   *
+   * @param message - Human-readable error message naming the executions
+   * @param executions - IDs of the executions still running on the card
+   */
+  constructor(
+    message: string,
+    public readonly executions: readonly string[]
+  ) {
+    super(message, 'running_execution');
+    this.name = 'RunningExecutionError';
+  }
+}
+
+/**
  * Error thrown when a network request fails due to connectivity issues.
  *
  * @example
@@ -150,7 +171,19 @@ export class RequestCancelledError extends Error {
 }
 
 /** Why a root command did not resolve with a report. */
-export type RootCommandFailureCause = 'no_report' | 'rejected' | 'uncertain' | 'timeout' | 'cancelled' | 'unconfigured';
+export type RootCommandFailureCause =
+  | 'no_report'
+  | 'rejected'
+  | 'uncertain'
+  | 'timeout'
+  | 'cancelled'
+  | 'unconfigured'
+  /** The server gave no response, or only server errors, until the wait ended. */
+  | 'unavailable'
+  /** The server has no such card to run the command on. */
+  | 'not_found'
+  /** The server answered with a body outside the root-command contract. */
+  | 'invalid_response';
 
 /**
  * Error thrown when a root configuration command does not complete with a report.

@@ -41,7 +41,8 @@ import {
   RequestCancelledError,
   RetryExhaustedError,
   RootCommandError,
-  type RootCommandFailureCause
+  type RootCommandFailureCause,
+  RunningExecutionError
 } from './types/errors.js';
 
 /** Input of each root configuration command, keyed by command name. */
@@ -75,6 +76,12 @@ const ROOT_COMMAND_TIMEOUT_MS = 300_000;
 
 /** Interval between retrievals while a root command runs. */
 const ROOT_COMMAND_POLL_MS = 250;
+
+/** Longest pause between attempts while the server is unreachable or failing; pauses double up to it. */
+const ROOT_COMMAND_BACKOFF_MS = 4_000;
+
+/** How long the server may stay unreachable or failing before a root command ends as `unavailable`. */
+const ROOT_COMMAND_UNAVAILABLE_MS = 30_000;
 
 /** Ceiling on each launch, retrieval or cancel request a root command makes. */
 const ROOT_COMMAND_REQUEST_MS = 10_000;
@@ -534,6 +541,13 @@ export class CardsClient {
             '';
           const code = (body['code'] as string | undefined) || String(httpLike.status);
           const fields = body['fields'] as Array<{ field: string; message: string }> | undefined;
+          const executions = body['executions'];
+          if (
+            code === 'running_execution' &&
+            Array.isArray(executions) &&
+            executions.every((id): id is string => typeof id === 'string')
+          )
+            throw new RunningExecutionError(message, executions);
           throw new ApiError(message, code, fields);
         }
 
@@ -684,7 +698,8 @@ export class CardsClient {
    *
    * @param cardId - The id of the card to delete.
    * @returns Promise resolving when deletion is complete.
-   * @throws ApiError when the server rejects the delete, including the 409 while executions run.
+   * @throws RunningExecutionError (an ApiError with code `running_execution`) naming the running executions.
+   * @throws ApiError when the server rejects the delete for another reason.
    * @throws NetworkError when the request fails to reach the server.
    */
   async deleteCard(cardId: string): Promise<void> {
@@ -892,8 +907,9 @@ export class CardsClient {
    * Runs a root configuration command on a card and waits for its report.
    *
    * Posts the launch to `POST /cards/:cardId/runtime/commands`, then polls the
-   * durable retrieve route every 250 ms. It resolves only when the command
-   * completed with a `commandReport`. When the deadline passes or `signal`
+   * durable retrieve route every 250 ms, doubling the pause up to 4 s while the
+   * server gives no answer or only server errors. It resolves only when the
+   * command completed with a `commandReport`. When the deadline passes or `signal`
    * aborts, it calls the cancel route before throwing, so an abandoned wait
    * never leaves the command running unobserved.
    *
@@ -902,7 +918,8 @@ export class CardsClient {
    * @param input - Arguments for that command, such as the maintenance `mode`.
    * @param options - Deadline and cancellation.
    * @returns The completed command's report.
-   * @throws RootCommandError with cause `no_report`, `rejected`, `uncertain`, `timeout`, `cancelled` or `unconfigured`.
+   * @throws RootCommandError with cause `no_report`, `rejected`, `uncertain`, `timeout`, `cancelled`, `unconfigured`,
+   *   `unavailable` (no answer or only server errors for 30 s, or until the deadline), `not_found` or `invalid_response`.
    */
   async runRootCommand<TCommand extends keyof RootCommandInputs>(
     cardId: string,
@@ -920,14 +937,26 @@ export class CardsClient {
 
     const commandsPath = `/cards/${encodeURIComponent(cardId)}/runtime/commands`;
     const retrievePath = `/cards/${encodeURIComponent(cardId)}/runtime/actions/${encodeURIComponent(requestId)}`;
+    const cancelPath = `${commandsPath}/${encodeURIComponent(requestId)}/cancel`;
     // Every launch attempt carries the same caller-owned IDs, so a retry after an
     // unanswered POST replays the one admission rather than starting another.
     let launched = false;
+    // While the server gives no answer or only server errors, attempts back off and
+    // the wait ends as `unavailable` once the outage outlasts its allowance.
+    let outage: { readonly since: number; readonly detail: string; readonly attempts: number } | undefined;
+    const unavailable = (detail: string): void => {
+      outage = { since: outage?.since ?? Date.now(), detail, attempts: (outage?.attempts ?? 0) + 1 };
+    };
+    const server = this.options.baseUrl;
     while (true) {
       const ended = rootCommandEnded(deadline, signal);
-      if (ended !== null) {
-        await this.cancelRootCommand(`${commandsPath}/${encodeURIComponent(requestId)}/cancel`);
-        throw ended === 'timeout' ? fail('timeout', 'deadline passed') : fail('cancelled', 'cancelled by the caller');
+      const outageOver = outage !== undefined && Date.now() - outage.since >= ROOT_COMMAND_UNAVAILABLE_MS;
+      if (ended !== null || outageOver) {
+        await this.cancelRootCommand(cancelPath);
+        if (ended === 'cancelled') throw fail('cancelled', 'cancelled by the caller');
+        if (outage !== undefined)
+          throw fail('unavailable', `the Cards server at ${server} is unavailable (${outage.detail})`);
+        throw fail('timeout', 'deadline passed');
       }
 
       if (!launched) {
@@ -937,7 +966,11 @@ export class CardsClient {
           command,
           input
         });
-        if (exchange === null) continue;
+        if (exchange === null) {
+          unavailable('the launch got no response');
+          await this.rootCommandPause(deadline, signal, outage?.attempts);
+          continue;
+        }
         if (exchange.status === 409 && rootCommandErrorCode(exchange.body) === 'command_unconfigured') {
           throw fail('unconfigured', `the configuration has no ${command} command`);
         }
@@ -948,9 +981,19 @@ export class CardsClient {
           throw fail('rejected', `launch refused with ${exchange.status}`);
         const parsed = publicActionLaunchResponseSchema.safeParse(exchange.body);
         if (!parsed.success) {
-          if (exchange.status >= 500) continue;
-          throw fail('uncertain', `unrecognized launch response ${exchange.status}`);
+          if (exchange.status >= 500) {
+            unavailable(`the launch failed with ${exchange.status}`);
+            await this.rootCommandPause(deadline, signal, outage?.attempts);
+            continue;
+          }
+          if (exchange.status === 404) throw fail('not_found', `the server has no card ${cardId}`);
+          if (exchange.status === 409)
+            throw fail('rejected', `launch refused with 409: ${rootCommandErrorText(exchange.body)}`);
+          // The server may have admitted a launch it could not describe; cancel it rather than leave it unobserved.
+          await this.cancelRootCommand(cancelPath);
+          throw fail('invalid_response', `unrecognized launch response ${exchange.status}`);
         }
+        outage = undefined;
         const launch = normalizeActionLaunchResponse(parsed.data, { requestId, messageId });
         if (launch.status === 'rejected') throw fail('rejected', `launch rejected: ${launch.reason}`);
         if (launch.status === 'uncertain') throw fail('uncertain', `launch uncertain: ${launch.reason}`);
@@ -958,11 +1001,14 @@ export class CardsClient {
       }
 
       const exchange = await this.rootCommandExchange('get', retrievePath, deadline, signal);
-      if (exchange !== null) {
+      if (exchange === null) {
+        unavailable('the retrieval got no response');
+      } else {
         if (exchange.status === 401 || exchange.status === 403)
           throw fail('rejected', `retrieval refused with ${exchange.status}`);
         const parsed = publicActionRetrievalResponseSchema.safeParse(exchange.body);
         if (parsed.success) {
+          outage = undefined;
           const record = parsed.data;
           if (record.status === 'completed') {
             if (record.commandReport === undefined) throw fail('no_report', 'completed without a report');
@@ -971,20 +1017,30 @@ export class CardsClient {
           if (record.status === 'rejected') throw fail('rejected', `admission rejected: ${record.reason}`);
           if (record.status === 'uncertain') throw fail('uncertain', `admission uncertain: ${record.reason}`);
           if (record.status === 'not-found') throw fail('uncertain', 'the admitted launch has no durable record');
+        } else if (exchange.status >= 500) {
+          unavailable(`the retrieval failed with ${exchange.status}`);
+        } else if (exchange.status === 404) {
+          throw fail('not_found', `the server has no card ${cardId}`);
+        } else {
+          await this.cancelRootCommand(cancelPath);
+          throw fail('invalid_response', `unrecognized retrieval response ${exchange.status}`);
         }
       }
-      await this.rootCommandPause(deadline, signal);
+      await this.rootCommandPause(deadline, signal, outage?.attempts);
     }
   }
 
   /**
    * Waits one poll interval, returning early when the caller aborts or the deadline passes.
+   * Each consecutive failed attempt doubles the interval, up to {@link ROOT_COMMAND_BACKOFF_MS}.
    *
    * @param deadline - Epoch milliseconds of the overall deadline.
    * @param signal - The caller's abort signal.
+   * @param failures - Consecutive attempts that got no answer or a server error.
    */
-  private async rootCommandPause(deadline: number, signal?: AbortSignal): Promise<void> {
-    const ms = Math.max(0, Math.min(ROOT_COMMAND_POLL_MS, deadline - Date.now()));
+  private async rootCommandPause(deadline: number, signal?: AbortSignal, failures = 0): Promise<void> {
+    const interval = Math.min(ROOT_COMMAND_BACKOFF_MS, ROOT_COMMAND_POLL_MS * 2 ** Math.min(failures, 8));
+    const ms = Math.max(0, Math.min(interval, deadline - Date.now()));
     await new Promise<void>((resolve) => {
       const done = (): void => {
         clearTimeout(timer);
@@ -1249,6 +1305,20 @@ function rootCommandErrorCode(body: unknown): string | undefined {
   const { code, reason } = body as { code?: unknown; reason?: unknown };
   if (typeof code === 'string') return code;
   return typeof reason === 'string' ? reason : undefined;
+}
+
+/**
+ * Reads the human-readable text of a JSON error body for a refusal detail.
+ *
+ * @param body - Parsed response body.
+ * @returns Its `error`, else its machine code, else a note that it had neither.
+ */
+function rootCommandErrorText(body: unknown): string {
+  if (body !== null && typeof body === 'object') {
+    const { error } = body as { error?: unknown };
+    if (typeof error === 'string') return error;
+  }
+  return rootCommandErrorCode(body) ?? 'no reason given';
 }
 
 /**
