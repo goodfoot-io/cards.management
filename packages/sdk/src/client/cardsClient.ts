@@ -37,17 +37,20 @@ import type {
 } from './types/client.js';
 import {
   ApiError,
+  CARD_DELETE_REFUSAL_CODES,
+  type CardDeleteRefusalCode,
+  CardDeleteRefusedError,
   NetworkError,
   RequestCancelledError,
   RetryExhaustedError,
   RootCommandError,
   type RootCommandFailureCause,
-  RunningExecutionError
+  type RootCommandFailureScope
 } from './types/errors.js';
 
 /** Input of each root configuration command, keyed by command name. */
 export interface RootCommandInputs {
-  readonly worktreeMaintenance: { readonly mode: WorktreeMaintenanceMode };
+  readonly worktreeMaintenance: { readonly mode: WorktreeMaintenanceMode; readonly budgetMs: number };
 }
 
 /** Options bounding one {@link CardsClient.runRootCommand} call. */
@@ -88,6 +91,20 @@ const ROOT_COMMAND_REQUEST_MS = 10_000;
 
 /** HTTP statuses that end a root command call as `rejected` rather than being retried. */
 const ROOT_COMMAND_REJECTIONS = new Set([400, 401, 403, 503]);
+
+/** Causes that mean the workspace, not the card, cannot run root commands. */
+const WORKSPACE_FAILURE_CAUSES: ReadonlySet<RootCommandFailureCause> = new Set([
+  'unconfigured',
+  'unavailable',
+  'workspace_not_found'
+]);
+
+/** Uncertainty reasons that come from the workspace's admission storage, not the card. */
+const WORKSPACE_UNCERTAINTY_REASONS: ReadonlySet<string> = new Set([
+  'storage-unavailable',
+  'journal-unreadable',
+  'journal-corrupt'
+]);
 
 /** One root-command HTTP exchange: a status and parsed body, or no response at all. */
 type RootCommandExchange = { readonly status: number; readonly body: unknown } | null;
@@ -541,13 +558,8 @@ export class CardsClient {
             '';
           const code = (body['code'] as string | undefined) || String(httpLike.status);
           const fields = body['fields'] as Array<{ field: string; message: string }> | undefined;
-          const executions = body['executions'];
-          if (
-            code === 'running_execution' &&
-            Array.isArray(executions) &&
-            executions.every((id): id is string => typeof id === 'string')
-          )
-            throw new RunningExecutionError(message, executions);
+          const refusal = cardDeleteRefusal(code, body['executions']);
+          if (refusal !== null) throw new CardDeleteRefusedError(message, refusal.code, refusal.executions);
           throw new ApiError(message, code, fields);
         }
 
@@ -692,18 +704,23 @@ export class CardsClient {
    *
    * Run `worktreeMaintenance` in `prepare-delete` mode first, through
    * {@link CardsClient.runRootCommand}, and delete only when its report allows
-   * it: the server keeps no worktree state and does not clean up slots. The
-   * server refuses with 409 `running_execution` while any execution on the card
-   * is running.
+   * it: the server keeps no worktree state and does not clean up slots. Cite
+   * that run as `preparedBy` so the server can refuse when the card changed
+   * after it.
    *
    * @param cardId - The id of the card to delete.
+   * @param options - The delete's preconditions.
+   * @param options.preparedBy - `requestId` of the passing prepare-delete run, sent as `?preparedBy=`.
    * @returns Promise resolving when deletion is complete.
-   * @throws RunningExecutionError (an ApiError with code `running_execution`) naming the running executions.
-   * @throws ApiError when the server rejects the delete for another reason.
+   * @throws CardDeleteRefusedError on 409 `running_execution` or `card_changed`, naming the executions,
+   *   or on 400 `invalid_prepared_by`.
+   * @throws ApiError when the server rejects the delete for another reason, such as 503 when runtime
+   *   admission is unavailable.
    * @throws NetworkError when the request fails to reach the server.
    */
-  async deleteCard(cardId: string): Promise<void> {
-    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}`);
+  async deleteCard(cardId: string, options: { readonly preparedBy?: string } = {}): Promise<void> {
+    const query = options.preparedBy === undefined ? '' : `?preparedBy=${encodeURIComponent(options.preparedBy)}`;
+    const url = this.buildUrl(`/cards/${encodeURIComponent(cardId)}${query}`);
     return this.request(() => this.getHttpClient().delete(url));
   }
 
@@ -919,7 +936,8 @@ export class CardsClient {
    * @param options - Deadline and cancellation.
    * @returns The completed command's report.
    * @throws RootCommandError with cause `no_report`, `rejected`, `uncertain`, `timeout`, `cancelled`, `unconfigured`,
-   *   `unavailable` (no answer or only server errors for 30 s, or until the deadline), `not_found` or `invalid_response`.
+   *   `unavailable` (no answer or only server errors for 30 s, or until the deadline), `card_not_found`,
+   *   `workspace_not_found` or `invalid_response`.
    */
   async runRootCommand<TCommand extends keyof RootCommandInputs>(
     cardId: string,
@@ -931,8 +949,19 @@ export class CardsClient {
     const messageId = globalThis.crypto.randomUUID();
     const deadline = Date.now() + (options.timeoutMs ?? ROOT_COMMAND_TIMEOUT_MS);
     const { signal } = options;
-    const fail = (cause: RootCommandFailureCause, detail: string): RootCommandError =>
-      new RootCommandError(`Root command ${command} on ${cardId} ended without a report: ${detail}`, cause, requestId);
+    const fail = (
+      cause: RootCommandFailureCause,
+      detail: string,
+      scope: RootCommandFailureScope = WORKSPACE_FAILURE_CAUSES.has(cause) ? 'workspace' : 'card'
+    ): RootCommandError =>
+      new RootCommandError(
+        `Root command ${command} on ${cardId} ended without a report: ${detail}`,
+        cause,
+        requestId,
+        scope
+      );
+    const uncertainScope = (reason: string): RootCommandFailureScope =>
+      WORKSPACE_UNCERTAINTY_REASONS.has(reason) ? 'workspace' : 'card';
     if (signal?.aborted) throw fail('cancelled', 'cancelled before launch');
 
     const commandsPath = `/cards/${encodeURIComponent(cardId)}/runtime/commands`;
@@ -967,6 +996,8 @@ export class CardsClient {
           input
         });
         if (exchange === null) {
+          // A request cut off by the deadline or the caller is no evidence about the server.
+          if (rootCommandEnded(deadline, signal) !== null) continue;
           unavailable('the launch got no response');
           await this.rootCommandPause(deadline, signal, outage?.attempts);
           continue;
@@ -977,16 +1008,20 @@ export class CardsClient {
         if (exchange.status === 409 && rootCommandErrorCode(exchange.body) === 'card_deleting') {
           throw fail('rejected', 'the card is being deleted');
         }
-        if (ROOT_COMMAND_REJECTIONS.has(exchange.status))
-          throw fail('rejected', `launch refused with ${exchange.status}`);
         const parsed = publicActionLaunchResponseSchema.safeParse(exchange.body);
+        // Admission that cannot answer comes back as a 503 carrying its reason; every other refusal status is final.
+        const uncertainAdmission =
+          exchange.status === 503 && parsed.success && parsed.data.disposition === 'unavailable';
+        if (ROOT_COMMAND_REJECTIONS.has(exchange.status) && !uncertainAdmission)
+          throw fail('rejected', `launch refused with ${exchange.status}`, 'workspace');
         if (!parsed.success) {
           if (exchange.status >= 500) {
             unavailable(`the launch failed with ${exchange.status}`);
             await this.rootCommandPause(deadline, signal, outage?.attempts);
             continue;
           }
-          if (exchange.status === 404) throw fail('not_found', `the server has no card ${cardId}`);
+          const missing = exchange.status === 404 ? rootCommandNotFound(exchange.body, cardId) : null;
+          if (missing !== null) throw fail(missing.cause, missing.detail);
           if (exchange.status === 409)
             throw fail('rejected', `launch refused with 409: ${rootCommandErrorText(exchange.body)}`);
           // The server may have admitted a launch it could not describe; cancel it rather than leave it unobserved.
@@ -996,16 +1031,18 @@ export class CardsClient {
         outage = undefined;
         const launch = normalizeActionLaunchResponse(parsed.data, { requestId, messageId });
         if (launch.status === 'rejected') throw fail('rejected', `launch rejected: ${launch.reason}`);
-        if (launch.status === 'uncertain') throw fail('uncertain', `launch uncertain: ${launch.reason}`);
+        if (launch.status === 'uncertain')
+          throw fail('uncertain', `launch uncertain: ${launch.reason}`, uncertainScope(launch.reason));
         launched = true;
       }
 
       const exchange = await this.rootCommandExchange('get', retrievePath, deadline, signal);
       if (exchange === null) {
+        if (rootCommandEnded(deadline, signal) !== null) continue;
         unavailable('the retrieval got no response');
       } else {
         if (exchange.status === 401 || exchange.status === 403)
-          throw fail('rejected', `retrieval refused with ${exchange.status}`);
+          throw fail('rejected', `retrieval refused with ${exchange.status}`, 'workspace');
         const parsed = publicActionRetrievalResponseSchema.safeParse(exchange.body);
         if (parsed.success) {
           outage = undefined;
@@ -1015,13 +1052,14 @@ export class CardsClient {
             return { requestId, executionId: record.execution.executionId, report: record.commandReport };
           }
           if (record.status === 'rejected') throw fail('rejected', `admission rejected: ${record.reason}`);
-          if (record.status === 'uncertain') throw fail('uncertain', `admission uncertain: ${record.reason}`);
+          if (record.status === 'uncertain')
+            throw fail('uncertain', `admission uncertain: ${record.reason}`, uncertainScope(record.reason));
           if (record.status === 'not-found') throw fail('uncertain', 'the admitted launch has no durable record');
         } else if (exchange.status >= 500) {
           unavailable(`the retrieval failed with ${exchange.status}`);
-        } else if (exchange.status === 404) {
-          throw fail('not_found', `the server has no card ${cardId}`);
         } else {
+          const missing = exchange.status === 404 ? rootCommandNotFound(exchange.body, cardId) : null;
+          if (missing !== null) throw fail(missing.cause, missing.detail);
           await this.cancelRootCommand(cancelPath);
           throw fail('invalid_response', `unrecognized retrieval response ${exchange.status}`);
         }
@@ -1305,6 +1343,47 @@ function rootCommandErrorCode(body: unknown): string | undefined {
   const { code, reason } = body as { code?: unknown; reason?: unknown };
   if (typeof code === 'string') return code;
   return typeof reason === 'string' ? reason : undefined;
+}
+
+/** A typed 404 of the runtime routes. */
+interface RootCommandNotFound {
+  readonly cause: 'card_not_found' | 'workspace_not_found';
+  readonly detail: string;
+}
+
+/**
+ * Recognizes the runtime routes' typed 404s; any other 404 is outside the contract.
+ *
+ * @param body - Parsed response body.
+ * @param cardId - The card the command targets.
+ * @returns The cause and its detail, or null for an untyped 404.
+ */
+function rootCommandNotFound(body: unknown, cardId: string): RootCommandNotFound | null {
+  const code = rootCommandErrorCode(body);
+  if (code === 'card_not_found') return { cause: code, detail: `the server has no card ${cardId}` };
+  if (code === 'workspace_not_found')
+    return { cause: code, detail: `the repository has no workspace: ${rootCommandErrorText(body)}` };
+  return null;
+}
+
+/**
+ * Recognizes a card-delete refusal in an error body. A 409's execution list
+ * must be readable, or the body is outside the contract and stays a plain
+ * {@link ApiError}; `invalid_prepared_by` carries none.
+ *
+ * @param code - The body's machine code.
+ * @param executions - The body's `executions` field.
+ * @returns The refusal, or null when the body is not one.
+ */
+function cardDeleteRefusal(
+  code: string,
+  executions: unknown
+): { code: CardDeleteRefusalCode; executions: readonly string[] } | null {
+  const refusal = CARD_DELETE_REFUSAL_CODES.find((known) => known === code);
+  if (refusal === undefined) return null;
+  if (refusal === 'invalid_prepared_by') return executions === undefined ? { code: refusal, executions: [] } : null;
+  if (!Array.isArray(executions) || !executions.every((id): id is string => typeof id === 'string')) return null;
+  return { code: refusal, executions };
 }
 
 /**

@@ -17,7 +17,7 @@ import {
 } from '../../../src/protocol/types/runtime-messages.js';
 
 const ACTION = { actionId: 'implement', environmentName: 'default', mode: 'background', exitWhenDone: true };
-const ROOT = { rootCommand: 'worktreeMaintenance', input: { mode: 'cleanup' } };
+const ROOT = { rootCommand: 'worktreeMaintenance', input: { mode: 'cleanup', budgetMs: 60_000 } };
 const EXECUTION = { executionId: 'execution-1', launchRequestId: 'request-1' };
 const TERMINAL = {
   terminalDecisionId: 'terminal:execution-1',
@@ -34,7 +34,9 @@ describe('launch union', () => {
     for (const schema of [launchRequestPayloadSchema, executeRequestPayloadSchema]) {
       expect(schema.safeParse(ACTION).success).toBe(true);
       for (const mode of ['preview', 'cleanup', 'prepare-delete']) {
-        expect(schema.safeParse({ rootCommand: 'worktreeMaintenance', input: { mode } }).success).toBe(true);
+        expect(schema.safeParse({ rootCommand: 'worktreeMaintenance', input: { mode, budgetMs: 1 } }).success).toBe(
+          true
+        );
       }
     }
   });
@@ -42,13 +44,27 @@ describe('launch union', () => {
   it('rejects a payload mixing both variants, an unknown command, an unknown mode and extra input', () => {
     for (const payload of [
       { ...ACTION, ...ROOT },
-      { rootCommand: 'somethingElse', input: { mode: 'cleanup' } },
-      { rootCommand: 'worktreeMaintenance', input: { mode: 'purge' } },
-      { rootCommand: 'worktreeMaintenance', input: { mode: 'cleanup', cardId: 'main-1' } },
+      { rootCommand: 'somethingElse', input: { mode: 'cleanup', budgetMs: 60_000 } },
+      { rootCommand: 'worktreeMaintenance', input: { mode: 'purge', budgetMs: 60_000 } },
+      { rootCommand: 'worktreeMaintenance', input: { mode: 'cleanup', budgetMs: 60_000, cardId: 'main-1' } },
       { rootCommand: 'worktreeMaintenance' }
     ]) {
       expect(launchRequestPayloadSchema.safeParse(payload).success).toBe(false);
     }
+  });
+});
+
+describe('worktreeMaintenance budget', () => {
+  it.each([
+    ['missing', undefined],
+    ['zero', 0],
+    ['negative', -1],
+    ['fractional', 1.5],
+    ['a string', '60000'],
+    ['beyond the safe integers', Number.MAX_SAFE_INTEGER + 2]
+  ])('rejects a budgetMs that is %s', (_name, budgetMs) => {
+    const payload = { rootCommand: 'worktreeMaintenance', input: { mode: 'cleanup', budgetMs } };
+    expect(launchRequestPayloadSchema.safeParse(payload).success).toBe(false);
   });
 });
 

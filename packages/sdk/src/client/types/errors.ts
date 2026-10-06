@@ -46,24 +46,43 @@ export class ApiError extends Error {
   }
 }
 
+/** Why the server refused to delete a card. */
+export type CardDeleteRefusalCode =
+  /** 409: executions on the card are still running. */
+  | 'running_execution'
+  /** 409: the card changed after the cited prepare-delete run, which no longer vouches for it. */
+  | 'card_changed'
+  /** 400: `preparedBy` names no prepare-delete run of this card that the server accepts. */
+  | 'invalid_prepared_by';
+
+/** Every {@link CardDeleteRefusalCode}. */
+export const CARD_DELETE_REFUSAL_CODES: readonly CardDeleteRefusalCode[] = [
+  'running_execution',
+  'card_changed',
+  'invalid_prepared_by'
+];
+
 /**
- * Error thrown when the server refuses to delete a card because executions on
- * it are still running (409 `running_execution`). It names those executions so
- * a caller can say which to stop.
+ * Error thrown when the server refuses {@link CardsClient.deleteCard}. Nothing
+ * was deleted. `executions` names the executions behind a 409, so a caller can
+ * say which to stop or which changed the card; it is empty for
+ * `invalid_prepared_by`.
  */
-export class RunningExecutionError extends ApiError {
+export class CardDeleteRefusedError extends ApiError {
   /**
-   * Creates a new RunningExecutionError instance.
+   * Creates a new CardDeleteRefusedError instance.
    *
-   * @param message - Human-readable error message naming the executions
-   * @param executions - IDs of the executions still running on the card
+   * @param message - Human-readable error message from the server
+   * @param code - Why the delete was refused
+   * @param executions - IDs of the executions the refusal names
    */
   constructor(
     message: string,
+    public override readonly code: CardDeleteRefusalCode,
     public readonly executions: readonly string[]
   ) {
-    super(message, 'running_execution');
-    this.name = 'RunningExecutionError';
+    super(message, code);
+    this.name = 'CardDeleteRefusedError';
   }
 }
 
@@ -180,10 +199,19 @@ export type RootCommandFailureCause =
   | 'unconfigured'
   /** The server gave no response, or only server errors, until the wait ended. */
   | 'unavailable'
-  /** The server has no such card to run the command on. */
-  | 'not_found'
+  /** 404 `card_not_found`: the server has no such card to run the command on. */
+  | 'card_not_found'
+  /** 404 `workspace_not_found`: the repository has no workspace to run the command in. */
+  | 'workspace_not_found'
   /** The server answered with a body outside the root-command contract. */
   | 'invalid_response';
+
+/**
+ * Whether a root-command failure would recur for every card in the workspace or
+ * belongs to this card alone. A caller sweeping many cards stops at the first
+ * `workspace` failure instead of repeating it for each card.
+ */
+export type RootCommandFailureScope = 'workspace' | 'card';
 
 /**
  * Error thrown when a root configuration command does not complete with a report.
@@ -199,11 +227,13 @@ export class RootCommandError extends Error {
    * @param message - Human-readable error message
    * @param cause - Machine-readable failure cause
    * @param requestId - Original caller request ID of the command launch
+   * @param scope - Whether the failure would recur for every card in the workspace
    */
   constructor(
     message: string,
     public readonly cause: RootCommandFailureCause,
-    public readonly requestId: string
+    public readonly requestId: string,
+    public readonly scope: RootCommandFailureScope
   ) {
     super(message);
     this.name = 'RootCommandError';

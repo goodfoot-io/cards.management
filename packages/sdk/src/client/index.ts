@@ -47,12 +47,15 @@ export type {
 // Error classes
 export {
   ApiError,
+  CARD_DELETE_REFUSAL_CODES,
+  type CardDeleteRefusalCode,
+  CardDeleteRefusedError,
   NetworkError,
   RequestCancelledError,
   RetryExhaustedError,
   RootCommandError,
   type RootCommandFailureCause,
-  RunningExecutionError
+  type RootCommandFailureScope
 } from './types/errors.js';
 // Event types
 export type { DiscoverResult, EventCallback, EventMap, EventSubscriberOptions } from './types/events.js';

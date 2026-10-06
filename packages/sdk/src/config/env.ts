@@ -785,6 +785,7 @@ export function extractWorktreeMaintenanceInput(): WorktreeMaintenanceInput {
     executionId,
     cardId: getCardId(),
     mode: parsed.data.mode,
+    budgetMs: parsed.data.budgetMs,
     repoRoot: getRepoRoot(),
     cardRepoPath: getCardRepoPath(),
     extensionPath: getExtensionPath()

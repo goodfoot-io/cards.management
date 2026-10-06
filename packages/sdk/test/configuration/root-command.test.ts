@@ -61,7 +61,7 @@ function env(mode: string, behaviour: string): NodeJS.ProcessEnv {
     REPO_ROOT: harness.dir,
     CARD_REPO_PATH: join(harness.dir, 'card-repo'),
     EXTENSION_PATH: join(harness.dir, 'extension'),
-    CARDS_ROOT_COMMAND_INPUT: JSON.stringify({ mode }),
+    CARDS_ROOT_COMMAND_INPUT: JSON.stringify({ mode, budgetMs: 45_000 }),
     BEHAVIOUR: behaviour
   };
 }
@@ -91,6 +91,7 @@ describe('executeCommand root command branch', () => {
       executionId: 'exec-1',
       cardId: 'main-1',
       mode: 'cleanup',
+      budgetMs: 45_000,
       repoRoot: harness.dir,
       cardRepoPath: join(harness.dir, 'card-repo'),
       extensionPath: join(harness.dir, 'extension')
@@ -113,8 +114,10 @@ describe('executeCommand root command branch', () => {
   });
 
   it.each([
-    ['an unknown mode', JSON.stringify({ mode: 'purge' })],
-    ['extra input fields', JSON.stringify({ mode: 'cleanup', cardId: 'main-2' })],
+    ['an unknown mode', JSON.stringify({ mode: 'purge', budgetMs: 45_000 })],
+    ['extra input fields', JSON.stringify({ mode: 'cleanup', budgetMs: 45_000, cardId: 'main-2' })],
+    ['no budget', JSON.stringify({ mode: 'cleanup' })],
+    ['a zero budget', JSON.stringify({ mode: 'cleanup', budgetMs: 0 })],
     ['input that is not JSON', 'cleanup'],
     ['no input', undefined]
   ])('fails before the handler runs on %s', async (_name, input) => {
