@@ -396,6 +396,8 @@ export interface RemovedSlotRecord extends CheckoutRecord {
   /** Where the checkout was quarantined, which git may still record. */
   readonly quarantine: string;
   readonly slotPath: string;
+  /** When the removal recorded the copy, as an ISO timestamp; the purge waits until the copy is old enough. */
+  readonly removedAt: string;
 }
 
 /**
@@ -521,6 +523,7 @@ export async function removeQuarantinedSlot(
       version: 1,
       quarantine,
       slotPath,
+      removedAt: new Date().toISOString(),
       rootMode: (await nodeFs.lstat(copy)).mode,
       witness,
       entries
@@ -850,7 +853,7 @@ export async function findRemovedSlotCopies(slotRoot: string): Promise<readonly 
 /** What {@link purgeRemovedSlots} did with one removed copy. */
 export type RemovedCopyPurge = { readonly copy: string; readonly processesNotInspected: number } & (
   | { readonly status: 'purged' }
-  /** Left for a later pass: busy, locked or out of budget. */
+  /** Left for a later pass: removed too recently, busy, locked or out of budget. */
   | { readonly status: 'pending'; readonly detail: string }
   /** It may hold work, so it is never deleted automatically; the detail says to check it and delete it by hand. */
   | { readonly status: 'kept'; readonly detail: string }
@@ -863,16 +866,23 @@ export interface RemovedSlotPurgeOptions extends Omit<SlotRemovalOptions, 'check
   /** Epoch milliseconds after which no further entry is deleted; the rest stays pending. */
   readonly deadline: number;
   /**
-   * Copies this pass itself removed. They are left untouched and uncounted, so
-   * a removed slot's copy is deleted on the next pass, never the one that
-   * removed it.
+   * How long, in milliseconds, a copy waits after its recorded removal before
+   * it may be deleted; a younger copy stays pending. {@link REMOVED_COPY_MINIMUM_AGE_MS}
+   * in production.
    */
-  readonly skip: ReadonlySet<string>;
+  readonly minimumAge: number;
   /** Injectable mutations of the dismantle. */
   readonly filesystem?: Partial<CheckoutFilesystem>;
   /** Timing seam passed to the dismantle. */
   readonly checkpoint?: (entryPath: string) => Promise<void>;
 }
+
+/**
+ * How long a removed copy waits before a purge may delete it. Every card's
+ * maintenance pass purges the whole repository, so without a wait one card's
+ * pass would delete the copy another card's pass removed seconds earlier.
+ */
+export const REMOVED_COPY_MINIMUM_AGE_MS = 60 * 60 * 1_000;
 
 /** The purge's deadline passed; the copy is left for a later pass. */
 class PurgeDeadlineError extends Error {
@@ -912,6 +922,18 @@ const readRemovedSlotRecord = async (copy: string): Promise<RemovedSlotRecord | 
   )
     return null;
   return record as RemovedSlotRecord;
+};
+
+/**
+ * The removal time a record carries.
+ * @param record - A removed copy's record.
+ * @returns Epoch milliseconds, or null when the record has no canonical ISO timestamp.
+ */
+const removalTime = (record: RemovedSlotRecord): number | null => {
+  const removedAt: unknown = record.removedAt;
+  if (typeof removedAt !== 'string') return null;
+  const time = Date.parse(removedAt);
+  return Number.isFinite(time) && new Date(time).toISOString() === removedAt ? time : null;
 };
 
 /**
@@ -1026,6 +1048,11 @@ const purgeRemovedCopy = async (
   }
   const record = await readRemovedSlotRecord(copy);
   if (record === null) return kept('It has no readable removal record');
+  const removedAt = removalTime(record);
+  if (removedAt === null) return kept('Its removal record has no valid removal time');
+  const eligibleAt = removedAt + options.minimumAge;
+  if (Date.now() < eligibleAt)
+    return pending(`It was removed at ${record.removedAt} and waits until ${new Date(eligibleAt).toISOString()}`);
   let uninspected = 0;
   try {
     const probe = await findSlotOccupants(copy, options.occupants);
@@ -1078,13 +1105,14 @@ const purgeRemovedCopy = async (
  * entry by entry against the record its removal took, after a probe finds no
  * process inside: one that changed since its removal is kept and reported,
  * never deleted, and one that is busy, locked or past the deadline stays
- * pending for a later pass. Copies in `options.skip` are not looked at.
+ * pending for a later pass, as does one removed less than `options.minimumAge`
+ * ago, so the pass that removed a slot never deletes its copy.
  *
  * Any failure other than shutdown stops the purge and is returned beside the
  * outcomes so far, so the report shows a failed purge instead of an empty one.
  * @param cardsDir - The repository's slot namespace, whose entries are card slot roots.
  * @param lockerFor - Takes a slot lock of the given slot root around a function.
- * @param options - Repository, deadline, copies to skip, git runner and probe overrides.
+ * @param options - Repository, deadline, minimum age, git runner and probe overrides.
  * @returns One outcome per copy reached, except leftovers of removals that never committed, which are
  * cleared silently, and the failure that stopped the purge, or null.
  * @throws {ShutdownError} When the fence closed.
@@ -1109,7 +1137,7 @@ export async function purgeRemovedSlots(
  * @param outcomes - Receives the outcomes, so those decided before a failure survive it.
  * @param cardsDir - The repository's slot namespace.
  * @param lockerFor - Takes a slot lock of the given slot root around a function.
- * @param options - Repository, deadline, copies to skip, git runner and probe overrides.
+ * @param options - Repository, deadline, minimum age, git runner and probe overrides.
  */
 const purgeInto = async (
   outcomes: RemovedCopyPurge[],
@@ -1121,7 +1149,7 @@ const purgeInto = async (
     const slotRoot = join(cardsDir, card);
     const byOrdinal = new Map<number, string[]>();
     for (const { ordinal, copy } of await findRemovedSlotCopies(slotRoot))
-      if (!options.skip.has(copy)) byOrdinal.set(ordinal, [...(byOrdinal.get(ordinal) ?? []), copy]);
+      byOrdinal.set(ordinal, [...(byOrdinal.get(ordinal) ?? []), copy]);
     for (const [ordinal, copies] of byOrdinal) {
       if (Date.now() >= options.deadline) {
         for (const copy of copies)

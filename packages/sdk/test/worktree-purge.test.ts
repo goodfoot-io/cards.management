@@ -32,6 +32,7 @@ import {
   purgeRemovedSlots,
   quarantinePathFor,
   quarantineSlot,
+  REMOVED_COPY_MINIMUM_AGE_MS,
   type RemovedSlotPurgeOptions,
   recoverSlotResidueLocked,
   removedCopyPathFor,
@@ -226,7 +227,7 @@ describe('slot purge', () => {
       withSlotLock(root, ordinal, purpose, { executionId: 'exec-purge', cardId, environment: env.environment }, fn);
 
   /**
-   * Runs one purge pass with a generous deadline and nothing skipped unless overridden.
+   * Runs one purge pass with a generous deadline and no minimum age unless overridden.
    * @param overrides - Option and locker overrides.
    * @param locker - The locker factory.
    * @returns The pass's outcomes and failure.
@@ -238,7 +239,7 @@ describe('slot purge', () => {
     purgeRemovedSlots(cardsDir, locker, {
       repoRoot: repo,
       deadline: Date.now() + 60_000,
-      skip: new Set(),
+      minimumAge: 0,
       ...overrides
     });
 
@@ -567,13 +568,60 @@ describe('slot purge', () => {
       expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
     });
 
-    it('leaves a copy this pass removed untouched and uncounted, and purges it on the next pass', async () => {
+    /**
+     * Rewrites a copy's removal time in its record.
+     * @param copy - The removed copy.
+     * @param removedAt - The value to record, or undefined to drop the field.
+     */
+    async function recordRemovalTime(copy: string, removedAt: unknown): Promise<void> {
+      const record = JSON.parse(await readFile(`${copy}.json`, 'utf8')) as Record<string, unknown>;
+      await writeFile(`${copy}.json`, JSON.stringify({ ...record, removedAt }));
+    }
+
+    it('leaves a copy removed less than the minimum age ago pending and untouched', async () => {
       addSlot();
       const copy = await removeSlot();
-      await expect(purge({ skip: new Set([copy]) })).resolves.toEqual([]);
+      const record = JSON.parse(await readFile(`${copy}.json`, 'utf8')) as { removedAt: string };
+      const eligibleAt = new Date(Date.parse(record.removedAt) + REMOVED_COPY_MINIMUM_AGE_MS).toISOString();
+      await expect(purge({ minimumAge: REMOVED_COPY_MINIMUM_AGE_MS })).resolves.toEqual([
+        {
+          copy,
+          status: 'pending',
+          detail: `It was removed at ${record.removedAt} and waits until ${eligibleAt}`,
+          processesNotInspected: 0
+        }
+      ]);
       expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
-      expect(existsSync(`${copy}.json`)).toBe(true);
-      await expect(purge()).resolves.toEqual([{ copy, status: 'purged', processesNotInspected: expect.any(Number) }]);
+    });
+
+    it('purges a copy removed longer than the minimum age ago', async () => {
+      addSlot();
+      const copy = await removeSlot();
+      await recordRemovalTime(copy, new Date(Date.now() - REMOVED_COPY_MINIMUM_AGE_MS - 1_000).toISOString());
+      await expect(purge({ minimumAge: REMOVED_COPY_MINIMUM_AGE_MS })).resolves.toEqual([
+        { copy, status: 'purged', processesNotInspected: expect.any(Number) }
+      ]);
+      expect(existsSync(copy)).toBe(false);
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['not a timestamp', 'yesterday'],
+      ['not canonical', '2026-01-01'],
+      ['not a string', 1_700_000_000_000]
+    ])('keeps a copy whose removal time is %s', async (_case, removedAt) => {
+      addSlot();
+      const copy = await removeSlot();
+      await recordRemovalTime(copy, removedAt);
+      await expect(purge()).resolves.toEqual([
+        {
+          copy,
+          status: 'kept',
+          detail: `Its removal record has no valid removal time. Check its contents, then delete ${copy} by hand`,
+          processesNotInspected: 0
+        }
+      ]);
+      expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
     });
 
     it('reports a purge that failed, with the outcomes it reached, and never as a clean one', async () => {

@@ -53,20 +53,23 @@ export type CardDeleteRefusalCode =
   /** 409: the card changed after the cited prepare-delete run, which no longer vouches for it. */
   | 'card_changed'
   /** 400: `preparedBy` names no prepare-delete run of this card that the server accepts. */
-  | 'invalid_prepared_by';
+  | 'invalid_prepared_by'
+  /** 400: the delete cited no prepare-delete run. */
+  | 'prepared_by_required';
 
 /** Every {@link CardDeleteRefusalCode}. */
 export const CARD_DELETE_REFUSAL_CODES: readonly CardDeleteRefusalCode[] = [
   'running_execution',
   'card_changed',
-  'invalid_prepared_by'
+  'invalid_prepared_by',
+  'prepared_by_required'
 ];
 
 /**
  * Error thrown when the server refuses {@link CardsClient.deleteCard}. Nothing
  * was deleted. `executions` names the executions behind a 409, so a caller can
  * say which to stop or which changed the card; it is empty for
- * `invalid_prepared_by`.
+ * `invalid_prepared_by` and `prepared_by_required`.
  */
 export class CardDeleteRefusedError extends ApiError {
   /**

@@ -83,7 +83,7 @@ export interface WorktreePurgeKeptCopy {
  */
 export interface WorktreePurgeSummary {
   readonly purged: number;
-  /** Copies left for a later pass: busy, locked, or out of budget. */
+  /** Copies left for a later pass: removed under an hour ago, busy, locked, or out of budget. */
   readonly pending: number;
   readonly kept: readonly WorktreePurgeKeptCopy[];
   /**
