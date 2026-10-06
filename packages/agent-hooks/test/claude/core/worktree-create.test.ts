@@ -56,6 +56,7 @@ vi.mock('@cards.management/sdk/worktree', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cards.management/sdk/worktree')>();
   return {
     ...actual,
+    assertRefOutsideSlotNamespace: vi.fn(),
     createWorktree: vi.fn()
   };
 });
@@ -97,7 +98,7 @@ import { resolveWorktreeCardId } from '@cards.management/sdk/adhoc-attribution';
 import { writeCardsParentConfig } from '@cards.management/sdk/cards-parent-branch';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { addUnboundCandidate } from '@cards.management/sdk/unbound-worktree-candidates';
-import { createWorktree } from '@cards.management/sdk/worktree';
+import { assertRefOutsideSlotNamespace, createWorktree, SlotNamespaceError } from '@cards.management/sdk/worktree';
 import { createWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 import hookFn from '../../../src/claude/core/worktree-create.js';
 
@@ -127,6 +128,7 @@ function settledResult(worktreePath: string, reroutedSymlinks = 0) {
 describe('WorktreeCreate hook', () => {
   const originalEnv = process.env;
   const mockCreateWorktree = vi.mocked(createWorktree);
+  const mockAssertRefOutsideSlotNamespace = vi.mocked(assertRefOutsideSlotNamespace);
   const mockCreateWorktreeForCard = vi.mocked(createWorktreeForCard);
   const mockCreateCardsClient = vi.mocked(createCardsClient);
   const mockWriteCardsParentConfig = vi.mocked(writeCardsParentConfig);
@@ -149,6 +151,8 @@ describe('WorktreeCreate hook', () => {
   beforeEach(() => {
     process.env = { ...originalEnv };
     mockCreateWorktree.mockReset();
+    mockAssertRefOutsideSlotNamespace.mockReset();
+    mockAssertRefOutsideSlotNamespace.mockResolvedValue(undefined);
     mockCreateWorktreeForCard.mockReset();
     mockCreateCardsClient.mockReset();
     mockWriteCardsParentConfig.mockReset();
@@ -179,6 +183,19 @@ describe('WorktreeCreate hook', () => {
 
   it('has correct hookEventName', () => {
     expect(hookFn.eventName).toBe('WorktreeCreate');
+  });
+
+  it('refuses a name in the slot namespace before resolving a card, a client or a worktree', async () => {
+    process.env['CARD_ID'] = 'main-1';
+    mockAssertRefOutsideSlotNamespace.mockRejectedValue(new SlotNamespaceError('/w/repo/cards/x', '/w/repo/cards'));
+    await expect(
+      hookFn({ ...baseInput, name: 'cards/x' }, { logger: mockLogger as unknown as Logger })
+    ).rejects.toThrow('worktreeMaintenance');
+    expect(mockAssertRefOutsideSlotNamespace).toHaveBeenCalledWith('/test/workspace', 'cards/x');
+    expect(mockCreateCardsClient).not.toHaveBeenCalled();
+    expect(mockCreateWorktree).not.toHaveBeenCalled();
+    expect(mockCreateWorktreeForCard).not.toHaveBeenCalled();
+    expect(mockWriteCardsParentConfig).not.toHaveBeenCalled();
   });
 
   it('returns worktreePath in output after settle resolves (unbound path)', async () => {

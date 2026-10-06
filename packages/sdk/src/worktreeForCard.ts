@@ -17,7 +17,7 @@ import { acquireLock, releaseLock } from '@cards.management/sessions/internal';
 import { resolveCardRepoPath } from './adhocAttribution.js';
 import { isKnownAgentComm } from './bin/process-utils.js';
 import { spawnAdhocAttribution } from './bin/spawnAdhocAttribution.js';
-import { resolveGlobalCardsConfigDir } from './cards-config.js';
+import { assertOutsideSlotNamespace, resolveGlobalCardsConfigDir, resolveMainRepoRoot } from './cards-config.js';
 import { writeCardsParentConfig } from './cardsParentBranch.js';
 import type { CardsClient } from './client/cardsClient.js';
 import { findAgentPid } from './process-tree.js';
@@ -393,9 +393,7 @@ async function outfitWithPublicationBarrier(
   const { cardId, parentBranch, sessionId, transcriptPath, runtime } = options;
 
   const perf = createWorktreePerf();
-  const checkedOutBranch = await resolveWorktreeBranchName(worktreeDir);
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(checkedOutBranch))
-    throw new Error('Dedicated slots require runtime worktree assignment');
+  await assertOutsideSlotNamespace(await resolveMainRepoRoot(worktreeDir), worktreeDir);
   const branchName = await provisionCardWorktreeDisk(worktreeDir, options);
 
   // --- API phase ---
@@ -538,7 +536,7 @@ export async function createWorktreeForCard(
   ref: string,
   options: CreateWorktreeForCardOptions
 ): Promise<EarlyWorktreeResult> {
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(ref)) throw new Error('Dedicated slots require runtime worktree assignment');
+  // createWorktree refuses a slot-namespace target before anything on disk changes.
   const { cwd, cardId, compiledScriptPaths, parentBranch, sessionId, registrationIntent } = options;
 
   // Settlement and outfit deliberately overlap on the early path. Keep cleanup
@@ -662,8 +660,8 @@ export async function releaseWorktreeForCard(
 ): Promise<void> {
   const { cardId, sessionId } = options;
 
+  await assertOutsideSlotNamespace(await resolveMainRepoRoot(worktreeDir), worktreeDir);
   const branchName = await resolveWorktreeBranchName(worktreeDir);
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(branchName)) throw new Error('Dedicated slots require runtime worktree cleanup');
 
   // Step 3 — Restore the worktree's original core.hooksPath from the snapshot.
   // Skip-with-warning if the snapshot is missing (hand-made worktree or a
@@ -729,8 +727,8 @@ export async function removeWorktreeForCard(
 ): Promise<void> {
   const { cardId, sessionId } = options;
 
+  await assertOutsideSlotNamespace(await resolveMainRepoRoot(worktreePath), worktreePath);
   const branchName = await resolveWorktreeBranchName(worktreePath);
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(branchName)) throw new Error('Dedicated slots require runtime worktree cleanup');
   await removeWorktree(worktreePath);
   try {
     const removal = await client.removeBranch(cardId, branchName, sessionId === undefined ? undefined : { sessionId });

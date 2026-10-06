@@ -21,6 +21,7 @@ import { promisify } from 'node:util';
 import { compiledHookScriptPaths, resolveExtensionPath } from '@cards.management/sdk';
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import {
+  assertRefOutsideSlotNamespace,
   createWorktree,
   findGitRoots,
   type GitRoots,
@@ -108,7 +109,7 @@ async function resolveParentBranch(sourceRoot: string): Promise<string> {
 }
 
 async function main(): Promise<void> {
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(ref!)) throw new Error('Dedicated slots require runtime worktree assignment');
+  await assertRefOutsideSlotNamespace(process.cwd(), ref!);
   // Explicit selection must not touch marker state: a corrupt or unreadable
   // source marker is irrelevant when the operator already chose the card.
   let source: GitRoots;

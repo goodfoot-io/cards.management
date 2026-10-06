@@ -9,7 +9,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
+import { lstat, readFile, realpath } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import * as path from 'node:path';
 
@@ -84,6 +84,118 @@ export function resolveWorktreesRoot(): string {
 export function resolveWorktreeDir(repoRoot: string, ref: string): string {
   const repoId = generateRepoId(repoRoot);
   return path.join(resolveWorktreesRoot(), repoId, ref);
+}
+
+/**
+ * Resolves a path through symlinks even when its leaf does not exist.
+ *
+ * `realpath` cannot canonicalize a missing directory, so this walks to the
+ * deepest existing ancestor, canonicalizes that, and appends the missing
+ * suffix unchanged.
+ *
+ * @param input - Existing or partially missing filesystem path.
+ * @returns Canonical absolute path with any missing suffix restored.
+ * @throws {Error} When an ancestor fails with anything but `ENOENT`, or no ancestor exists.
+ */
+export async function canonicalizePath(input: string): Promise<string> {
+  let existingAncestor = path.resolve(input);
+  const missingSegments: string[] = [];
+  for (;;) {
+    try {
+      return path.join(await realpath(existingAncestor), ...missingSegments.reverse());
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      const parent = path.dirname(existingAncestor);
+      if (parent === existingAncestor) throw error;
+      missingSegments.push(path.basename(existingAncestor));
+      existingAncestor = parent;
+    }
+  }
+}
+
+/**
+ * Spelling of a canonical path for comparison: case-folded where the filesystem ignores case.
+ * @param canonical - A canonical absolute path.
+ * @returns The path as compared on this platform.
+ */
+const comparable = (canonical: string): string =>
+  process.platform === 'win32' || process.platform === 'darwin' ? canonical.toLowerCase() : canonical;
+
+/**
+ * Whether `inner` is `outer` or lies beneath it; both are comparable canonical paths.
+ * @param outer - The containing path.
+ * @param inner - The path tested.
+ * @returns True when `inner` equals or descends from `outer`.
+ */
+const within = (outer: string, inner: string): boolean => {
+  const relative = path.relative(outer, inner);
+  return relative === '' || (relative.split(path.sep)[0] !== '..' && !path.isAbsolute(relative));
+};
+
+/**
+ * The directory holding a repository's dedicated worktree slots:
+ * `<worktrees root>/<repo-id>/cards`, with slots at `<card>/<ordinal>` beneath it.
+ * @param mainRoot - The repository's main checkout.
+ * @returns The slot namespace root.
+ */
+export function resolveSlotNamespace(mainRoot: string): string {
+  return resolveWorktreeDir(mainRoot, 'cards');
+}
+
+/** A worktree operation targeted the dedicated slot namespace, which only worktree maintenance may change. */
+export class SlotNamespaceError extends Error {
+  readonly target: string;
+  readonly namespace: string;
+  /**
+   * Names the refused target and the namespace it touches.
+   * @param target - The path the operation would have created or removed.
+   * @param namespace - The repository's slot namespace.
+   */
+  constructor(target: string, namespace: string) {
+    super(
+      `${target} is or contains dedicated worktree slots (${namespace}). Slots are created by card launches and ` +
+        'removed only by Clean Up Worktrees (the worktreeMaintenance command), which checks each slot for ' +
+        'unmerged work, live locks and running processes first.'
+    );
+    this.name = 'SlotNamespaceError';
+    this.target = target;
+    this.namespace = namespace;
+  }
+}
+
+/**
+ * Whether a filesystem path is a repository's slot namespace, an ancestor of it, or inside it.
+ * Paths are compared after resolving `.`/`..`, repeated separators and symlinks, and
+ * case-folded on Windows and macOS, so no spelling of a slot reaches it. Because a
+ * repository id hashes one spelling of its root, the `cards` namespace of every
+ * repository id under the worktrees root counts too, as do the worktrees root and
+ * each repository directory, which contain namespaces.
+ * @param mainRoot - The repository's main checkout.
+ * @param target - The path an operation would create or remove.
+ * @returns True when the operation could touch a slot or its locks.
+ */
+export async function isInSlotNamespace(mainRoot: string, target: string): Promise<boolean> {
+  const [namespace, root, candidate] = (
+    await Promise.all([
+      canonicalizePath(resolveSlotNamespace(mainRoot)),
+      canonicalizePath(resolveWorktreesRoot()),
+      canonicalizePath(target)
+    ])
+  ).map(comparable) as [string, string, string];
+  if (within(namespace, candidate) || within(candidate, namespace) || within(candidate, root)) return true;
+  if (!within(root, candidate)) return false;
+  const [, second] = path.relative(root, candidate).split(path.sep);
+  return second === undefined || second === 'cards';
+}
+
+/**
+ * Refuses a worktree create or remove whose target touches the slot namespace.
+ * @param mainRoot - The repository's main checkout.
+ * @param target - The path the operation would create or remove.
+ * @throws {SlotNamespaceError} When {@link isInSlotNamespace} holds.
+ */
+export async function assertOutsideSlotNamespace(mainRoot: string, target: string): Promise<void> {
+  if (await isInSlotNamespace(mainRoot, target)) throw new SlotNamespaceError(target, resolveSlotNamespace(mainRoot));
 }
 
 /**

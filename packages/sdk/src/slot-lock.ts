@@ -902,7 +902,7 @@ async function judgeByPidRules(
       pid: companion.pid,
       state: await stateOf(companion.pid, (live) =>
         'writtenAt' in companion
-          ? !pendingWasReused(live.startIdentity, companion.writtenAt, holder.startIdentity)
+          ? !pendingWasReused(live, companion.writtenAt, holder.pid)
           : live.startIdentity === companion.startIdentity
       )
     }))
@@ -939,20 +939,23 @@ function windowsTicks(value: string | null): bigint | null {
 }
 
 /**
- * Whether a live PID behind a `pending` companion is a different process: it
- * was created after the entry was written, or before the handler started [H3].
- * @param live - The live process's start identity.
+ * Whether a live PID behind a `pending` companion is a different process [H3]:
+ * it was created after the entry was written, or its parent is not the
+ * handler that spawned the companion. Windows never reparents, so the
+ * companion keeps naming the handler as its parent after the handler exits.
+ * The handler's own start time is no bound: a backward clock step between the
+ * handler's start and the spawn dates the companion before the handler.
+ * @param live - The live process behind the companion's PID.
  * @param writtenAt - When the entry was written.
- * @param handlerStart - The holder's start identity.
- * @returns True only when the creation time proves reuse.
+ * @param holderPid - The handler that spawned the companion.
+ * @returns True only when the process provably is not the companion.
  */
-function pendingWasReused(live: string, writtenAt: string, handlerStart: string | null): boolean {
-  const created = windowsTicks(live);
+function pendingWasReused(live: ProcessIdentity, writtenAt: string, holderPid: number): boolean {
+  if (live.parentPid !== holderPid) return true;
+  const created = windowsTicks(live.startIdentity);
   if (created === null) return false;
   const written = (BigInt(Date.parse(writtenAt)) + TICKS_EPOCH_OFFSET_MS) * 10_000n;
-  if (created > written) return true;
-  const started = windowsTicks(handlerStart);
-  return started !== null && created < started;
+  return created > written;
 }
 
 // ============================================================================
@@ -1027,7 +1030,9 @@ export interface SlotLock {
   clearIntent(): Promise<void>;
   /**
    * Writes `released.json`. Does nothing once the fence has closed or the
-   * switch latch is set, except from the lock's own shutdown hook.
+   * switch latch is set, except from the lock's own shutdown hook, and keeps
+   * the lock while any process the handler started is still alive, recording
+   * each as a companion so a later judge keeps it too.
    * @returns Whether `released.json` was written.
    */
   release(): Promise<boolean>;
@@ -1381,49 +1386,89 @@ function holdSlotLock(held: HeldGeneration): SlotLock {
   };
 
   /**
-   * Windows release snapshot [L4]: records every live child of the handler or
-   * of a companion created after its parent. Fails closed when the roster or a
-   * parent's start cannot be read.
-   * @param deadline - When the hook's budget for the roster ends.
-   * @returns True when no such child is alive.
+   * Records processes found alive at release as companions, so a later judge
+   * keeps the lock for as long as any of them runs.
+   * @param found - The processes, with the start identity each was seen with.
    */
-  const windowsSnapshotClear = async (deadline: number): Promise<boolean> => {
-    const roster = await identity.enumerate(Math.max(deadline - Date.now(), 1));
-    if (roster === 'unknown') return false;
-    const parents = new Map<number, string | null>([
-      [owner.holder.pid, owner.holder.startIdentity],
-      ...companions.map((companion): [number, string | null] => [
-        companion.pid,
-        companion.startIdentity === 'pending' ? null : companion.startIdentity
-      ])
-    ]);
-    const recorded = new Set(companions.map((companion) => companion.pid));
-    const found = roster.filter((entry) => {
-      if (entry.pid === identity.pid || recorded.has(entry.pid) || !parents.has(entry.parentPid)) return false;
-      const parentStart = windowsTicks(parents.get(entry.parentPid) ?? null);
-      const created = windowsTicks(entry.startIdentity);
-      return parentStart === null || created === null || created > parentStart;
-    });
-    if (found.length === 0) return true;
+  const recordSurvivors = async (found: readonly { pid: number; startIdentity: string }[]): Promise<void> => {
+    const fresh = found.filter((entry) => !companions.some((companion) => companion.pid === entry.pid));
+    if (fresh.length === 0) return;
     await persistCompanions((current) => [
       ...current,
-      ...found.map((entry): SlotCompanion => ({ pid: entry.pid, startIdentity: entry.startIdentity, role: 'agent' }))
+      ...fresh.map((entry): SlotCompanion => ({ pid: entry.pid, startIdentity: entry.startIdentity, role: 'agent' }))
     ]);
+  };
+
+  /**
+   * Release snapshot [L4]: lists every process other than the handler that
+   * could still act in the slot once `released.json` says it is free, and
+   * records any it finds as companions. On POSIX that is the handler's
+   * process group, which every child joins at fork, including one a hook
+   * forked while its git was being stopped; a handler that does not lead its
+   * group, such as one run by a `/bin/sh -c` parent, shares it with processes
+   * that are not its own, and relies on the git runner's stop report alone. On
+   * Windows, which has no groups and never reparents, it is every live
+   * descendant of the handler or of a companion, each created after its
+   * parent. Fails closed when the roster cannot be read.
+   * @param deadline - When the budget for the roster ends.
+   * @returns True when no such process is alive.
+   */
+  const releaseSnapshotClear = async (deadline: number): Promise<boolean> => {
+    const roster = await identity.enumerate(Math.max(deadline - Date.now(), 1));
+    if (roster === 'unknown') return false;
+    const recorded = new Set(companions.map((companion) => companion.pid));
+    const counts = (entry: ProcessIdentity): boolean => entry.pid !== identity.pid && !recorded.has(entry.pid);
+    const found = new Map<number, ProcessIdentity>();
+    if (identity.platform !== 'win32') {
+      const group = owner.holder.processGroupId;
+      if (group !== null && group === owner.holder.pid) {
+        for (const entry of roster) if (counts(entry) && entry.processGroupId === group) found.set(entry.pid, entry);
+      }
+    } else {
+      const parents = new Map<number, string | null>([
+        [owner.holder.pid, owner.holder.startIdentity],
+        ...companions.map((companion): [number, string | null] => [
+          companion.pid,
+          companion.startIdentity === 'pending' ? null : companion.startIdentity
+        ])
+      ]);
+      // Walk to a fixed point: a roster is not ordered parent-first.
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const entry of roster) {
+          if (!counts(entry) || found.has(entry.pid) || !parents.has(entry.parentPid)) continue;
+          // A child created before its parent names a reused parent PID.
+          const parentStart = windowsTicks(parents.get(entry.parentPid) ?? null);
+          const created = windowsTicks(entry.startIdentity);
+          if (parentStart !== null && created !== null && created <= parentStart) continue;
+          found.set(entry.pid, entry);
+          parents.set(entry.pid, entry.startIdentity);
+          grew = true;
+        }
+      }
+    }
+    if (found.size === 0) return true;
+    await recordSurvivors([...found.values()]);
     return false;
   };
 
   if (owner.purpose === 'work') {
     shutdown.register(async (reason: ShutdownReason) => {
       const deadline = Date.now() + SHUTDOWN_BUDGET_MS - HOOK_RELEASE_MARGIN_MS;
-      await environment.git.abortAll({ graceMs: HOOK_GIT_GRACE_MS });
+      const stopped = await environment.git.abortAll({ graceMs: HOOK_GIT_GRACE_MS });
       if (released || reason === 'switch' || latched) return;
+      // A git tree that could not be listed or fully ended may still write in the slot.
+      if (!stopped.complete || stopped.survivors.length > 0) {
+        await recordSurvivors(stopped.survivors);
+        return;
+      }
       // The dying handler may still run its current step: never release under it [G1].
       if (inFlight > 0 || endedAfterFence) return;
       await writes;
       if (!(await exitedWithin(deadline))) return;
       // A companion with no observed exit, such as a Windows git entry still recorded, keeps the lock.
       if (companions.some((companion) => !exits.has(companion.pid))) return;
-      if (identity.platform === 'win32' && !(await windowsSnapshotClear(deadline))) return;
+      if (!(await releaseSnapshotClear(deadline))) return;
       await writeRelease();
     });
   }
@@ -1527,6 +1572,9 @@ function holdSlotLock(held: HeldGeneration): SlotLock {
     async release() {
       // Once the fence closed only the hook may release [G1].
       if (fence.aborted || latched) return false;
+      if (released) return true;
+      // A process the handler leaves behind, such as a hook's background child, keeps the lock [L4].
+      if (!(await releaseSnapshotClear(Date.now() + environment.probeTimeoutMs))) return false;
       return writeRelease();
     }
   };

@@ -51,7 +51,8 @@ export {
   RequestCancelledError,
   RetryExhaustedError,
   RootCommandError,
-  type RootCommandFailureCause
+  type RootCommandFailureCause,
+  RunningExecutionError
 } from './types/errors.js';
 // Event types
 export type { DiscoverResult, EventCallback, EventMap, EventSubscriberOptions } from './types/events.js';

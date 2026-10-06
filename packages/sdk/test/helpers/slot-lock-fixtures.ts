@@ -206,6 +206,7 @@ export function lockEnvironment(
       git: {
         abortAll: async ({ graceMs }) => {
           aborts.push(graceMs);
+          return { survivors: [], complete: true };
         }
       },
       ...extra

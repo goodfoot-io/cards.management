@@ -76,6 +76,13 @@ export interface WorktreeCleanupPreview {
   readonly decisions: readonly WorktreeCleanupDecision[];
   /** Every pass reports its unknown locks, zero included. */
   readonly unknownLocks: WorktreeUnknownLocks;
+  /**
+   * The largest number of processes any of the pass's occupant probes could
+   * not inspect, whoever owns them; 0 when nothing was probed. Such processes
+   * never block removal, so this is for the report data and logs only and
+   * plays no part in {@link clearsCardDeletion}.
+   */
+  readonly processesNotInspected: number;
   /** Present when a stage failed and the decisions may be incomplete. */
   readonly failure?: WorktreeMaintenanceStageFailure;
 }
@@ -156,6 +163,7 @@ export const worktreeCleanupPreviewSchema = z
     canDeleteCard: z.boolean(),
     decisions: z.array(worktreeCleanupDecisionSchema),
     unknownLocks: worktreeUnknownLocksSchema,
+    processesNotInspected: z.int().nonnegative(),
     failure: z.strictObject({ stage: z.enum(['discovery', 'self_probe']), message: z.string() }).optional()
   })
   .refine((preview) => preview.canDeleteCard === clearsCardDeletion(preview), {

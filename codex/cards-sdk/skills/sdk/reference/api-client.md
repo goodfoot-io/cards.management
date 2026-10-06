@@ -50,7 +50,7 @@ All are `async` and throw on HTTP failure.
 
 ## Root Commands
 
-[runRootCommand(cardId, 'worktreeMaintenance', { mode }, options?)](./public/packages/sdk/src/client/cardsClient.ts#L907) launches the configuration's root command on a card and waits for its report. `mode` is `preview` (reads only), `cleanup` (removes eligible slots) or `prepare-delete` (removes eligible slots and requires that none remain). It posts the launch to `POST /cards/:cardId/runtime/commands`, polls the durable retrieval every 250 ms with each request capped at 10 s, and resolves `{ requestId, executionId, report }` only when the command completed with a report. `report` is opaque to the client: parse it against the command's own contract, for `worktreeMaintenance` a [WorktreeCleanupPreview](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L57) of `{ cardId, canDeleteCard, decisions }`.
+[runRootCommand(cardId, 'worktreeMaintenance', { mode }, options?)](./public/packages/sdk/src/client/cardsClient.ts#L907) launches the configuration's root command on a card and waits for its report. `mode` is `preview` (reads only), `cleanup` (removes eligible slots) or `prepare-delete` (removes eligible slots and requires that none remain). It posts the launch to `POST /cards/:cardId/runtime/commands`, polls the durable retrieval every 250 ms with each request capped at 10 s, and resolves `{ requestId, executionId, report }` only when the command completed with a report. `report` is opaque to the client: parse it against the command's own contract, for `worktreeMaintenance` a [WorktreeCleanupPreview](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L73) of `{ cardId, canDeleteCard, decisions, unknownLocks, processesNotInspected, failure? }`, which [worktreeCleanupPreviewSchema](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L160) validates.
 
 `options.timeoutMs` (default 300 000) bounds the whole wait and `options.signal` aborts it; either one posts `.../runtime/commands/:requestId/cancel` before throwing, so an abandoned wait never leaves the command running unobserved. Every other end throws [RootCommandError](./public/packages/sdk/src/client/types/errors.ts#L162) with a `cause`:
 
@@ -94,7 +94,7 @@ if (!preview.canDeleteCard) {
 await client.deleteCard(cardId);
 ```
 
-`canDeleteCard` is true only when every slot's outcome is `removed` or `eligible` (nothing left to remove) and the pass hit no failure. While any execution on the card runs, `deleteCard` throws `ApiError` 409 with body `{ code: 'running_execution', error, executions }`, where `error` names the running execution IDs; a 503 means runtime admission is unavailable. Neither deletes anything.
+`canDeleteCard` is true only when every slot's outcome is `removed` or `eligible` (nothing left to remove) and the pass hit no failure. Only a process whose working directory, root or an open file is proven inside a slot keeps it as `in_use`; a process the occupant probe could not inspect, whoever owns it, never blocks removal. `processesNotInspected` is the largest such count any of the pass's probes saw, for logs and report data only: it plays no part in `canDeleteCard` and is not meant for display. While any execution on the card runs, `deleteCard` throws `ApiError` 409 with body `{ code: 'running_execution', error, executions }`, where `error` names the running execution IDs; a 503 means runtime admission is unavailable. Neither deletes anything.
 
 Non-async accessors: `updateAccessToken(token)`, `getBaseUrl()`, `hasHttpClient()`.
 

@@ -23,7 +23,11 @@ import { resolveCardsParentBranch, writeCardsParentConfig } from '@cards.managem
 import { createCardsClient } from '@cards.management/sdk/client/discovery';
 import { compiledHookScriptPaths } from '@cards.management/sdk/git-hooks';
 import { addUnboundCandidate } from '@cards.management/sdk/unbound-worktree-candidates';
-import { createWorktree, type EarlyWorktreeResult } from '@cards.management/sdk/worktree';
+import {
+  assertRefOutsideSlotNamespace,
+  createWorktree,
+  type EarlyWorktreeResult
+} from '@cards.management/sdk/worktree';
 import { createWorktreeForCard } from '@cards.management/sdk/worktree-for-card';
 import { worktreeCreateHook, worktreeCreateOutput } from '@goodfoot/agent-hooks/claude-code';
 import { applyDefaultLogFile } from '../../shared/default-log-file.js';
@@ -105,8 +109,7 @@ async function resolveParentBranch(cwd: string): Promise<string> {
 }
 
 export default worktreeCreateHook({}, async (input, { logger }) => {
-  if (/^cards\/[^/]+\/[1-9]\d*$/.test(input.name))
-    throw new Error('Dedicated slots require runtime worktree assignment');
+  await assertRefOutsideSlotNamespace(input.cwd, input.name);
   // Point hook file logging at <mainRepoRoot>/.cards/logs/claude-code-cards-api-hooks.log,
   // computed from the payload cwd. No-op under an explicit CLAUDE_CODE_HOOKS_LOG_FILE.
   applyDefaultLogFile(input.cwd);
