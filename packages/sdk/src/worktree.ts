@@ -256,6 +256,22 @@ export function validateBranchName(name: string): void {
 }
 
 /**
+ * Rejects a ref that no git ref, tag or commit can be, before it becomes a
+ * worktree path: empty, a leading or trailing slash, an empty component, a
+ * component starting with `.` (so also `.` and `..`), or a backslash. Each of
+ * these would also resolve the worktree path somewhere other than one
+ * directory per ref, so this runs before the slot-namespace guard.
+ *
+ * @param ref - Branch name, tag name, or commit SHA supplied by the caller.
+ * @throws {Error} The branch-name format error when the ref is malformed.
+ */
+export function validateWorktreeRef(ref: string): void {
+  if (ref === '' || ref.includes('\\') || ref.split('/').some((part) => part === '' || part.startsWith('.'))) {
+    throw new Error('Error: Invalid branch name format.');
+  }
+}
+
+/**
  * Determines whether a relative path is nested under any known parent path.
  *
  * The check walks ancestor segments of `dir` and returns true on the first
@@ -404,6 +420,8 @@ export async function createWorktree(ref: string, options?: CreateWorktreeOption
   // the common case allocates nothing and reads no clock. t0 is captured here,
   // so every offset is measured from the start of the call the contributor waits on.
   const perf = createWorktreePerf();
+  // A malformed ref is named as such, rather than as whatever path it would resolve to.
+  validateWorktreeRef(ref);
 
   const { sourceRoot, repoRoot } = await perf.measure('findGitRoots', () =>
     findGitRoots(options?.cwd ?? process.cwd())
@@ -973,9 +991,11 @@ async function cleanStaleWorktreeRegistration(repoRoot: string, worktreeDir: str
  * enforces the same rule itself; this lets entry points fail first.
  * @param cwd - Directory inside the repository the worktree would belong to.
  * @param ref - The ref the worktree would be created for.
+ * @throws {Error} The branch-name format error when the ref is malformed; see {@link validateWorktreeRef}.
  * @throws {SlotNamespaceError} When the worktree path touches the slot namespace.
  */
 export async function assertRefOutsideSlotNamespace(cwd: string, ref: string): Promise<void> {
+  validateWorktreeRef(ref);
   const { repoRoot } = await findGitRoots(cwd);
   await assertOutsideSlotNamespace(repoRoot, resolveWorktreeDir(repoRoot, ref));
 }

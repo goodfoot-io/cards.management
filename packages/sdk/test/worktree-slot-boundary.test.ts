@@ -147,9 +147,6 @@ describe('generic SDK dedicated-slot boundary', () => {
       'cards/x/1/packages',
       'cards/x/2/a',
       'cards/x/01',
-      'cards/x/1/',
-      'cards//x/1',
-      './cards/x/1',
       'cards/x/1.lock',
       'cards/main-88/90071992547409931234567890'
     ])('refuses %s with nothing on disk or in git changed', async (ref) => {
@@ -173,6 +170,39 @@ describe('generic SDK dedicated-slot boundary', () => {
         })
       ).rejects.toThrow(SlotNamespaceError);
       await expect(assertRefOutsideSlotNamespace(repo, ref)).rejects.toThrow(SlotNamespaceError);
+
+      expect(publications).toBe(0);
+      expect(await snapshot()).toEqual(before);
+    });
+
+    it.each([
+      ['an empty ref, which names the repository directory', ''],
+      ['a parent segment, which names the worktrees root', '..'],
+      ['a trailing slash', 'cards/x/1/'],
+      ['a doubled slash', 'cards//x/1'],
+      ['a dot segment', './cards/x/1'],
+      ['a backslash', 'cards\\x\\1']
+    ])('names %s as an invalid branch name before the namespace guard', async (_case, ref) => {
+      const { snapshot } = await liveSlot();
+      const before = await snapshot();
+      let publications = 0;
+      const client = {
+        addBranch: async () => {
+          publications++;
+        }
+      } as unknown as CardsClient;
+
+      await expect(createWorktree(ref, { cwd: repo })).rejects.toThrow('Error: Invalid branch name format.');
+      await expect(
+        createWorktreeForCard(client, ref, {
+          cwd: repo,
+          cardId: 'x',
+          parentBranch: 'main',
+          registrationIntent: 'create',
+          compiledScriptPaths: {}
+        })
+      ).rejects.toThrow('Error: Invalid branch name format.');
+      await expect(assertRefOutsideSlotNamespace(repo, ref)).rejects.toThrow('Error: Invalid branch name format.');
 
       expect(publications).toBe(0);
       expect(await snapshot()).toEqual(before);
