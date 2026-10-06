@@ -207,6 +207,13 @@ export type RootCommandFailureCause =
   | 'invalid_response';
 
 /**
+ * Whether a root-command failure would recur for every card in the workspace or
+ * belongs to this card alone. A caller sweeping many cards stops at the first
+ * `workspace` failure instead of repeating it for each card.
+ */
+export type RootCommandFailureScope = 'workspace' | 'card';
+
+/**
  * Error thrown when a root configuration command does not complete with a report.
  *
  * Only `completed` with a `commandReport` resolves {@link CardsClient.runRootCommand};
@@ -220,11 +227,13 @@ export class RootCommandError extends Error {
    * @param message - Human-readable error message
    * @param cause - Machine-readable failure cause
    * @param requestId - Original caller request ID of the command launch
+   * @param scope - Whether the failure would recur for every card in the workspace
    */
   constructor(
     message: string,
     public readonly cause: RootCommandFailureCause,
-    public readonly requestId: string
+    public readonly requestId: string,
+    public readonly scope: RootCommandFailureScope
   ) {
     super(message);
     this.name = 'RootCommandError';
