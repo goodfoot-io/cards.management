@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
@@ -254,6 +254,131 @@ describe('cleanupCardSlots preservation', () => {
   });
 });
 
+describe('cleanupCardSlots next steps', () => {
+  /** What every permanent refusal's detail ends with: the pass that then removes the slot. */
+  const AGAIN = /run Clean Up Worktrees again$/;
+
+  /**
+   * Sets a slot's registered parent branch.
+   * @param branch - Slot branch.
+   * @param parentBranch - The parent to record.
+   * @throws When the slot is not registered.
+   */
+  function setParent(branch: string, parentBranch: string): void {
+    const registration = fx.client.registrations.get(branch);
+    if (registration === undefined) throw new Error('slot not registered');
+    registration.parentBranch = parentBranch;
+  }
+
+  it.each([
+    {
+      reason: 'unmerged_commits',
+      arrange: (slot: AcquiredSlot) => fx.git(['commit', '-q', '--allow-empty', '-m', 'work'], slot.worktreePath),
+      step: (slot: AcquiredSlot) => [`git branch -D ${slot.branch}`, `git worktree remove --force ${slot.worktreePath}`]
+    },
+    {
+      reason: 'uncommitted_changes',
+      arrange: (slot: AcquiredSlot) => writeFile(join(slot.worktreePath, 'draft.txt'), 'draft'),
+      step: (slot: AcquiredSlot) => ['commit, stash or discard', `git branch -D ${slot.branch}`]
+    },
+    {
+      reason: 'head_off_branch',
+      arrange: (slot: AcquiredSlot) => fx.git(['checkout', '-q', '--detach'], slot.worktreePath),
+      step: (slot: AcquiredSlot) => [`git switch ${slot.branch}`, `git worktree remove --force ${slot.worktreePath}`]
+    },
+    {
+      reason: 'parent_branch_missing',
+      arrange: async (slot: AcquiredSlot) => setParent(slot.branch, 'gone'),
+      step: () => ['recreate the parent branch']
+    },
+    {
+      reason: 'invalid_entry',
+      arrange: async (slot: AcquiredSlot) => {
+        fx.client.registrations.delete(slot.branch);
+        fx.client.invalidEntries.push({ name: slot.branch, reason: 'unparseable' });
+      },
+      step: () => ['under branches/ in the card repository']
+    },
+    {
+      reason: 'checked_out_elsewhere',
+      arrange: async (slot: AcquiredSlot) => {
+        await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
+        await fx.git(['worktree', 'add', '-q', join(fx.repoRoot, '..', 'elsewhere'), slot.branch]);
+      },
+      step: () => ['switch that checkout to another branch or remove it']
+    },
+    {
+      reason: 'submodules',
+      arrange: async (slot: AcquiredSlot) => {
+        const head = await fx.git(['rev-parse', 'HEAD'], slot.worktreePath);
+        await fx.git(['update-index', '--add', '--cacheinfo', `160000,${head},sub`], slot.worktreePath);
+        await fx.git(['commit', '-q', '-m', 'gitlink'], slot.worktreePath);
+        // An uninitialized submodule is an empty directory; without it, status reports the gitlink deleted.
+        await mkdir(join(slot.worktreePath, 'sub'));
+        await fx.git(['merge', '-q', '--ff-only', slot.branch]);
+      },
+      step: (slot: AcquiredSlot) => [`git worktree remove --force ${slot.worktreePath}`, `git branch -D ${slot.branch}`]
+    }
+  ])('names the next step for $reason', async ({ reason, arrange, step }) => {
+    const slot = await finishedSlot('exec-1');
+    await arrange(slot);
+
+    for (const mode of ['preview', 'cleanup'] as const) {
+      const decision = decisionOf(await pass({ mode }), slot.branch);
+      expect(decision).toMatchObject({ reason, outcome: 'preserved' });
+      expect(decision.detail).toMatch(AGAIN);
+      for (const text of step(slot)) expect(decision.detail).toContain(text);
+    }
+  });
+
+  it('names the next step for in_use, in preview and in cleanup', async () => {
+    const slot = await finishedSlot('exec-1');
+    const { spawn } = await import('node:child_process');
+    const occupant = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: slot.worktreePath });
+    try {
+      for (const mode of ['preview', 'cleanup'] as const) {
+        const decision = decisionOf(await pass({ mode }), slot.branch);
+        expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
+        expect(decision.detail).toContain(`pid ${occupant.pid}`);
+        expect(decision.detail).toContain(`stop the processes working in ${slot.worktreePath}`);
+        expect(decision.detail).toMatch(AGAIN);
+      }
+    } finally {
+      occupant.kill('SIGKILL');
+    }
+  });
+
+  it('removes an abandoned slot once its stated git commands have run', async () => {
+    const slot = await finishedSlot('exec-1');
+    await fx.git(['commit', '-q', '--allow-empty', '-m', 'work to abandon'], slot.worktreePath);
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'unmerged_commits', outcome: 'preserved' });
+
+    await fx.git(['worktree', 'remove', '--force', slot.worktreePath]);
+    await fx.git(['branch', '-D', slot.branch]);
+
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'missing', outcome: 'removed' });
+    expect(fx.client.registrations.has(slot.branch)).toBe(false);
+  });
+
+  it('says the git-ignored files of a clean slot are deleted with it, in preview and in the removal', async () => {
+    await writeFile(join(fx.repoRoot, '.gitignore'), '.env\n');
+    await fx.git(['add', '.gitignore']);
+    await fx.git(['commit', '-q', '-m', 'ignore .env']);
+    const slot = await finishedSlot('exec-1');
+    await writeFile(join(slot.worktreePath, '.env'), 'SECRET=1\n');
+    const note = `git-ignored files in ${slot.worktreePath} are deleted with it`;
+
+    const preview = decisionOf(await pass({ mode: 'preview' }), slot.branch);
+    expect(preview).toMatchObject({ reason: 'eligible', outcome: 'eligible' });
+    expect(preview.detail).toContain(note);
+
+    const removed = decisionOf(await pass(), slot.branch);
+    expect(removed).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+    expect(removed.detail).toContain(note);
+    expect(await exists(slot.worktreePath)).toBe(false);
+  });
+});
+
 describe('cleanupCardSlots removal', () => {
   it('removes a merged clean slot: checkout, ref and registration', async () => {
     const slot = await finishedSlot('exec-1');
@@ -307,6 +432,37 @@ describe('cleanupCardSlots removal', () => {
     expect(await exists(slot.worktreePath)).toBe(true);
     expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
+  });
+
+  it('keeps the ref with the registration when the slot path is recreated during removal, then removes both', async () => {
+    const slot = await finishedSlot('exec-1');
+    const oid = await fx.git(['rev-parse', slot.branch]);
+    let recreated = false;
+    // An editor saves into the slot path after the checkout moved to quarantine.
+    fx.beforeGit = async (args, cwd) => {
+      if (recreated || args[0] !== 'status' || !cwd.includes('.deleting-')) return;
+      recreated = true;
+      await mkdir(slot.worktreePath);
+      await writeFile(join(slot.worktreePath, 'stray.txt'), 'editor save');
+    };
+
+    const blocked = decisionOf(await pass(), slot.branch);
+    fx.beforeGit = null;
+
+    expect(recreated).toBe(true);
+    expect(blocked).toMatchObject({ reason: 'removal_blocked', outcome: 'preserved' });
+    expect(blocked.detail).toMatch(/keep anything wanted from .* and remove it, then run Clean Up Worktrees again$/);
+    expect(await fx.git(['rev-parse', slot.branch])).toBe(oid);
+    expect(fx.client.registrations.has(slot.branch)).toBe(true);
+    expect(await readFile(join(slot.worktreePath, 'stray.txt'), 'utf8')).toBe('editor save');
+
+    // Following the detail clears the state: the next pass removes the merged ref and the registration.
+    await rm(slot.worktreePath, { recursive: true });
+    const removed = decisionOf(await pass(), slot.branch);
+
+    expect(removed).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+    expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
+    expect(fx.client.registrations.has(slot.branch)).toBe(false);
   });
 
   it('restores a slot whose held content changes during removal and reports it removal_restored', async () => {

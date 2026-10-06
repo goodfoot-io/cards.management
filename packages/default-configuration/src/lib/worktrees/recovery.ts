@@ -7,6 +7,8 @@
  * @module
  */
 
+import { readdir } from 'node:fs/promises';
+import { basename, dirname } from 'node:path';
 import type { SlotLock, SlotLockPrevious } from '@cards.management/sdk/slot-lock';
 import { type CreationContext, type CreationRecovery, recoverCreationIntent } from './intent.js';
 import type { SlotRemoval, SlotResidueReport } from './seams.js';
@@ -66,11 +68,26 @@ export interface SlotRecovery {
 }
 
 /**
+ * Whether quarantine residue (`<slot>.deleting-*`, `<slot>.held*`) lies beside the slot now.
+ * @param slotPath - The slot checkout path.
+ * @returns True when any residue name is present.
+ */
+async function hasResidue(slotPath: string): Promise<boolean> {
+  const base = basename(slotPath);
+  const names = await readdir(dirname(slotPath)).catch((error: unknown) => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  });
+  return names.some((name) => name.startsWith(`${base}.deleting-`) || name.startsWith(`${base}.held`));
+}
+
+/**
  * Settles what the previous holder of a freshly acquired ordinal left.
+ * Residue is read here, under the lock: what a scan saw before the lock may be
+ * stale, because an interrupted removal can leave residue after it.
  * @param lock - The ordinal's freshly acquired lock.
  * @param previous - The generation judged before GC.
  * @param slotPath - The slot checkout path.
- * @param hasResidue - Whether quarantine residue was found beside the slot.
  * @param context - Creation context and the removal seam.
  * @param context.creation - Git, client, place and log.
  * @param context.removal - The SDK verified-removal seam.
@@ -80,7 +97,6 @@ export async function recoverSlot(
   lock: SlotLock,
   previous: SlotLockPrevious,
   slotPath: string,
-  hasResidue: boolean,
   context: { readonly creation: CreationContext; readonly removal: SlotRemoval }
 ): Promise<SlotRecovery> {
   const creation =
@@ -88,7 +104,7 @@ export async function recoverSlot(
       ? null
       : await recoverCreationIntent(lock, previous.creating, previous.owner?.executionId ?? null, context.creation);
   let residue: readonly SlotResidueReport[] = [];
-  if (hasResidue) {
+  if (await hasResidue(slotPath)) {
     lock.checkpoint();
     residue = await context.removal.recoverSlotResidueLocked(
       { repoRoot: context.creation.place.repoRoot, slotPath, lock },

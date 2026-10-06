@@ -128,7 +128,10 @@ export async function judgeUsability(
   if (!(await pathExists(path))) return { status: 'absent' };
   const repair = 'run `git worktree repair` from the main repository';
   const dotGit = join(path, '.git');
-  if (!(await pathExists(dotGit)) || !(await lstat(dotGit)).isFile())
+  const notCheckout = `keep anything wanted from ${path} and remove it, then run Clean Up Worktrees again`;
+  if (!(await pathExists(dotGit)))
+    return { status: 'unusable_checkout', detail: `${path} is not a git checkout; ${notCheckout}` };
+  if (!(await lstat(dotGit)).isFile())
     return { status: 'unusable_checkout', detail: `${dotGit} is not a gitdir file; ${repair}` };
   if (!/^gitdir: .+\s*$/.test(await readFile(dotGit, 'utf8')))
     return { status: 'unusable_checkout', detail: `${dotGit} has no gitdir pointer; ${repair}` };
@@ -140,7 +143,10 @@ export async function judgeUsability(
     git.text(repoRoot, ['rev-parse', '--path-format=absolute', '--git-common-dir'])
   ]);
   if (!(await samePath(actualCommon.trim(), expectedCommon.trim())))
-    return { status: 'unusable_checkout', detail: `${path} belongs to another repository (${actualCommon.trim()})` };
+    return {
+      status: 'unusable_checkout',
+      detail: `${path} belongs to another repository (${actualCommon.trim()}); ${notCheckout}`
+    };
   const head = await git.run(path, ['symbolic-ref', '--quiet', 'HEAD']);
   if (head.exitCode !== 0 || head.stdout.trim() !== `refs/heads/${branch}`) {
     const current = head.exitCode === 0 ? head.stdout.trim() : 'a detached HEAD';
