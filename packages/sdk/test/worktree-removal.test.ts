@@ -21,6 +21,7 @@ import {
   describeSlotOccupancy,
   findSlotOccupants,
   findSlotResidue,
+  isSlotEntryName,
   OccupantProbeError,
   type ProcReader,
   processesNotInspected,
@@ -36,6 +37,7 @@ import {
   type SlotRemovalStep,
   type SlotResidueLocker,
   slotOccupied,
+  slotRootHoldsSlotEntry,
   stopSlotFsmonitor
 } from '../src/worktree-removal.js';
 import { fakeWorld, lockEnvironment, ownerFile, writeGeneration } from './helpers/slot-lock-fixtures.js';
@@ -832,5 +834,59 @@ describe('slot removal', () => {
         await expect(findSlotOccupants(slotPath)).resolves.toMatchObject({ occupants: [] });
       }
     );
+  });
+});
+
+describe('slot root entries', () => {
+  const uuid = '0f8e2a3c-1b2d-4e5f-8a9b-0c1d2e3f4a5b';
+
+  it.each([
+    ['1', true],
+    ['12', true],
+    ['0', false],
+    ['01', false],
+    ['1a', false],
+    [`3.deleting-${uuid}`, true],
+    [`3.deleting-${uuid}.submodules`, true],
+    ['3.deleting-x', true],
+    [`03.deleting-${uuid}`, false],
+    ['.locks', false],
+    ['.purge', false],
+    [`.purge/1.${uuid}`, false],
+    [`1.${uuid}`, false]
+  ])('counts %s as a slot entry: %s', (name, expected) => {
+    expect(isSlotEntryName(name)).toBe(expected);
+  });
+
+  it('names the quarantine a removal creates as a slot entry', () => {
+    expect(isSlotEntryName(basename(quarantinePathFor('/slots/3')))).toBe(true);
+  });
+
+  describe('a card slot root', () => {
+    let root: string;
+
+    beforeEach(async () => {
+      root = await realpath(await mkdtemp(join(tmpdir(), 'cards-slot-root-')));
+    });
+
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it('holds no slot entry when only its locks and removed copies remain', async () => {
+      await mkdir(join(root, '.locks', '3'), { recursive: true });
+      await mkdir(join(root, '.purge', `3.${uuid}`), { recursive: true });
+      await expect(slotRootHoldsSlotEntry(root)).resolves.toBe(false);
+    });
+
+    it.each(['3', '3.deleting-x'])('holds a slot entry beside its locks when %s is present', async (name) => {
+      await mkdir(join(root, '.locks'));
+      await mkdir(join(root, name));
+      await expect(slotRootHoldsSlotEntry(root)).resolves.toBe(true);
+    });
+
+    it('holds no slot entry when it does not exist', async () => {
+      await expect(slotRootHoldsSlotEntry(join(root, 'deleted-card'))).resolves.toBe(false);
+    });
   });
 });

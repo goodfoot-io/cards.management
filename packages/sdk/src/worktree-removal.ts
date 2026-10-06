@@ -116,10 +116,20 @@ export class SlotGitError extends Error {
 
 const DEFAULT_GIT: SlotRemovalGit = { run: runGitBounded };
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+/** A slot's ordinal as it names the slot directory `<n>`: a positive integer without leading zeros. */
+const ORDINAL = '[1-9]\\d*';
+/** What a quarantine appends to its slot's name, before its uuid. */
+const QUARANTINE_MARK = '.deleting-';
+const QUARANTINE_MARK_PATTERN = QUARANTINE_MARK.replaceAll('.', '\\.');
 /** Beside a slot: its quarantine `<n>.deleting-<uuid>` and that quarantine's set-aside submodules. */
-const RESIDUE_NAME = new RegExp(`^([1-9]\\d*)\\.deleting-(${UUID})(\\.submodules)?$`);
+const RESIDUE_NAME = new RegExp(`^(${ORDINAL})${QUARANTINE_MARK_PATTERN}(${UUID})(\\.submodules)?$`);
 /** Under `.purge`: a removed copy `<n>.<uuid>`, its removal record and its purge's holding area. */
-const COPY_NAME = new RegExp(`^([1-9]\\d*)\\.(${UUID})(\\.json|\\.held)?$`);
+const COPY_NAME = new RegExp(`^(${ORDINAL})\\.(${UUID})(\\.json|\\.held)?$`);
+/**
+ * A slot root entry a pass acts on: a slot `<n>`, or anything a removal of it
+ * left beside it under `<n>.deleting-`, whatever follows the mark.
+ */
+const SLOT_ENTRY_NAME = new RegExp(`^${ORDINAL}(${QUARANTINE_MARK_PATTERN}.*)?$`);
 /** The slot root's directory of removed copies waiting for a purge. */
 export const REMOVED_COPIES_DIR = '.purge';
 const SET_ASIDE_SUFFIX = '.submodules';
@@ -227,7 +237,7 @@ export type SlotRemovalOutcome =
  * @returns A sibling path that no other removal will pick.
  */
 export function quarantinePathFor(slotPath: string): string {
-  return `${slotPath}.deleting-${randomUUID()}`;
+  return `${slotPath}${QUARANTINE_MARK}${randomUUID()}`;
 }
 
 /**
@@ -604,6 +614,28 @@ export type SlotResidueReport =
   | { readonly kind: 'recovery_failed'; readonly holding: string; readonly detail: string };
 
 /**
+ * Whether a slot root entry name is a slot checkout `<n>` or a removal's
+ * quarantine residue `<n>.deleting-…`, the entries a cleanup pass acts on.
+ * `.locks`, `.purge` and every other name are not.
+ * @param name - An entry name directly under a card's slot root.
+ * @returns True for a slot or quarantine entry.
+ */
+export function isSlotEntryName(name: string): boolean {
+  return SLOT_ENTRY_NAME.test(name);
+}
+
+/**
+ * Whether a card's slot root holds any slot or quarantine entry, without
+ * locking. A root holding only its permanent `.locks` and a `.purge` of copies
+ * waiting for a later pass has nothing for a cleanup pass of that card to do.
+ * @param slotRoot - The card's slot root.
+ * @returns False for a missing root or one with no {@link isSlotEntryName} entry.
+ */
+export async function slotRootHoldsSlotEntry(slotRoot: string): Promise<boolean> {
+  return (await readdirOrEmpty(slotRoot)).some(isSlotEntryName);
+}
+
+/**
  * Lists the slots of a slot root that carry removal residue, without locking.
  * @param slotRoot - The card's slot root.
  * @returns Residue per ordinal, ascending.
@@ -682,7 +714,7 @@ export async function recoverSlotResidueLocked(
   const quarantines = new Set<string>();
   for (const name of await readdirOrEmpty(dirname(slotPath))) {
     const match = RESIDUE_NAME.exec(name);
-    if (match?.[1] === ordinal) quarantines.add(join(dirname(slotPath), `${ordinal}.deleting-${match[2]}`));
+    if (match?.[1] === ordinal) quarantines.add(join(dirname(slotPath), `${ordinal}${QUARANTINE_MARK}${match[2]}`));
   }
   const reports: SlotResidueReport[] = [];
   for (const quarantine of [...quarantines].sort()) {
@@ -716,7 +748,7 @@ export async function recoverSlotResidueLocked(
     }
   }
   lock.checkpoint();
-  const quarantineName = new RegExp(`^${ordinal}\\.deleting-${UUID}$`);
+  const quarantineName = new RegExp(`^${ordinal}${QUARANTINE_MARK_PATTERN}${UUID}$`);
   for (const registered of await registeredWorktrees(repoRoot, options)) {
     if (dirname(registered) !== dirname(slotPath) || !quarantineName.test(basename(registered))) continue;
     if (await exists(registered)) continue;
@@ -986,7 +1018,7 @@ const purgeRemovedCopy = async (
   // Finish what a removal interrupted after its commit.
   const match = COPY_NAME.exec(basename(copy)) as RegExpExecArray;
   const slotRoot = dirname(dirname(copy));
-  const quarantine = join(slotRoot, `${match[1]}.deleting-${match[2]}`);
+  const quarantine = join(slotRoot, `${match[1]}${QUARANTINE_MARK}${match[2]}`);
   await joinSetAside(`${quarantine}${SET_ASIDE_SUFFIX}`, copy);
   if ((await registeredWorktrees(options.repoRoot, options)).includes(quarantine) && !(await exists(quarantine))) {
     lock.checkpoint();
