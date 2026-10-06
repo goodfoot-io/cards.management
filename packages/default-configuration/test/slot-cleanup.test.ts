@@ -9,7 +9,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
-import { basename, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
 import {
@@ -29,7 +29,7 @@ import {
   type SlotCleanupResult,
   type SlotLayer
 } from '../src/lib/worktrees/index.js';
-import { createSlotFixture, type SlotFixture } from './helpers/slot-fixture.js';
+import { createSlotFixture, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
 
@@ -453,18 +453,22 @@ describe('cleanupCardSlots next steps', () => {
         registration.parentBranch = 'gone';
       }
     }
-  ])('removes a $reason slot once the git commands its next step names have run', async ({ reason, arrange }) => {
-    const slot = await finishedSlot('exec-1');
-    await arrange(slot);
-    const refused = decisionOf(await pass(), slot.branch);
-    expect(refused).toMatchObject({ reason, outcome: 'preserved' });
+  ])(
+    'removes a $reason slot once the git commands its next step names have run',
+    async ({ reason, arrange }) => {
+      const slot = await finishedSlot('exec-1');
+      await arrange(slot);
+      const refused = decisionOf(await pass(), slot.branch);
+      expect(refused).toMatchObject({ reason, outcome: 'preserved' });
 
-    expect(await runStatedCommands(refused.detail)).toBeGreaterThan(0);
+      expect(await runStatedCommands(refused.detail)).toBeGreaterThan(0);
 
-    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
-    expect(await exists(slot.worktreePath)).toBe(false);
-    expect(fx.client.registrations.has(slot.branch)).toBe(false);
-  });
+      expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+      expect(await exists(slot.worktreePath)).toBe(false);
+      expect(fx.client.registrations.has(slot.branch)).toBe(false);
+    },
+    GIT_HEAVY_TIMEOUT_MS
+  );
 
   it('says the git-ignored files of a clean slot are deleted with it, in preview and in the removal', async () => {
     await writeFile(join(fx.repoRoot, '.gitignore'), '.env\n');
@@ -679,6 +683,25 @@ describe('cleanupCardSlots removal', () => {
 
     expect((await pass()).purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
     expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+  });
+
+  it("purges a deleted card's copy from a pass on a live card that has no slot folder, creating none", async () => {
+    const slot = await finishedSlot('exec-1');
+    const deleting = await pass({ mode: 'prepare-delete' });
+    expect(decisionOf(deleting, slot.branch)).toMatchObject({ outcome: 'removed' });
+    expect(deleting.purge).toEqual(NO_PURGE);
+    const liveRoot = join(dirname(fx.slotRoot), 'card-live');
+    expect(await exists(liveRoot)).toBe(false);
+
+    const live = await cleanupCardSlots(
+      { ...fx.cleanupContext(), cardId: 'card-live' },
+      { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+    );
+
+    expect(live).toMatchObject({ ok: true, decisions: [] });
+    expect(live.purge).toEqual({ purged: 1, pending: 0, kept: [], failure: null });
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+    expect(await exists(liveRoot)).toBe(false);
   });
 
   it('leaves a removed copy pending when the budget left after the slots is within the purge reserve', async () => {

@@ -23,10 +23,7 @@ import {
   SLOT_CLEANUP_PASS_BUDGET_MS,
   type SlotCleanupResult
 } from '../src/lib/worktrees/index.js';
-import { createSlotFixture, FIXTURE_GIT_ENV, type SlotFixture } from './helpers/slot-fixture.js';
-
-/** Real git on a loaded host: a pass over a slot with two levels of submodules makes dozens of calls. */
-const GIT_HEAVY_TIMEOUT_MS = 120_000;
+import { createSlotFixture, FIXTURE_GIT_ENV, GIT_HEAVY_TIMEOUT_MS, type SlotFixture } from './helpers/slot-fixture.js';
 
 let fx: SlotFixture;
 /** The bare remotes every test clones from, made once. */
