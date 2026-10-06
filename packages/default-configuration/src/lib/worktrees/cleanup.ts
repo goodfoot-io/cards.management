@@ -28,7 +28,7 @@ import {
   slotLockPids,
   withSlotLock
 } from '@cards.management/sdk/slot-lock';
-import { describeSlotOccupancy, type SlotOccupantProbe, slotOccupied } from '@cards.management/sdk/worktree-removal';
+import { processesNotInspected, type SlotOccupantProbe, slotOccupied } from '@cards.management/sdk/worktree-removal';
 import type { SlotClient } from './acquire.js';
 import { judgeUsability, pathExists, refOid, samePath } from './checkout.js';
 import { type DiscoveredSlot, discoverSlots, type SlotInventory, type SlotPlace } from './discovery.js';
@@ -88,11 +88,11 @@ export interface SlotCleanupResult {
   /** Slots whose lock could not be judged, and how many of those record an unverified owner. */
   readonly unknownLocks: WorktreeUnknownLocks;
   /**
-   * The most processes owned by other users that one occupant probe could
-   * not inspect. They never block removal, so the count belongs to the pass,
-   * never to a slot's detail.
+   * The most processes, of any owner, that one occupant probe could not
+   * inspect. They never block removal, so the count belongs to the pass's
+   * report and log, never to a slot's detail.
    */
-  readonly otherUsersNotInspected: number;
+  readonly processesNotInspected: number;
   /**
    * Whether the pass met its mode's bar: for `prepare-delete`, the SDK's
    * `clearsCardDeletion` (no stage failed, no lock unknown, every slot
@@ -141,11 +141,10 @@ function describeHolder(state: Extract<SlotLockState, { state: 'held' }>): strin
 }
 
 /**
- * Describes why a probe found the slot occupied, attributing visible
- * occupants to the previous holder of the slot.
+ * Describes the proven occupants of a slot, attributing them to its previous holder.
  * @param probe - A probe for which `slotOccupied` holds.
  * @param previous - The generation judged before this lock, or the last one read by a preview; null when none.
- * @returns Which occupants are left over from that execution, and which of the user's own processes could not be inspected.
+ * @returns Which occupants are left over from that execution.
  */
 function describeOccupants(
   probe: SlotOccupantProbe,
@@ -156,14 +155,13 @@ function describeOccupants(
     ...(owner === null ? [] : [owner.holder.pid]),
     ...(previous?.companions ?? []).map((companion) => companion.pid)
   ]);
-  const visible = probe.occupants.map((occupant) =>
-    recorded.has(occupant.pid) && owner !== null
-      ? `pid ${occupant.pid} (${occupant.command}) is left over from execution ${owner.executionId}`
-      : `pid ${occupant.pid} (${occupant.command}) is unrelated to the slot's last holder`
-  );
-  const hidden =
-    probe.uninspectable.length > 0 ? [describeSlotOccupancy({ ...probe, occupants: [], otherUsers: 0 })] : [];
-  return [...visible, ...hidden].join('; ');
+  return probe.occupants
+    .map((occupant) =>
+      recorded.has(occupant.pid) && owner !== null
+        ? `pid ${occupant.pid} (${occupant.command}) is left over from execution ${owner.executionId}`
+        : `pid ${occupant.pid} (${occupant.command}) is unrelated to the slot's last holder`
+    )
+    .join('; ');
 }
 
 /** Reasons that keep a slot until the user acts on it; no later pass clears them alone. */
@@ -258,7 +256,7 @@ export async function cleanupCardSlots(
   const { client, logger, cardId } = context;
   const decisions: WorktreeCleanupDecision[] = [];
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
-  let otherUsersNotInspected = 0;
+  let uninspected = 0;
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
     const ok =
@@ -272,10 +270,16 @@ export async function cleanupCardSlots(
       ok,
       decisions: decisions.length,
       unknownLocks,
-      otherUsersNotInspected,
+      processesNotInspected: uninspected,
       ...(failure === undefined ? {} : { failure })
     });
-    return { decisions, unknownLocks, otherUsersNotInspected, ok, ...(failure === undefined ? {} : { failure }) };
+    return {
+      decisions,
+      unknownLocks,
+      processesNotInspected: uninspected,
+      ok,
+      ...(failure === undefined ? {} : { failure })
+    };
   };
   const record = (
     slot: Pick<DiscoveredSlot, 'branch' | 'path'>,
@@ -431,8 +435,8 @@ export async function cleanupCardSlots(
    * @param previous - The slot's last holder, to attribute occupants to; null when none.
    * @param removalGit - Git for the fsmonitor stop, recording its children into the lock when there is one.
    * @param checkpoint - Throws when the pass must stop; a no-op outside a lock.
-   * @returns An `in_use` refusal, or null when the slot is unoccupied. Other users' processes
-   * the probe could not inspect never refuse; their count is kept for the pass.
+   * @returns An `in_use` refusal, or null when no process is proven inside. Processes the
+   * probe could not inspect never refuse; their count is kept for the pass.
    */
   const probeOccupants = async (
     slot: DiscoveredSlot,
@@ -449,7 +453,7 @@ export async function cleanupCardSlots(
     } catch (error) {
       return refusal('in_use', slot, `the occupant probe failed: ${describe(error)}`);
     }
-    otherUsersNotInspected = Math.max(otherUsersNotInspected, probe.otherUsers);
+    uninspected = Math.max(uninspected, processesNotInspected(probe));
     return slotOccupied(probe) ? refusal('in_use', slot, describeOccupants(probe, previous)) : null;
   };
 
@@ -496,6 +500,7 @@ export async function cleanupCardSlots(
         { repoRoot, slotPath: slot.path, quarantine, lock },
         removalGit
       );
+      uninspected = Math.max(uninspected, removed.processesNotInspected);
       if (removed.status === 'refused')
         // The quarantined checkout is probed again, so a process that entered after the probe above refuses too.
         return removed.reason === 'in_use'

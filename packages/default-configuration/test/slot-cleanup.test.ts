@@ -98,9 +98,8 @@ function decisionOf(result: SlotCleanupResult, branch: string): WorktreeCleanupD
  * A layer whose occupant probes, the pass's own and the quarantined
  * checkout's, read the host's `/proc` as the kernel shows a process that is
  * not dumpable: its cwd, root and descriptors refuse with `EACCES`, its
- * world-readable `status` does not. A really undumpable process of this user
- * would make every concurrent test file's slots `in_use`, so only the
- * spawned process is hidden, and only from this pass.
+ * world-readable `status` does not. Only the spawned process is hidden, and
+ * only from this pass, so the count it adds is known.
  * @param hidden - The pid the kernel hides.
  * @param uid - The prober's effective uid; the test's own by default.
  * @returns The fixture's layer with those probes.
@@ -510,45 +509,23 @@ describe('cleanupCardSlots removal', () => {
     }
   });
 
-  it.runIf(process.platform === 'linux')(
-    'preserves a slot as in_use, in preview and cleanup, when one of the user’s own processes cannot be inspected',
-    async () => {
-      const slot = await finishedSlot('exec-1');
-      const { spawn } = await import('node:child_process');
-      const hidden = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: fx.scratch });
-      try {
-        const layer = hidingLayer(hidden.pid ?? 0);
-        for (const mode of ['preview', 'cleanup'] as const) {
-          const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
-          const decision = decisionOf(result, slot.branch);
-          expect(decision).toMatchObject({ reason: 'in_use', outcome: 'preserved' });
-          expect(decision.detail).toContain(`your own processes could not be inspected`);
-          expect(decision.detail).toContain(`(pid ${hidden.pid})`);
-          expect(decision.detail).toContain(`stop the processes working in ${slot.worktreePath}`);
-          expect(decision.detail).not.toMatch(/\bclean\b/);
-        }
-        expect(await exists(slot.worktreePath)).toBe(true);
-      } finally {
-        hidden.kill('SIGKILL');
-      }
-    }
-  );
-
-  it.runIf(process.platform === 'linux')(
-    'removes a slot past another user’s uninspectable process, counting it once for the pass and never in a detail',
-    async () => {
+  it.runIf(process.platform === 'linux').each([
+    { owner: 'the user’s own', uid: undefined },
+    { owner: 'another user’s', uid: (process.geteuid?.() ?? 0) + 1 }
+  ])(
+    'removes a slot past $owner process the probe cannot inspect, counting it for the pass and never in a detail',
+    async ({ uid }) => {
       const slot = await finishedSlot('exec-1');
       const { spawn } = await import('node:child_process');
       const hidden = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { cwd: slot.worktreePath });
       try {
-        // A prober whose uid is not the hidden process's owner sees it as another user's.
-        const layer = hidingLayer(hidden.pid ?? 0, (process.geteuid?.() ?? 0) + 1);
+        const layer = hidingLayer(hidden.pid ?? 0, uid);
         for (const mode of ['preview', 'cleanup'] as const) {
           const result = await cleanupCardSlots({ ...fx.cleanupContext(), layer }, { requester: null, mode });
           const decision = decisionOf(result, slot.branch);
           expect(decision).toMatchObject({ reason: 'eligible', outcome: mode === 'preview' ? 'eligible' : 'removed' });
           expect(decision.detail).not.toMatch(/process|inspect|prob/);
-          expect(result.otherUsersNotInspected).toBeGreaterThanOrEqual(1);
+          expect(result.processesNotInspected).toBeGreaterThanOrEqual(1);
         }
         expect(await exists(slot.worktreePath)).toBe(false);
       } finally {
@@ -733,7 +710,7 @@ describe('cleanupCardSlots failures and budget', () => {
     expect(result).toEqual({
       decisions: [],
       unknownLocks: { count: 0, unverifiedOwners: 0 },
-      otherUsersNotInspected: 0,
+      processesNotInspected: 0,
       ok: true
     });
   });

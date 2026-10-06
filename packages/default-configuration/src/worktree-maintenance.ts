@@ -31,6 +31,7 @@ export function maintenanceReport(cardId: string, result: SlotCleanupResult): Wo
     canDeleteCard: clearsCardDeletion(result),
     decisions: result.decisions,
     unknownLocks: result.unknownLocks,
+    processesNotInspected: result.processesNotInspected,
     ...(result.failure === undefined ? {} : { failure: result.failure })
   };
 }

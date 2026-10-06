@@ -114,7 +114,9 @@ describe('worktreeMaintenance preview', () => {
       cardId: fx.cardId,
       canDeleteCard: true,
       decisions: [expect.objectContaining({ branch: slot.branch, reason: 'eligible', outcome: 'eligible' })],
-      unknownLocks: { count: 0, unverifiedOwners: 0 }
+      unknownLocks: { count: 0, unverifiedOwners: 0 },
+      // The host's real processes decide how many the probe could not inspect.
+      processesNotInspected: expect.any(Number)
     });
     expect(await fx.git(['branch', '--list', slot.branch])).not.toBe('');
     expect(fx.client.registrations.has(slot.branch)).toBe(true);
@@ -194,7 +196,9 @@ describe('worktreeMaintenance prepare-delete', () => {
       cardId: fx.cardId,
       canDeleteCard: true,
       decisions: [],
-      unknownLocks: { count: 0, unverifiedOwners: 0 }
+      unknownLocks: { count: 0, unverifiedOwners: 0 },
+      // No slot, so no probe ran.
+      processesNotInspected: 0
     });
   });
 
