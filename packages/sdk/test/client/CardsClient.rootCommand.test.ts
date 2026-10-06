@@ -8,7 +8,7 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import type { AddressInfo } from 'node:net';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CardsClient } from '../../src/client/cardsClient.js';
-import { ApiError, RootCommandError, RunningExecutionError } from '../../src/client/types/errors.js';
+import { ApiError, CardDeleteRefusedError, RootCommandError } from '../../src/client/types/errors.js';
 
 const EXECUTION = { executionId: 'execution-1', launchRequestId: 'request-1' };
 const TERMINAL = {
@@ -25,6 +25,7 @@ const SPAWNED = { disposition: 'spawned', processBootId: 'boot-1' };
 interface Recorded {
   readonly method: string | undefined;
   readonly path: string;
+  readonly query: string;
   readonly body: unknown;
 }
 
@@ -42,7 +43,7 @@ afterEach(async () => {
 
 /**
  * Starts a server answering every request through `respond`, and a client for it.
- * @param respond - Returns the status and JSON body for one request.
+ * @param respond - Returns the status and JSON body for one request; status 0 leaves it unanswered.
  * @returns A client with retries off.
  */
 async function serve(respond: (request: Recorded) => readonly [number, unknown]): Promise<CardsClient> {
@@ -55,10 +56,12 @@ async function serve(respond: (request: Recorded) => readonly [number, unknown])
       const recorded = {
         method: request.method,
         path: new URL(request.url ?? '/', 'http://test').pathname,
+        query: new URL(request.url ?? '/', 'http://test').search,
         body: text.length === 0 ? undefined : JSON.parse(text)
       };
       requests.push(recorded);
       const [status, body] = respond(recorded);
+      if (status === 0) return;
       response.writeHead(status, { 'content-type': 'application/json' });
       response.end(JSON.stringify(body));
     });
@@ -343,6 +346,23 @@ describe('runRootCommand against an unavailable server', () => {
     expect(requests.some(isCancel)).toBe(true);
   });
 
+  it('keeps the server error as the cause when the deadline cuts off the last retrieval', async () => {
+    let retrievals = 0;
+    const client = await serve((request) => {
+      if (isLaunch(request)) return ADMITTED();
+      if (isCancel(request)) return [202, { status: 'cancel-requested' }];
+      retrievals++;
+      // The first retrieval fails; the next hangs until the deadline aborts it.
+      return retrievals === 1 ? [502, { error: 'bad gateway' }] : [0, null];
+    });
+    const error = await rootCommandFailure(
+      client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 1_500 })
+    );
+    expect(retrievals).toBe(2);
+    expect(error.cause).toBe('unavailable');
+    expect(error.message).toContain('the retrieval failed with 502');
+  });
+
   it('ends as unavailable once the outage outlasts its 30 s allowance, well before a longer deadline', async () => {
     const client = await serve(() => [504, { error: 'gateway timeout' }]);
     const started = Date.now();
@@ -386,12 +406,23 @@ describe('runRootCommand against an unavailable server', () => {
 });
 
 describe('runRootCommand precise causes', () => {
-  it('ends as not_found when the launch answers 404 for the card', async () => {
-    const client = await serve(() => [404, { error: 'Runtime card scope not found' }]);
+  it.each([
+    ['card_not_found', 'Card main-1 not found', 'main-1'],
+    ['workspace_not_found', 'No workspace for this repository', 'No workspace for this repository']
+  ] as const)('ends as %s when the launch answers its typed 404', async (code, message, detail) => {
+    const client = await serve(() => [404, { code, error: message }]);
     const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
-    expect(error.cause).toBe('not_found');
-    expect(error.message).toContain('main-1');
+    expect(error.cause).toBe(code);
+    expect(error.message).toContain(detail);
     expect(requests.filter(isLaunch)).toHaveLength(1);
+    expect(requests.filter(isCancel)).toHaveLength(0);
+  });
+
+  it('ends as invalid_response on an untyped launch 404, cancelling what it cannot rule out', async () => {
+    const client = await serve(() => [404, { error: 'Not Found' }]);
+    const error = await rootCommandFailure(client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }));
+    expect(error.cause).toBe('invalid_response');
+    expect(requests.filter(isCancel)).toHaveLength(1);
   });
 
   it('ends as rejected naming the server reason on a 409 it does not recognize', async () => {
@@ -410,17 +441,20 @@ describe('runRootCommand precise causes', () => {
     expect(requests.filter(isCancel)).toHaveLength(1);
   });
 
-  it('ends as not_found at once when retrieval answers 404 for the card, instead of polling to the deadline', async () => {
+  it.each([
+    'card_not_found',
+    'workspace_not_found'
+  ] as const)('ends as %s at once when retrieval answers its typed 404, instead of polling to the deadline', async (code) => {
     const client = await serve((request) => {
       if (isLaunch(request))
         return [202, { disposition: 'admitted', execution: { ...EXECUTION, launchRequestId: launchedRequestId() } }];
-      return [404, { error: 'Runtime card scope not found' }];
+      return [404, { code, error: 'gone' }];
     });
     const started = Date.now();
     const error = await rootCommandFailure(
       client.runRootCommand('main-1', 'worktreeMaintenance', { mode: 'cleanup' }, { timeoutMs: 60_000 })
     );
-    expect(error.cause).toBe('not_found');
+    expect(error.cause).toBe(code);
     expect(Date.now() - started).toBeLessThan(2_000);
     expect(requests.filter((request) => request.method === 'GET')).toHaveLength(1);
   });
@@ -443,28 +477,63 @@ describe('runRootCommand precise causes', () => {
 });
 
 describe('deleteCard', () => {
-  it('throws RunningExecutionError carrying the executions on 409 running_execution', async () => {
-    const client = await serve(() => [
-      409,
-      {
-        code: 'running_execution',
-        error: 'The card has running executions (exec-1, exec-2); stop them before deleting it',
-        executions: ['exec-1', 'exec-2']
-      }
+  it('sends no preparedBy without one, and an encoded one that decodes intact', async () => {
+    const client = await serve(() => [204, null]);
+    await client.deleteCard('main-1');
+    await client.deleteCard('main-1', { preparedBy: 'req/1 &x' });
+    expect(
+      requests.map((request) => [request.method, request.path, new URLSearchParams(request.query).get('preparedBy')])
+    ).toEqual([
+      ['DELETE', '/cards/main-1', null],
+      ['DELETE', '/cards/main-1', 'req/1 &x']
     ]);
-    const error = await client.deleteCard('main-1').catch((failure: unknown) => failure);
-    expect(error).toBeInstanceOf(RunningExecutionError);
-    expect(error).toBeInstanceOf(ApiError);
-    expect((error as RunningExecutionError).executions).toEqual(['exec-1', 'exec-2']);
-    expect((error as RunningExecutionError).code).toBe('running_execution');
-    expect((error as RunningExecutionError).message).toContain('exec-1, exec-2');
   });
 
-  it('throws a plain ApiError when a running_execution body lacks a readable execution list', async () => {
-    const client = await serve(() => [409, { code: 'running_execution', error: 'busy', executions: [7] }]);
+  it.each([
+    [409, 'running_execution', 'The card has running executions (exec-1, exec-2); stop them first'],
+    [409, 'card_changed', 'exec-2 changed the card after the prepare-delete run']
+  ] as const)('throws CardDeleteRefusedError carrying the executions on %i %s', async (status, code, message) => {
+    const client = await serve(() => [status, { code, error: message, executions: ['exec-1', 'exec-2'] }]);
+    const error = await client.deleteCard('main-1', { preparedBy: 'req-1' }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(CardDeleteRefusedError);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ code, executions: ['exec-1', 'exec-2'], message });
+  });
+
+  it('throws CardDeleteRefusedError with no executions on 400 invalid_prepared_by', async () => {
+    const client = await serve(() => [
+      400,
+      { code: 'invalid_prepared_by', error: 'req-9 is not a prepare-delete run' }
+    ]);
+    const error = await client.deleteCard('main-1', { preparedBy: 'req-9' }).catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(CardDeleteRefusedError);
+    expect(error).toMatchObject({
+      code: 'invalid_prepared_by',
+      executions: [],
+      message: 'req-9 is not a prepare-delete run'
+    });
+  });
+
+  it.each([
+    [
+      'a running_execution list that is not all strings',
+      409,
+      { code: 'running_execution', error: 'busy', executions: [7] }
+    ],
+    ['a card_changed body without executions', 409, { code: 'card_changed', error: 'changed' }],
+    ['an invalid_prepared_by body with executions', 400, { code: 'invalid_prepared_by', error: 'bad', executions: [] }]
+  ] as const)('throws a plain ApiError for %s', async (_case, status, body) => {
+    const client = await serve(() => [status, body]);
     const error = await client.deleteCard('main-1').catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(ApiError);
-    expect(error).not.toBeInstanceOf(RunningExecutionError);
+    expect(error).not.toBeInstanceOf(CardDeleteRefusedError);
+  });
+
+  it('does not report a 503 as a delete refusal', async () => {
+    const client = await serve(() => [503, { code: 'runtime_unavailable', error: 'runtime admission is unavailable' }]);
+    const error = await client.deleteCard('main-1').catch((failure: unknown) => failure);
+    expect(error).not.toBeInstanceOf(CardDeleteRefusedError);
+    expect(error).toBeInstanceOf(Error);
   });
 });
 
