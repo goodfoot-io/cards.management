@@ -50,7 +50,7 @@ All are `async` and throw on HTTP failure.
 
 ## Root Commands
 
-[runRootCommand(cardId, 'worktreeMaintenance', { mode }, options?)](./public/packages/sdk/src/client/cardsClient.ts#L942) launches the configuration's root command on a card and waits for its report. `mode` is `preview` (reads only), `cleanup` (removes eligible slots) or `prepare-delete` (removes eligible slots and requires that none remain). It posts the launch to `POST /cards/:cardId/runtime/commands`, polls the durable retrieval every 250 ms with each request capped at 10 s, and resolves `{ requestId, executionId, report }` only when the command completed with a report. `report` is opaque to the client: parse it against the command's own contract, for `worktreeMaintenance` a [WorktreeCleanupPreview](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L73) of `{ cardId, canDeleteCard, decisions, unknownLocks, processesNotInspected, failure? }`, which [worktreeCleanupPreviewSchema](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L160) validates.
+[runRootCommand(cardId, 'worktreeMaintenance', { mode, budgetMs }, options?)](./public/packages/sdk/src/client/cardsClient.ts#L942) launches the configuration's root command on a card and waits for its report. `mode` is `preview` (reads only), `cleanup` (removes eligible slots) or `prepare-delete` (removes eligible slots and requires that none remain). `budgetMs`, a required positive integer, is how long the command may work before it must stop and report; set it below `options.timeoutMs` (the extension leaves `min(30 s, 10 %)` of the wait as margin) so the report arrives before the wait gives up. It posts the launch to `POST /cards/:cardId/runtime/commands`, polls the durable retrieval every 250 ms with each request capped at 10 s, and resolves `{ requestId, executionId, report }` only when the command completed with a report. `report` is opaque to the client: parse it against the command's own contract, for `worktreeMaintenance` a [WorktreeCleanupPreview](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L73) of `{ cardId, canDeleteCard, decisions, unknownLocks, processesNotInspected, failure? }`, which [worktreeCleanupPreviewSchema](./public/packages/sdk/src/protocol/types/worktree-slots.ts#L160) validates.
 
 `options.timeoutMs` (default 300 000) bounds the whole wait and `options.signal` aborts it; either one posts `.../runtime/commands/:requestId/cancel` before throwing, so an abandoned wait never leaves the command running unobserved. Every other end throws [RootCommandError](./public/packages/sdk/src/client/types/errors.ts#L223) with a `cause`:
 
@@ -96,7 +96,13 @@ The server does not clean up worktrees. [deleteCard](./public/packages/sdk/src/c
 ```typescript
 import type { WorktreeCleanupPreview } from '@cards.management/sdk/protocol';
 
-const { requestId, report } = await client.runRootCommand(cardId, 'worktreeMaintenance', { mode: 'prepare-delete' });
+const timeoutMs = 300_000;
+const { requestId, report } = await client.runRootCommand(
+  cardId,
+  'worktreeMaintenance',
+  { mode: 'prepare-delete', budgetMs: timeoutMs - Math.min(30_000, timeoutMs / 10) },
+  { timeoutMs }
+);
 const preview = report as unknown as WorktreeCleanupPreview; // validate before trusting it
 if (!preview.canDeleteCard) {
   // Show preview.decisions: each preserved or failed slot names its reason and detail.

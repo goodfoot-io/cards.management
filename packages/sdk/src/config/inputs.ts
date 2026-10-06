@@ -306,7 +306,7 @@ export interface CardsAssistantContext {
  * Input payload for the `worktreeMaintenance` root command.
  *
  * The runtime reads it from the environment the server launches the command
- * with: the card scope and paths as for actions, and the mode from
+ * with: the card scope and paths as for actions, and the mode and budget from
  * `CARDS_ROOT_COMMAND_INPUT`.
  */
 export interface WorktreeMaintenanceInput {
@@ -316,6 +316,8 @@ export interface WorktreeMaintenanceInput {
   cardId: string;
   /** `preview` reads only; `cleanup` removes eligible slots; `prepare-delete` is the card-deletion pre-check. */
   mode: import('../protocol/types/runtime-messages.js').WorktreeMaintenanceMode;
+  /** Milliseconds the command may spend before it must stop work and report; a positive integer. */
+  budgetMs: number;
   /** Workspace path the command was launched for; may be a linked worktree. */
   repoRoot: string;
   /** Absolute path to the card's repository directory. */

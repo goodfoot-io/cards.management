@@ -152,7 +152,17 @@ export type WorktreeMaintenanceMode = z.infer<typeof worktreeMaintenanceModeSche
 export const rootCommandLaunchRequestPayloadSchema = z
   .object({
     rootCommand: z.literal('worktreeMaintenance'),
-    input: z.object({ mode: worktreeMaintenanceModeSchema }).strict()
+    input: z
+      .object({
+        mode: worktreeMaintenanceModeSchema,
+        /**
+         * Milliseconds the command may spend before it must stop work and report.
+         * The launcher sets it below its own wait, so the report arrives before the
+         * launcher gives up on it.
+         */
+        budgetMs: z.int().positive()
+      })
+      .strict()
   })
   .strict();
 
