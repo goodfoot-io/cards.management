@@ -155,7 +155,8 @@ export class SlotNamespaceError extends Error {
     super(
       `${target} is or contains dedicated worktree slots (${namespace}). Slots are created by card launches and ` +
         'removed only by Clean Up Worktrees (the worktreeMaintenance command), which checks each slot for ' +
-        'unmerged work, live locks and running processes first.'
+        'unmerged work, live locks and running processes first. If the card was deleted, see "Worktrees left by a ' +
+        'deleted card" (wiki/guides/troubleshooting/failures/public-default-configuration.md#worktrees-left-by-a-deleted-card).'
     );
     this.name = 'SlotNamespaceError';
     this.target = target;

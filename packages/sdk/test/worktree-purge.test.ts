@@ -32,10 +32,13 @@ import {
   purgeRemovedSlots,
   quarantinePathFor,
   quarantineSlot,
+  REMOVED_COPY_MINIMUM_AGE_MS,
   type RemovedSlotPurgeOptions,
   recoverSlotResidueLocked,
   removedCopyPathFor,
   removeQuarantinedSlot,
+  type SetAsideSubmodules,
+  type SlotRemovalProofs,
   type SlotRemovalStep,
   type SlotResidueLocker,
   setAsideSubmodules,
@@ -43,6 +46,8 @@ import {
 } from '../src/worktree-removal.js';
 import { fakeWorld, lockEnvironment, ownerFile, writeGeneration } from './helpers/slot-lock-fixtures.js';
 
+/** Admits every set-aside, as a caller with no submodule judgment of its own would. */
+const PROOFS: SlotRemovalProofs = { proveSetAside: async () => null };
 const GIT_ENV = {
   ...process.env,
   GIT_TERMINAL_PROMPT: '0',
@@ -208,7 +213,7 @@ describe('slot purge', () => {
   async function removeSlot(): Promise<string> {
     const lock = await removalLock();
     const quarantine = await quarantineSlot(repo, slotPath);
-    const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+    const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
     await lock.release();
     if (outcome.status !== 'removed') throw new Error(`not removed: ${outcome.detail}`);
     return outcome.copy;
@@ -226,7 +231,7 @@ describe('slot purge', () => {
       withSlotLock(root, ordinal, purpose, { executionId: 'exec-purge', cardId, environment: env.environment }, fn);
 
   /**
-   * Runs one purge pass with a generous deadline and nothing skipped unless overridden.
+   * Runs one purge pass with a generous deadline and no minimum age unless overridden.
    * @param overrides - Option and locker overrides.
    * @param locker - The locker factory.
    * @returns The pass's outcomes and failure.
@@ -238,7 +243,7 @@ describe('slot purge', () => {
     purgeRemovedSlots(cardsDir, locker, {
       repoRoot: repo,
       deadline: Date.now() + 60_000,
-      skip: new Set(),
+      minimumAge: 0,
       ...overrides
     });
 
@@ -346,7 +351,7 @@ describe('slot purge', () => {
       const lock = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       await writeFile(join(quarantine, 'lib', 'stray.txt'), 'hidden from git\n');
-      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
       expect(outcome).toMatchObject({ status: 'refused', reason: 'uncommitted_changes', checkoutPath: slotPath });
       // The held submodule cannot return over the stray file, so it stays set aside for recovery to report.
       expect(outcome.status === 'refused' && outcome.detail).toMatch(
@@ -354,6 +359,36 @@ describe('slot purge', () => {
       );
       expect(await readFile(join(slotPath, 'lib', 'stray.txt'), 'utf8')).toBe('hidden from git\n');
       expect(await readFile(join(`${quarantine}.submodules`, '0', 'inner', 'README'), 'utf8')).toBe('inner-src\n');
+    });
+
+    it('hands the caller the set-aside it recorded, and a refusal restores the slot with its submodules', async () => {
+      const gitDir = gitDirOf(slotPath);
+      const lock = await removalLock();
+      const quarantine = await quarantineSlot(repo, slotPath);
+      const judged: SetAsideSubmodules[] = [];
+      const outcome = await removeQuarantinedSlot(
+        { repoRoot: repo, slotPath, quarantine, lock },
+        {
+          proveSetAside: async (setAside) => {
+            judged.push(setAside);
+            return 'lib holds unpushed commits';
+          }
+        }
+      );
+      expect(judged).toEqual([{ slotPath, quarantine, area: `${quarantine}.submodules`, gitDir, paths: ['lib'] }]);
+      expect(outcome).toEqual({
+        status: 'refused',
+        reason: 'submodules',
+        detail: 'lib holds unpushed commits',
+        checkoutPath: slotPath,
+        processesNotInspected: expect.any(Number)
+      });
+      // The refused removal left no copy or record behind.
+      expect(await residue()).toEqual(['.purge', '1']);
+      expect(await readdir(join(slotRoot, '.purge'))).toEqual([]);
+      expect(await readFile(join(slotPath, 'lib', 'inner', 'README'), 'utf8')).toBe('inner-src\n');
+      expect(existsSync(join(gitDirOf(slotPath), 'modules', 'lib'))).toBe(true);
+      expect(git(slotPath, 'status', '--porcelain', '--untracked-files=all')).toBe('');
     });
 
     it('commits the checkout and its set-aside submodules to one copy', async () => {
@@ -376,6 +411,7 @@ describe('slot purge', () => {
         void removeQuarantinedSlot(
           { repoRoot: repo, slotPath, quarantine, lock },
           {
+            ...PROOFS,
             checkpoint: async (step) => {
               if (step !== at) return;
               reached = true;
@@ -567,13 +603,60 @@ describe('slot purge', () => {
       expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
     });
 
-    it('leaves a copy this pass removed untouched and uncounted, and purges it on the next pass', async () => {
+    /**
+     * Rewrites a copy's removal time in its record.
+     * @param copy - The removed copy.
+     * @param removedAt - The value to record, or undefined to drop the field.
+     */
+    async function recordRemovalTime(copy: string, removedAt: unknown): Promise<void> {
+      const record = JSON.parse(await readFile(`${copy}.json`, 'utf8')) as Record<string, unknown>;
+      await writeFile(`${copy}.json`, JSON.stringify({ ...record, removedAt }));
+    }
+
+    it('leaves a copy removed less than the minimum age ago pending and untouched', async () => {
       addSlot();
       const copy = await removeSlot();
-      await expect(purge({ skip: new Set([copy]) })).resolves.toEqual([]);
+      const record = JSON.parse(await readFile(`${copy}.json`, 'utf8')) as { removedAt: string };
+      const eligibleAt = new Date(Date.parse(record.removedAt) + REMOVED_COPY_MINIMUM_AGE_MS).toISOString();
+      await expect(purge({ minimumAge: REMOVED_COPY_MINIMUM_AGE_MS })).resolves.toEqual([
+        {
+          copy,
+          status: 'pending',
+          detail: `It was removed at ${record.removedAt} and waits until ${eligibleAt}`,
+          processesNotInspected: 0
+        }
+      ]);
       expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
-      expect(existsSync(`${copy}.json`)).toBe(true);
-      await expect(purge()).resolves.toEqual([{ copy, status: 'purged', processesNotInspected: expect.any(Number) }]);
+    });
+
+    it('purges a copy removed longer than the minimum age ago', async () => {
+      addSlot();
+      const copy = await removeSlot();
+      await recordRemovalTime(copy, new Date(Date.now() - REMOVED_COPY_MINIMUM_AGE_MS - 1_000).toISOString());
+      await expect(purge({ minimumAge: REMOVED_COPY_MINIMUM_AGE_MS })).resolves.toEqual([
+        { copy, status: 'purged', processesNotInspected: expect.any(Number) }
+      ]);
+      expect(existsSync(copy)).toBe(false);
+    });
+
+    it.each([
+      ['missing', undefined],
+      ['not a timestamp', 'yesterday'],
+      ['not canonical', '2026-01-01'],
+      ['not a string', 1_700_000_000_000]
+    ])('keeps a copy whose removal time is %s', async (_case, removedAt) => {
+      addSlot();
+      const copy = await removeSlot();
+      await recordRemovalTime(copy, removedAt);
+      await expect(purge()).resolves.toEqual([
+        {
+          copy,
+          status: 'kept',
+          detail: `Its removal record has no valid removal time. Check its contents, then delete ${copy} by hand`,
+          processesNotInspected: 0
+        }
+      ]);
+      expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
     });
 
     it('reports a purge that failed, with the outcomes it reached, and never as a clean one', async () => {

@@ -21,6 +21,7 @@ import {
   describeSlotOccupancy,
   findSlotOccupants,
   findSlotResidue,
+  isSlotEntryName,
   OccupantProbeError,
   type ProcReader,
   processesNotInspected,
@@ -33,14 +34,18 @@ import {
   requireCurrentSlotLock,
   type SlotGitError,
   type SlotRemovalGit,
+  type SlotRemovalProofs,
   type SlotRemovalStep,
   type SlotResidueLocker,
   slotOccupied,
+  slotRootHoldsSlotEntry,
   stopSlotFsmonitor
 } from '../src/worktree-removal.js';
 import { fakeWorld, lockEnvironment, ownerFile, writeGeneration } from './helpers/slot-lock-fixtures.js';
 
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+/** Admits every set-aside, as a caller with no submodule judgment of its own would. */
+const PROOFS: SlotRemovalProofs = { proveSetAside: async () => null };
 const GIT_ENV = { ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_CONFIG_NOSYSTEM: '1' };
 
 /**
@@ -216,7 +221,7 @@ describe('slot removal', () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       const copy = removedCopyPathFor(quarantine);
       expect(copy).toMatch(new RegExp(`^${join(slotRoot, '.purge', '1')}\\.${UUID}$`));
-      await expect(removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock })).resolves.toEqual({
+      await expect(removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS)).resolves.toEqual({
         status: 'removed',
         copy,
         processesNotInspected: expect.any(Number)
@@ -231,11 +236,28 @@ describe('slot removal', () => {
       expect(git(repo, 'branch', '--list', 'slot-1')).toContain('slot-1');
     });
 
+    it('asks nothing of the caller about a slot that set no submodules aside', async () => {
+      const { lock } = await removalLock();
+      const quarantine = await quarantineSlot(repo, slotPath);
+      let asked = false;
+      const outcome = await removeQuarantinedSlot(
+        { repoRoot: repo, slotPath, quarantine, lock },
+        {
+          proveSetAside: async () => {
+            asked = true;
+            return 'refused';
+          }
+        }
+      );
+      expect(outcome).toMatchObject({ status: 'removed' });
+      expect(asked).toBe(false);
+    });
+
     it('refuses an untracked file and moves the checkout back to its absent slot path', async () => {
       const { lock } = await removalLock();
       await writeFile(join(slotPath, 'untracked.txt'), 'work in progress\n');
       const quarantine = await quarantineSlot(repo, slotPath);
-      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
       expect(outcome).toMatchObject({ status: 'refused', reason: 'uncommitted_changes', checkoutPath: slotPath });
       expect(await readFile(join(slotPath, 'untracked.txt'), 'utf8')).toBe('work in progress\n');
       expect(existsSync(quarantine)).toBe(false);
@@ -258,7 +280,7 @@ describe('slot removal', () => {
         children.push(child);
         await new Promise((resolve) => child.once('spawn', resolve));
         const quarantine = await quarantineSlot(repo, slotPath);
-        const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+        const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
         expect(outcome).toMatchObject({ status: 'refused', reason: 'in_use', checkoutPath: slotPath });
         expect(outcome.status === 'refused' && outcome.detail).toContain(`(pid ${String(child.pid)})`);
         expect(await readFile(join(slotPath, 'tracked.txt'), 'utf8')).toBe('tracked\n');
@@ -281,7 +303,7 @@ describe('slot removal', () => {
       };
       const outcome = await removeQuarantinedSlot(
         { repoRoot: repo, slotPath, quarantine, lock },
-        { occupants: { platform: 'linux', uid: 1000, proc: hidden } }
+        { ...PROOFS, occupants: { platform: 'linux', uid: 1000, proc: hidden } }
       );
       expect(outcome).toEqual({ status: 'removed', copy: removedCopyPathFor(quarantine), processesNotInspected: 1 });
       expect(existsSync(quarantine)).toBe(false);
@@ -291,7 +313,7 @@ describe('slot removal', () => {
       const { lock } = await removalLock();
       await writeFile(join(slotPath, 'untracked.txt'), 'work in progress\n');
       const quarantine = await quarantineSlot(repo, slotPath);
-      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
       // The content check refuses before the probe runs.
       expect(outcome).toMatchObject({ status: 'refused', reason: 'uncommitted_changes', processesNotInspected: 0 });
     });
@@ -312,7 +334,7 @@ describe('slot removal', () => {
       await expect(
         removeQuarantinedSlot(
           { repoRoot: repo, slotPath, quarantine, lock },
-          { occupants: { platform: 'linux', uid: 1000, proc: others } }
+          { ...PROOFS, occupants: { platform: 'linux', uid: 1000, proc: others } }
         )
       ).resolves.toEqual({ status: 'removed', copy: removedCopyPathFor(quarantine), processesNotInspected: 1 });
     });
@@ -323,7 +345,7 @@ describe('slot removal', () => {
       const quarantine = await quarantineSlot(repo, slotPath);
       await mkdir(slotPath);
       await writeFile(join(slotPath, 'newcomer.txt'), 'new\n');
-      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
       expect(outcome).toMatchObject({ status: 'refused', reason: 'removal_restored', checkoutPath: quarantine });
       expect(await readdir(slotPath)).toEqual(['newcomer.txt']);
       expect(await readFile(join(quarantine, 'untracked.txt'), 'utf8')).toBe('work in progress\n');
@@ -336,6 +358,7 @@ describe('slot removal', () => {
       const removal = removeQuarantinedSlot(
         { repoRoot: repo, slotPath, quarantine, lock },
         {
+          ...PROOFS,
           checkpoint: async (step) => {
             if (step === 'recorded') void env.shutdown.shutdownAndExit(0, 'completed');
           }
@@ -419,6 +442,7 @@ describe('slot removal', () => {
       void removeQuarantinedSlot(
         { repoRoot: repo, slotPath, quarantine, lock },
         {
+          ...PROOFS,
           checkpoint: async (step) => {
             if (step !== at) return;
             reached = true;
@@ -832,5 +856,59 @@ describe('slot removal', () => {
         await expect(findSlotOccupants(slotPath)).resolves.toMatchObject({ occupants: [] });
       }
     );
+  });
+});
+
+describe('slot root entries', () => {
+  const uuid = '0f8e2a3c-1b2d-4e5f-8a9b-0c1d2e3f4a5b';
+
+  it.each([
+    ['1', true],
+    ['12', true],
+    ['0', false],
+    ['01', false],
+    ['1a', false],
+    [`3.deleting-${uuid}`, true],
+    [`3.deleting-${uuid}.submodules`, true],
+    ['3.deleting-x', true],
+    [`03.deleting-${uuid}`, false],
+    ['.locks', false],
+    ['.purge', false],
+    [`.purge/1.${uuid}`, false],
+    [`1.${uuid}`, false]
+  ])('counts %s as a slot entry: %s', (name, expected) => {
+    expect(isSlotEntryName(name)).toBe(expected);
+  });
+
+  it('names the quarantine a removal creates as a slot entry', () => {
+    expect(isSlotEntryName(basename(quarantinePathFor('/slots/3')))).toBe(true);
+  });
+
+  describe('a card slot root', () => {
+    let root: string;
+
+    beforeEach(async () => {
+      root = await realpath(await mkdtemp(join(tmpdir(), 'cards-slot-root-')));
+    });
+
+    afterEach(async () => {
+      await rm(root, { recursive: true, force: true });
+    });
+
+    it('holds no slot entry when only its locks and removed copies remain', async () => {
+      await mkdir(join(root, '.locks', '3'), { recursive: true });
+      await mkdir(join(root, '.purge', `3.${uuid}`), { recursive: true });
+      await expect(slotRootHoldsSlotEntry(root)).resolves.toBe(false);
+    });
+
+    it.each(['3', '3.deleting-x'])('holds a slot entry beside its locks when %s is present', async (name) => {
+      await mkdir(join(root, '.locks'));
+      await mkdir(join(root, name));
+      await expect(slotRootHoldsSlotEntry(root)).resolves.toBe(true);
+    });
+
+    it('holds no slot entry when it does not exist', async () => {
+      await expect(slotRootHoldsSlotEntry(join(root, 'deleted-card'))).resolves.toBe(false);
+    });
   });
 });
