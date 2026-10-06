@@ -7,7 +7,13 @@ import {
 } from '../../../src/protocol/types/runtime-authorization.js';
 import { DELIVERY_CLASS_POLICIES } from '../../../src/protocol/types/runtime-delivery.js';
 import type { RuntimeEnvelope } from '../../../src/protocol/types/runtime-envelope.js';
-import { MAX_CONTROL_FRAME_BYTES, RUNTIME_MESSAGE_TYPES } from '../../../src/protocol/types/runtime-messages.js';
+import {
+  MAX_CONTROL_FRAME_BYTES,
+  MAX_REFUSAL_DETAIL_LENGTH,
+  RUNTIME_MESSAGE_TYPES,
+  RUNTIME_REFUSAL_REASONS,
+  refusedPayloadSchema
+} from '../../../src/protocol/types/runtime-messages.js';
 import { RUNTIME_PROTOCOL_VERSION } from '../../../src/protocol/types/runtime-version.js';
 
 /**
@@ -209,14 +215,14 @@ describe('acknowledgment messages', () => {
   });
 
   it('lets only the server acknowledge, so a peer cannot forge a receipt', () => {
-    for (const type of ['runtime.resumeAck', 'runtime.accepted'] as const) {
+    for (const type of ['runtime.resumeAck', 'runtime.accepted', 'runtime.refused'] as const) {
       expect(RUNTIME_MESSAGE_CONTRACTS[type].allowedRoles).toEqual(['server']);
       expect(RUNTIME_MESSAGE_CONTRACTS[type].direction).toBe('server-to-client');
     }
   });
 
   it('keeps both acknowledgments out of the completion-evidence classes', () => {
-    for (const type of ['runtime.accepted', 'runtime.resumeAck'] as const) {
+    for (const type of ['runtime.accepted', 'runtime.refused', 'runtime.resumeAck'] as const) {
       expect(deliveryClassFor(type)).toBe('reconciled-snapshot');
       expect(DELIVERY_CLASS_POLICIES[deliveryClassFor(type)].completionEvidence).toBe(false);
     }
@@ -225,6 +231,27 @@ describe('acknowledgment messages', () => {
   it('requires a causation id so a receipt names what it acknowledges', () => {
     expect(RUNTIME_MESSAGE_CONTRACTS['runtime.accepted'].requiresCausationId).toBe(true);
     expect(RUNTIME_MESSAGE_CONTRACTS['runtime.resumeAck'].requiresCausationId).toBe(true);
+    expect(RUNTIME_MESSAGE_CONTRACTS['runtime.refused'].requiresCausationId).toBe(true);
+  });
+
+  it('shapes a refusal as a strict, bounded, terminal receipt', () => {
+    const refusal = {
+      refusedMessageId: 'msg-1',
+      reason: 'terminal',
+      detail: 'execution finalized',
+      refusedAt: '2026-01-01T00:00:00.000Z'
+    };
+    expect(refusedPayloadSchema.parse(refusal)).toEqual(refusal);
+    expect(RUNTIME_REFUSAL_REASONS).toEqual(['conflict', 'not-applicable', 'invalid', 'terminal']);
+    for (const bad of [
+      { ...refusal, reason: 'retry' },
+      { ...refusal, refusedMessageId: '' },
+      { ...refusal, detail: 'x'.repeat(MAX_REFUSAL_DETAIL_LENGTH + 1) },
+      { ...refusal, refusedAt: 'yesterday' },
+      { ...refusal, extra: true }
+    ]) {
+      expect(refusedPayloadSchema.safeParse(bad).success).toBe(false);
+    }
   });
 });
 

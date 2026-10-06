@@ -556,6 +556,51 @@ export const acceptedPayloadSchema = z
   })
   .strict();
 
+/**
+ * Why the server refused a client message terminally. Each one is final for
+ * that message ID: resending the same message can only be refused again.
+ */
+export const RUNTIME_REFUSAL_REASONS = [
+  /** The server already holds a different durable message for the same identity. */
+  'conflict',
+  /** The message does not apply to its target, for example a report for an execution that runs no root command. */
+  'not-applicable',
+  /** The message passed the envelope schema but failed the server's semantic validation. */
+  'invalid',
+  /** The execution it belongs to is already finalized and accepts no further results. */
+  'terminal'
+] as const;
+
+/** Why the server refused a client message terminally. */
+export type RuntimeRefusalReason = (typeof RUNTIME_REFUSAL_REASONS)[number];
+
+/** Validates a terminal refusal reason arriving from the server. */
+export const runtimeRefusalReasonSchema = z.enum(RUNTIME_REFUSAL_REASONS);
+
+/** Longest `detail` a `runtime.refused` receipt may carry. */
+export const MAX_REFUSAL_DETAIL_LENGTH = 1024;
+
+/**
+ * Payload of `runtime.refused`, the server's terminal answer for one durable
+ * client message it will never accept.
+ *
+ * It is the counterpart of `runtime.accepted`: both name the client message and
+ * end the client's wait for it. A refusal also ends the obligation. The client
+ * drops the outbox record instead of replaying it on every resume, and reports
+ * the refusal to its caller as final rather than uncertain. Like the acceptance
+ * receipt it is not persisted, so a refusal lost in flight is answered again
+ * when the record is replayed after the next resume.
+ */
+export const refusedPayloadSchema = z
+  .object({
+    refusedMessageId: z.string().min(1),
+    reason: runtimeRefusalReasonSchema,
+    /** Human-readable cause, for logs and the caller's error message. */
+    detail: z.string().max(MAX_REFUSAL_DETAIL_LENGTH),
+    refusedAt: z.string().datetime()
+  })
+  .strict();
+
 /** Durable proof that a runtime producer fsynced a server command into its effect journal. */
 export const commandCustodyPayloadSchema = z
   .object({
@@ -578,6 +623,7 @@ export const RUNTIME_MESSAGE_PAYLOADS = {
   'runtime.liveness': livenessPayloadSchema,
   'runtime.resumeAck': resumeAckPayloadSchema,
   'runtime.accepted': acceptedPayloadSchema,
+  'runtime.refused': refusedPayloadSchema,
   'execution.commandCustody': commandCustodyPayloadSchema,
   'runtime.log': logPayloadSchema,
   'runtime.heartbeat': heartbeatPayloadSchema,

@@ -5,7 +5,7 @@
  * and fails closed on bad input, a missing report or a failing handler.
  * @summary Worktree maintenance root command execution and report delivery
  */
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MAX_COMMAND_REPORT_BYTES } from '../../src/protocol/types/runtime-messages.js';
@@ -153,6 +153,26 @@ describe('executeCommand root command branch', () => {
     expect((await run.exited).code).toBe(1);
     expect(commandReports()).toEqual([]);
     expect(lines(log)).toEqual(['hook:failed']);
+  });
+
+  it('exits 1 with the refusal reason when the server refuses the report, and leaves no outbox record', async () => {
+    const log = join(harness.dir, 'events.log');
+    harness.server.rescript({
+      refuse: { types: ['execution.commandReport'], reason: 'terminal', detail: 'execution exec-1 is finalized' }
+    });
+    const run = harness.start(maintenanceHandler(join(harness.dir, 'input.json'), log), env('cleanup', 'report'));
+
+    expect((await run.exited).code).toBe(1);
+    expect(commandReports()).toHaveLength(1);
+    expect(lines(log)).toEqual(['hook:failed']);
+    expect(readFileSync(join(harness.dir, 'hooks.log'), 'utf8')).toContain(
+      'Command report refused: terminal (execution exec-1 is finalized)'
+    );
+    // The record was written before the send, so its directory exists; the refusal removed the record.
+    const outbox = join(harness.dir, 'home', 'runtime', 'outbox');
+    const entries = readdirSync(outbox, { recursive: true, encoding: 'utf8' });
+    expect(entries.length).toBeGreaterThan(0);
+    expect(entries.filter((name) => name.endsWith('.json'))).toEqual([]);
   });
 
   it('refuses a report over the bound at the call and keeps the previous one', async () => {

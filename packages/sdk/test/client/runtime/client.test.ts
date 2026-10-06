@@ -251,6 +251,40 @@ describe('sending', () => {
     expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(false);
   });
 
+  it.each([
+    'conflict',
+    'not-applicable',
+    'invalid',
+    'terminal'
+  ] as const)('ends the wait on a %s refusal, reports it as final and drops the record', async (reason) => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start({
+      refuse: { types: ['execution.cancelRequest'], reason, detail: `refused as ${reason}` }
+    });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    await expect(client.send({ ...intent('msg-1'), deadlineMs: 5_000 })).resolves.toEqual({
+      status: 'refused',
+      messageId: 'msg-1',
+      reason,
+      detail: `refused as ${reason}`
+    });
+    expect(outbox.stored.some((record) => record.messageId === 'msg-1')).toBe(false);
+  });
+
+  it('ignores a refusal that names a different message', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+    const sending = client.send({ ...intent('msg-1'), deadlineMs: 200 });
+    server.refuseFor('msg-other', 'terminal');
+
+    await expect(sending).resolves.toMatchObject({ status: 'uncertain', reason: 'deadline-expired' });
+    expect(outbox.stored.map(({ messageId }) => messageId)).toEqual(['msg-1']);
+  });
+
   it('answers a resend of the same message id without duplicating the record', async () => {
     const outbox = new MemoryOutbox();
     server = await FakeRuntimeServer.start({ withholdAcceptance: true });
@@ -361,6 +395,37 @@ describe('post-barrier own-record drain', () => {
     expect(server.received.find(({ messageId }) => messageId === 'pending-result')).toEqual(
       pendingResult('pending-result').envelope
     );
+  });
+
+  it('drops a refused replay and keeps replaying the records after it', async () => {
+    const outbox = new MemoryOutbox();
+    await outbox.enqueue(pendingResult('refused-result'));
+    await outbox.enqueue(pendingResult('later-result'));
+    server = await FakeRuntimeServer.start({
+      refuse: { messageIds: ['refused-result'], reason: 'terminal', detail: 'execution finalized' }
+    });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+
+    expect(outbox.stored).toHaveLength(0);
+    expect(server.received.map(({ messageId }) => messageId)).toEqual(
+      expect.arrayContaining(['refused-result', 'later-result'])
+    );
+    expect(server.received.filter(({ messageId }) => messageId === 'refused-result')).toHaveLength(1);
+  });
+
+  it('counts a refused record as settled in a live drain', async () => {
+    const outbox = new MemoryOutbox();
+    server = await FakeRuntimeServer.start({ withholdAcceptance: true });
+    client = createRuntimeClient(optionsFor(server, { outbox }));
+    await client.connect();
+    await outbox.enqueue(pendingResult('refused-result'));
+    server.rescript({ refuse: { types: ['execution.cleanupResult'], reason: 'conflict', detail: '' } });
+
+    const report = await drainRuntimeClientOutbox({ client, outbox, executionId: 'exec-1', role: 'runtime-wrapper' });
+
+    expect(report).toMatchObject({ ok: true, retired: [{ messageId: 'refused-result' }], pending: [] });
+    expect(outbox.stored).toHaveLength(0);
   });
 
   it('preserves an own pending record when delivery is uncertain', async () => {

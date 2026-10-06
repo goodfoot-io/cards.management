@@ -605,6 +605,10 @@ async function executeRootCommand(command: WorktreeMaintenanceCommand): Promise<
     deadlineMs: 5_000
   });
   await runtimeClient.stop();
+  if (sent.status === 'refused') {
+    logger.error(`Command report refused: ${sent.reason}${sent.detail === '' ? '' : ` (${sent.detail})`}`);
+    return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
+  }
   if (sent.status !== 'accepted') {
     logger.error(`Command report was not accepted: ${sent.status}`);
     return shutdownAndExit(EXIT_CODES.ERROR, 'failed');
