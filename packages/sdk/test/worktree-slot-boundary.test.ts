@@ -315,7 +315,10 @@ describe('generic SDK dedicated-slot boundary', () => {
           failure = error as { status: number | null; stderr: string };
         }
         expect(failure?.status).toBe(2);
+        // The refusal alone: no detached-HEAD or API-unavailable warning that the slot is being removed.
         expect(failure?.stderr).toContain('worktreeMaintenance');
+        expect(failure?.stderr).not.toContain('Warning');
+        expect(failure?.stderr).not.toMatch(/removing worktree/i);
       }
 
       expect(removals).toBe(0);
