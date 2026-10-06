@@ -37,6 +37,8 @@ import {
   recoverSlotResidueLocked,
   removedCopyPathFor,
   removeQuarantinedSlot,
+  type SetAsideSubmodules,
+  type SlotRemovalProofs,
   type SlotRemovalStep,
   type SlotResidueLocker,
   setAsideSubmodules,
@@ -44,6 +46,8 @@ import {
 } from '../src/worktree-removal.js';
 import { fakeWorld, lockEnvironment, ownerFile, writeGeneration } from './helpers/slot-lock-fixtures.js';
 
+/** Admits every set-aside, as a caller with no submodule judgment of its own would. */
+const PROOFS: SlotRemovalProofs = { proveSetAside: async () => null };
 const GIT_ENV = {
   ...process.env,
   GIT_TERMINAL_PROMPT: '0',
@@ -209,7 +213,7 @@ describe('slot purge', () => {
   async function removeSlot(): Promise<string> {
     const lock = await removalLock();
     const quarantine = await quarantineSlot(repo, slotPath);
-    const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+    const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
     await lock.release();
     if (outcome.status !== 'removed') throw new Error(`not removed: ${outcome.detail}`);
     return outcome.copy;
@@ -347,7 +351,7 @@ describe('slot purge', () => {
       const lock = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       await writeFile(join(quarantine, 'lib', 'stray.txt'), 'hidden from git\n');
-      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock });
+      const outcome = await removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock }, PROOFS);
       expect(outcome).toMatchObject({ status: 'refused', reason: 'uncommitted_changes', checkoutPath: slotPath });
       // The held submodule cannot return over the stray file, so it stays set aside for recovery to report.
       expect(outcome.status === 'refused' && outcome.detail).toMatch(
@@ -355,6 +359,36 @@ describe('slot purge', () => {
       );
       expect(await readFile(join(slotPath, 'lib', 'stray.txt'), 'utf8')).toBe('hidden from git\n');
       expect(await readFile(join(`${quarantine}.submodules`, '0', 'inner', 'README'), 'utf8')).toBe('inner-src\n');
+    });
+
+    it('hands the caller the set-aside it recorded, and a refusal restores the slot with its submodules', async () => {
+      const gitDir = gitDirOf(slotPath);
+      const lock = await removalLock();
+      const quarantine = await quarantineSlot(repo, slotPath);
+      const judged: SetAsideSubmodules[] = [];
+      const outcome = await removeQuarantinedSlot(
+        { repoRoot: repo, slotPath, quarantine, lock },
+        {
+          proveSetAside: async (setAside) => {
+            judged.push(setAside);
+            return 'lib holds unpushed commits';
+          }
+        }
+      );
+      expect(judged).toEqual([{ slotPath, quarantine, area: `${quarantine}.submodules`, gitDir, paths: ['lib'] }]);
+      expect(outcome).toEqual({
+        status: 'refused',
+        reason: 'submodules',
+        detail: 'lib holds unpushed commits',
+        checkoutPath: slotPath,
+        processesNotInspected: expect.any(Number)
+      });
+      // The refused removal left no copy or record behind.
+      expect(await residue()).toEqual(['.purge', '1']);
+      expect(await readdir(join(slotRoot, '.purge'))).toEqual([]);
+      expect(await readFile(join(slotPath, 'lib', 'inner', 'README'), 'utf8')).toBe('inner-src\n');
+      expect(existsSync(join(gitDirOf(slotPath), 'modules', 'lib'))).toBe(true);
+      expect(git(slotPath, 'status', '--porcelain', '--untracked-files=all')).toBe('');
     });
 
     it('commits the checkout and its set-aside submodules to one copy', async () => {
@@ -377,6 +411,7 @@ describe('slot purge', () => {
         void removeQuarantinedSlot(
           { repoRoot: repo, slotPath, quarantine, lock },
           {
+            ...PROOFS,
             checkpoint: async (step) => {
               if (step !== at) return;
               reached = true;
