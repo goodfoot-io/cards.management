@@ -208,9 +208,12 @@ describe('generic SDK dedicated-slot boundary', () => {
       expect(await snapshot()).toEqual(before);
     });
 
-    it('names the supported way to change slots in the refusal', async () => {
-      await expect(createWorktree('cards/x/1', { cwd: repo })).rejects.toThrow(
-        /Clean Up Worktrees \(the worktreeMaintenance command\)/
+    it('names the supported way to change slots in the refusal, and the remedy for a deleted card', async () => {
+      const refusal = createWorktree('cards/x/1', { cwd: repo });
+      await expect(refusal).rejects.toThrow(/Clean Up Worktrees \(the worktreeMaintenance command\)/);
+      await expect(refusal).rejects.toThrow(
+        'If the card was deleted, see "Worktrees left by a deleted card" ' +
+          '(wiki/guides/troubleshooting/failures/public-default-configuration.md#worktrees-left-by-a-deleted-card).'
       );
     });
 
