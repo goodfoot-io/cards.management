@@ -95,6 +95,30 @@ export interface SlotRemovalOptions {
   readonly occupants?: OccupantProbeOptions;
 }
 
+/** What {@link removeQuarantinedSlot} hands {@link SlotRemovalProofs.proveSetAside}. */
+export interface SetAsideSubmodules {
+  /** The slot path the checkout returns to on refusal. */
+  readonly slotPath: string;
+  /** The quarantined checkout. */
+  readonly quarantine: string;
+  /** Where {@link setAsideSubmodules} held them, `<quarantine>.submodules`. */
+  readonly area: string;
+  /** The slot's own git directory, as the set-aside recorded it. */
+  readonly gitDir: string;
+  /** Slot-relative paths of the set-aside submodules; checkout `i` is held at `<area>/<i>`. */
+  readonly paths: readonly string[];
+}
+
+/** Proofs only the caller can make, which {@link removeQuarantinedSlot} requires. */
+export interface SlotRemovalProofs {
+  /**
+   * Judges the set-aside submodules once they are recorded and proven clean
+   * and unoccupied, and only when the slot had any.
+   * @returns Null to let the removal commit, or why it must not; the removal is then refused as `submodules`.
+   */
+  readonly proveSetAside: (setAside: SetAsideSubmodules) => Promise<string | null>;
+}
+
 /** A slot git call that exited non-zero or timed out. */
 export class SlotGitError extends Error {
   readonly args: readonly string[];
@@ -224,7 +248,7 @@ export type SlotRemovalOutcome =
     }
   | {
       readonly status: 'refused';
-      readonly reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'removal_restored';
+      readonly reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'submodules' | 'removal_restored';
       readonly detail: string;
       /** Where the checkout now is: the slot path after a move-back, otherwise the quarantine. */
       readonly checkoutPath: string;
@@ -305,6 +329,27 @@ export async function setAsideSubmodules(
 }
 
 /**
+ * Reads the record {@link setAsideSubmodules} wrote first.
+ * @param area - `<quarantine>.submodules`.
+ * @returns The slot's git directory and the submodule paths, in held order.
+ * @throws {Error} When it is missing (`ENOENT`) or unreadable.
+ */
+const readSetAsideRecord = async (area: string): Promise<SetAsideRecord> => {
+  const record = JSON.parse(await nodeFs.readFile(join(area, SET_ASIDE_RECORD), 'utf8')) as SetAsideRecord;
+  if (record.version !== 1 || typeof record.gitDir !== 'string' || !Array.isArray(record.paths))
+    throw new Error(`Unreadable set-aside record in ${area}`);
+  return record;
+};
+
+/** {@link SlotRemovalProofs.proveSetAside} refused the set-aside submodules. */
+class SetAsideRefusedError extends Error {
+  constructor(detail: string) {
+    super(detail);
+    this.name = 'SetAsideRefusedError';
+  }
+}
+
+/**
  * Reverses {@link setAsideSubmodules} into the slot checkout, however far it
  * got: each held checkout replaces the empty directory left in its place, and
  * the modules return to the slot's git directory.
@@ -315,7 +360,7 @@ export async function setAsideSubmodules(
 export async function restoreSetAsideSubmodules(area: string, slotPath: string): Promise<void> {
   let record: SetAsideRecord;
   try {
-    record = JSON.parse(await nodeFs.readFile(join(area, SET_ASIDE_RECORD), 'utf8')) as SetAsideRecord;
+    record = await readSetAsideRecord(area);
   } catch (error) {
     // Interrupted before its record: nothing was moved yet.
     if (codeOf(error) !== 'ENOENT') throw error;
@@ -325,8 +370,6 @@ export async function restoreSetAsideSubmodules(area: string, slotPath: string):
     await nodeFs.rmdir(area);
     return;
   }
-  if (record.version !== 1 || typeof record.gitDir !== 'string' || !Array.isArray(record.paths))
-    throw new Error(`Unreadable set-aside record in ${area}`);
   const modules = join(area, 'modules');
   if (await exists(modules)) {
     if (await exists(join(record.gitDir, 'modules')))
@@ -474,7 +517,7 @@ const joinSetAside = async (area: string, copy: string): Promise<boolean> => {
 /**
  * Removes a quarantined slot under its lock. It records every entry of the
  * quarantine and of its set-aside submodules, proves them clean and
- * unoccupied, writes the record durably to `<copy>.json`, and commits by
+ * unoccupied, has the caller judge any set-aside submodules, writes the record durably to `<copy>.json`, and commits by
  * renaming the quarantine to `<copy>/checkout`; the set-aside follows to
  * `<copy>/submodules`, and git's record of the vanished quarantine is dropped.
  * Nothing is deleted here: the copy waits for the next pass's
@@ -486,7 +529,7 @@ const joinSetAside = async (area: string, copy: string): Promise<boolean> => {
  * @param target.slotPath - Path the checkout returns to on refusal.
  * @param target.quarantine - Where {@link quarantineSlot} moved it.
  * @param target.lock - The slot's held `removal` lock.
- * @param options - Git runner, deadline, witness and timing seam.
+ * @param options - Git runner, deadline, witness and timing seam, and the caller's {@link SlotRemovalProofs}.
  * @returns Removed with its copy, or refused with the cleanup reason.
  * @throws {ShutdownError} When the fence closed; the residue is left for recovery.
  * @throws {SlotGitError} When a git step other than the proof failed.
@@ -498,7 +541,7 @@ export async function removeQuarantinedSlot(
     readonly quarantine: string;
     readonly lock: SlotRemovalLock;
   },
-  options: SlotRemovalOptions = {}
+  options: SlotRemovalOptions & SlotRemovalProofs
 ): Promise<SlotRemovalOutcome> {
   const { repoRoot, slotPath, quarantine, lock } = target;
   const area = `${quarantine}${SET_ASIDE_SUFFIX}`;
@@ -519,6 +562,11 @@ export async function removeQuarantinedSlot(
       tally,
       options
     );
+    if (setAside) {
+      const { gitDir, paths } = await readSetAsideRecord(area);
+      const refusal = await options.proveSetAside({ slotPath, quarantine, area, gitDir, paths });
+      if (refusal !== null) throw new SetAsideRefusedError(refusal);
+    }
     const record: RemovedSlotRecord = {
       version: 1,
       quarantine,
@@ -536,8 +584,9 @@ export async function removeQuarantinedSlot(
       throw new CheckoutRemovalBlockedError(codeOf(error) ?? String(error), 'rename', '.');
     });
   } catch (error) {
-    let reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked';
+    let reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'submodules';
     if (error instanceof CheckoutContentChangedError) reason = 'uncommitted_changes';
+    else if (error instanceof SetAsideRefusedError) reason = 'submodules';
     else if (error instanceof SlotOccupiedError || error instanceof OccupantProbeError) reason = 'in_use';
     else if (error instanceof CheckoutRemovalBlockedError) reason = 'removal_blocked';
     else throw error;

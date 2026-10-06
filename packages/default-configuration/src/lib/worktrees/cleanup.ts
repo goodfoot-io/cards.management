@@ -8,6 +8,7 @@
  * @module
  */
 
+import { dirname, join } from 'node:path';
 import type {
   ActionContext,
   WorktreeCleanupDecision,
@@ -31,6 +32,8 @@ import {
 } from '@cards.management/sdk/slot-lock';
 import {
   processesNotInspected,
+  REMOVED_COPIES_DIR,
+  REMOVED_COPY_MINIMUM_AGE_MS,
   type SlotOccupantProbe,
   type SlotResidueLocker,
   slotOccupied,
@@ -43,7 +46,7 @@ import type { CreationContext } from './intent.js';
 import { defaultSlotLayer, type SlotLayer } from './layer.js';
 import { recoverSlot } from './recovery.js';
 import { unregisterSlot } from './registration.js';
-import { judgeSubmodules } from './submodules.js';
+import { judgeSetAsideSubmodules, judgeSubmodules, type SubmoduleJudgement } from './submodules.js';
 
 /** What a pass does: report only, remove, or remove and require that nothing remains. */
 export type SlotCleanupMode = 'preview' | 'cleanup' | 'prepare-delete';
@@ -190,7 +193,9 @@ type PermanentRefusal =
   | 'invalid_entry'
   | 'checked_out_elsewhere'
   | 'in_use'
-  | 'submodules';
+  | 'submodules'
+  | 'removal_blocked'
+  | 'removal_restored';
 
 /** How every next step ends: the pass that removes the cleared slot. */
 const RUN_AGAIN = 'then run Clean Up Worktrees again';
@@ -230,6 +235,10 @@ function nextStep(
       return `stop the processes working in ${slot.path} or wait for them to exit; ${RUN_AGAIN}`;
     case 'submodules':
       return `resolve what the detail names inside the submodule, or ${abandon}; ${RUN_AGAIN}`;
+    case 'removal_blocked':
+      return `clear the error the detail names, which kept ${slot.path} from moving under ${join(dirname(slot.path), REMOVED_COPIES_DIR)}; ${RUN_AGAIN}`;
+    case 'removal_restored':
+      return `compare the set-aside checkout the detail names with ${slot.path}, keep what is wanted and remove the other; ${RUN_AGAIN}`;
   }
 }
 
@@ -271,8 +280,6 @@ export async function cleanupCardSlots(
   const unknownLocks = { count: 0, unverifiedOwners: 0 };
   let uninspected = 0;
   let purge = NO_PURGE;
-  /** Copies this pass's removals made, left for the next pass's purge. */
-  const removedCopies = new Set<string>();
 
   const conclude = (failure?: SlotCleanupResult['failure']): SlotCleanupResult => {
     const ok =
@@ -524,17 +531,35 @@ export async function cleanupCardSlots(
       if (probe !== null) return { ...probe, outcome: 'preserved' };
       lock.checkpoint();
       const quarantine = await removal.quarantineSlot(repoRoot, slot.path, removalGit);
+      const rejudged: { kept: Extract<SubmoduleJudgement, { status: 'kept' }> | null } = { kept: null };
       const removed = await removal.removeQuarantinedSlot(
         { repoRoot, slotPath: slot.path, quarantine, lock },
-        removalGit
+        {
+          ...removalGit,
+          // Judged again as recorded, so submodule work done after the judge above is never deleted unjudged.
+          proveSetAside: async (setAside) => {
+            const judged = await judgeSetAsideSubmodules(git, setAside);
+            if (judged.status === 'clean') return null;
+            rejudged.kept = judged;
+            return judged.detail;
+          }
+        }
       );
       uninspected = Math.max(uninspected, removed.processesNotInspected);
-      if (removed.status === 'removed') removedCopies.add(removed.copy);
-      if (removed.status === 'refused')
-        // The quarantined checkout is probed again, so a process that entered after the probe above refuses too.
-        return removed.reason === 'in_use'
-          ? { ...refusal('in_use', slot, removed.detail), outcome: 'preserved' }
-          : { reason: removed.reason, detail: removed.detail, outcome: 'preserved' };
+      if (removed.status === 'refused') {
+        // The quarantined checkout is proved again, so a change or a process that came after the checks above refuses too.
+        const detail =
+          removed.reason === 'removal_restored'
+            ? `${removed.detail}; the checkout stays at ${removed.checkoutPath}, because ${slot.path} exists again`
+            : removed.detail;
+        const parent = await parentOf(slot).catch(() => null);
+        return {
+          ...(removed.reason === 'submodules' && rejudged.kept !== null
+            ? refusal('submodules', slot, detail, parent, `${rejudged.kept.step}; ${RUN_AGAIN}`)
+            : refusal(removed.reason, slot, detail, parent)),
+          outcome: 'preserved'
+        };
+      }
     } else if (slot.entry !== null) {
       lock.checkpoint();
       const pruned = await git.run(repoRoot, ['worktree', 'remove', '-f', '-f', slot.path], {
@@ -576,8 +601,13 @@ export async function cleanupCardSlots(
           throw new Error(`git update-ref refs/heads/${slot.branch} failed: ${restored.stderr.trim()}`);
       }
       return {
-        reason: 'removal_blocked',
-        detail: `${slot.path} was recreated after the checkout was removed, so the slot's ref and registration are kept; keep anything wanted from ${slot.path} and remove it, ${RUN_AGAIN}`,
+        ...refusal(
+          'removal_blocked',
+          slot,
+          `${slot.path} was recreated after the checkout was removed, so the slot's ref and registration are kept`,
+          null,
+          `keep anything wanted from ${slot.path} and remove it, ${RUN_AGAIN}`
+        ),
         outcome: 'preserved'
       };
     }
@@ -667,7 +697,7 @@ export async function cleanupCardSlots(
     }
   }
   if (mode !== 'preview') {
-    // Copies are deleted a pass after their removal, so the copies of slots removed above are skipped.
+    // A copy is deleted only once its removal is an hour old, so the copies of slots removed above stay pending.
     const lockerFor =
       (root: string): SlotResidueLocker =>
       (ordinal, purpose, fn) =>
@@ -681,7 +711,7 @@ export async function cleanupCardSlots(
     const result = await removal.purgeRemovedSlots(resolveSlotNamespace(repoRoot), lockerFor, {
       repoRoot,
       deadline: deadline - PURGE_RESERVE_MS,
-      skip: removedCopies
+      minimumAge: REMOVED_COPY_MINIMUM_AGE_MS
     });
     for (const outcome of result.outcomes) uninspected = Math.max(uninspected, outcome.processesNotInspected);
     purge = summarizeRemovedSlotPurge(result);
