@@ -8,6 +8,7 @@
  * @module
  */
 
+import { dirname, join } from 'node:path';
 import type {
   ActionContext,
   WorktreeCleanupDecision,
@@ -31,6 +32,7 @@ import {
 } from '@cards.management/sdk/slot-lock';
 import {
   processesNotInspected,
+  REMOVED_COPIES_DIR,
   type SlotOccupantProbe,
   type SlotResidueLocker,
   slotOccupied,
@@ -190,7 +192,9 @@ type PermanentRefusal =
   | 'invalid_entry'
   | 'checked_out_elsewhere'
   | 'in_use'
-  | 'submodules';
+  | 'submodules'
+  | 'removal_blocked'
+  | 'removal_restored';
 
 /** How every next step ends: the pass that removes the cleared slot. */
 const RUN_AGAIN = 'then run Clean Up Worktrees again';
@@ -230,6 +234,10 @@ function nextStep(
       return `stop the processes working in ${slot.path} or wait for them to exit; ${RUN_AGAIN}`;
     case 'submodules':
       return `resolve what the detail names inside the submodule, or ${abandon}; ${RUN_AGAIN}`;
+    case 'removal_blocked':
+      return `clear the error the detail names, which kept ${slot.path} from moving under ${join(dirname(slot.path), REMOVED_COPIES_DIR)}; ${RUN_AGAIN}`;
+    case 'removal_restored':
+      return `compare the set-aside checkout the detail names with ${slot.path}, keep what is wanted and remove the other; ${RUN_AGAIN}`;
   }
 }
 
@@ -530,11 +538,17 @@ export async function cleanupCardSlots(
       );
       uninspected = Math.max(uninspected, removed.processesNotInspected);
       if (removed.status === 'removed') removedCopies.add(removed.copy);
-      if (removed.status === 'refused')
-        // The quarantined checkout is probed again, so a process that entered after the probe above refuses too.
-        return removed.reason === 'in_use'
-          ? { ...refusal('in_use', slot, removed.detail), outcome: 'preserved' }
-          : { reason: removed.reason, detail: removed.detail, outcome: 'preserved' };
+      if (removed.status === 'refused') {
+        // The quarantined checkout is proved again, so a change or a process that came after the checks above refuses too.
+        const detail =
+          removed.reason === 'removal_restored'
+            ? `${removed.detail}; the checkout stays at ${removed.checkoutPath}, because ${slot.path} exists again`
+            : removed.detail;
+        return {
+          ...refusal(removed.reason, slot, detail, await parentOf(slot).catch(() => null)),
+          outcome: 'preserved'
+        };
+      }
     } else if (slot.entry !== null) {
       lock.checkpoint();
       const pruned = await git.run(repoRoot, ['worktree', 'remove', '-f', '-f', slot.path], {
@@ -576,8 +590,13 @@ export async function cleanupCardSlots(
           throw new Error(`git update-ref refs/heads/${slot.branch} failed: ${restored.stderr.trim()}`);
       }
       return {
-        reason: 'removal_blocked',
-        detail: `${slot.path} was recreated after the checkout was removed, so the slot's ref and registration are kept; keep anything wanted from ${slot.path} and remove it, ${RUN_AGAIN}`,
+        ...refusal(
+          'removal_blocked',
+          slot,
+          `${slot.path} was recreated after the checkout was removed, so the slot's ref and registration are kept`,
+          null,
+          `keep anything wanted from ${slot.path} and remove it, ${RUN_AGAIN}`
+        ),
         outcome: 'preserved'
       };
     }

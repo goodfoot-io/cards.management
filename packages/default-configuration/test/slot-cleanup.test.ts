@@ -8,7 +8,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readdir, readFile, readlink, rm, stat, writeFile } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import { Logger, type WorktreeCleanupDecision } from '@cards.management/sdk';
 import { readSlotLockSnapshot } from '@cards.management/sdk/slot-lock';
@@ -17,6 +17,7 @@ import {
   OccupantProbeError,
   type OccupantProbeOptions,
   type ProcReader,
+  removedCopyPathFor,
   removeQuarantinedSlot
 } from '@cards.management/sdk/worktree-removal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -604,6 +605,95 @@ describe('cleanupCardSlots removal', () => {
     expect(removed).toMatchObject({ reason: 'eligible', outcome: 'removed' });
     expect(await fx.git(['branch', '--list', slot.branch])).toBe('');
     expect(fx.client.registrations.has(slot.branch)).toBe(false);
+  });
+
+  it('refuses a quarantined checkout that changed after the checks with uncommitted_changes and its next step', async () => {
+    const slot = await finishedSlot('exec-1');
+    let wrote = false;
+    // A write lands after the checks under the lock, once the checkout is quarantined.
+    fx.beforeGit = async (args, cwd) => {
+      if (wrote || args[0] !== 'status' || !cwd.includes('.deleting-')) return;
+      wrote = true;
+      await writeFile(join(cwd, 'late.txt'), 'late write');
+    };
+
+    const refused = decisionOf(await pass(), slot.branch);
+    fx.beforeGit = null;
+
+    expect(wrote).toBe(true);
+    expect(refused).toMatchObject({ reason: 'uncommitted_changes', outcome: 'preserved' });
+    expect(refused.detail).toContain('Checkout has uncommitted changes: late.txt');
+    expect(refused.detail).toMatch(
+      /; commit, stash or discard them, or abandon its work: .*; then run Clean Up Worktrees again$/
+    );
+    expect(await readFile(join(slot.worktreePath, 'late.txt'), 'utf8')).toBe('late write');
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+  });
+
+  it('refuses with removal_blocked and its next step when the checkout cannot move into its copy', async () => {
+    const slot = await finishedSlot('exec-1');
+    const removal = fx.layer.seams.removal;
+    const layer: SlotLayer = {
+      ...fx.layer,
+      seams: {
+        ...fx.layer.seams,
+        removal: {
+          ...removal,
+          removeQuarantinedSlot: (target, options) =>
+            removal.removeQuarantinedSlot(target, {
+              ...options,
+              // A copy directory that cannot be written refuses the commit rename.
+              checkpoint: async (step) => {
+                if (step === 'recorded') await chmod(removedCopyPathFor(target.quarantine), 0o555);
+              }
+            })
+        }
+      }
+    };
+
+    const blocked = decisionOf(
+      await cleanupCardSlots(
+        { ...fx.cleanupContext(), layer },
+        { requester: null, mode: 'cleanup', budgetMs: SLOT_CLEANUP_PASS_BUDGET_MS }
+      ),
+      slot.branch
+    );
+
+    expect(blocked).toMatchObject({ reason: 'removal_blocked', outcome: 'preserved' });
+    expect(blocked.detail).toContain('EACCES rename .: checkout restored');
+    expect(blocked.detail).toMatch(
+      new RegExp(
+        `; clear the error the detail names, which kept .* from moving under ${join(fx.slotRoot, '.purge')}; then run Clean Up Worktrees again$`
+      )
+    );
+    expect(await exists(join(slot.worktreePath, '.git'))).toBe(true);
+    expect(await readdir(join(fx.slotRoot, '.purge'))).toEqual([]);
+
+    expect(decisionOf(await pass(), slot.branch)).toMatchObject({ reason: 'eligible', outcome: 'removed' });
+  });
+
+  it('refuses with removal_restored and its next step when the slot path is recreated before a refusal', async () => {
+    const slot = await finishedSlot('exec-1');
+    let quarantine = '';
+    // A late write refuses the removal, and an editor has recreated the slot path, so the checkout cannot move back.
+    fx.beforeGit = async (args, cwd) => {
+      if (quarantine !== '' || args[0] !== 'status' || !cwd.includes('.deleting-')) return;
+      quarantine = cwd;
+      await writeFile(join(cwd, 'late.txt'), 'late write');
+      await mkdir(slot.worktreePath);
+      await writeFile(join(slot.worktreePath, 'stray.txt'), 'editor save');
+    };
+
+    const restored = decisionOf(await pass(), slot.branch);
+    fx.beforeGit = null;
+
+    expect(restored).toMatchObject({ reason: 'removal_restored', outcome: 'preserved' });
+    expect(restored.detail).toContain(`the checkout stays at ${quarantine}, because ${slot.worktreePath} exists again`);
+    expect(restored.detail).toMatch(
+      /; compare the set-aside checkout the detail names with .*, keep what is wanted and remove the other; then run Clean Up Worktrees again$/
+    );
+    expect(await readFile(join(quarantine, 'late.txt'), 'utf8')).toBe('late write');
+    expect(await readFile(join(slot.worktreePath, 'stray.txt'), 'utf8')).toBe('editor save');
   });
 
   it('keeps a removed copy that changed after its removal, reports it on every pass and logs it', async () => {
