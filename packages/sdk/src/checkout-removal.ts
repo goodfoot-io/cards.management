@@ -39,17 +39,21 @@ export interface CheckoutEntry {
   readonly target?: string;
 }
 
+/** What a checkout held when it was proven clean: everything {@link dismantleCheckout} may delete. */
+export interface CheckoutRecord {
+  /** Permission bits of the root, reapplied when restoration recreates it. */
+  readonly rootMode: number;
+  readonly witness: CheckoutWitness;
+  /** Pre-order entries; held entry `i` lives at `<holding>/<i>`. */
+  readonly entries: readonly CheckoutEntry[];
+}
+
 /** Durable record written before the first entry leaves the checkout. */
-export interface CheckoutRemovalManifest {
+export interface CheckoutRemovalManifest extends CheckoutRecord {
   readonly version: 1;
   readonly root: string;
   /** Path the checkout returns to when removal is refused or restored. */
   readonly restoreTo: string;
-  /** Permission bits of the root, reapplied when restoration recreates it. */
-  readonly rootMode: number;
-  readonly witness: CheckoutWitness;
-  /** Held entry `i` lives at `<holding>/<i>`. */
-  readonly entries: readonly CheckoutEntry[];
 }
 
 /** Paths for one removal; the holding area is a sibling on the same filesystem. */
@@ -62,15 +66,40 @@ export interface CheckoutRemovalLayout {
 /** Filesystem mutations that tests may fail deterministically. */
 export type CheckoutFilesystem = Pick<typeof nodeFs, 'rename' | 'rmdir' | 'link' | 'unlink'>;
 
-/** Boundaries for one verified removal. */
-export interface CheckoutRemovalOptions {
-  /** Proves the snapshotted checkout clean; runs after the snapshot so later writes diverge from it. */
-  readonly prove: () => Promise<void>;
+/**
+ * What restoring held entries found. `refreshed` maps an entry index to its
+ * identity at its restored path, for every entry restoration recreated or
+ * placed back after proving it unchanged by a check the witness trusts, so a
+ * caller that keeps the checkout's record can re-record exactly those.
+ */
+export interface CheckoutRestoration {
+  readonly changed: readonly string[];
+  readonly displaced: readonly string[];
+  /** Restored identities by entry index, for entries placed back after a check the witness trusts. */
+  readonly refreshed: ReadonlyMap<number, CheckoutEntry>;
+  /**
+   * Root-relative files placed back after a check the witness does not trust: without the change
+   * time observed when they were held, which a hard crash loses, size and modification time alone
+   * cannot prove them unchanged.
+   */
+  readonly unverified: readonly string[];
+}
+
+/** Boundaries for dismantling a recorded checkout. */
+export interface CheckoutDismantleOptions {
   /** Throws when the caller may no longer mutate; awaited before every entry. */
   readonly requireCurrent: () => void | Promise<void>;
   /** Timing seam: called with the holding path once it exists, then before each entry leaves the checkout. */
   readonly checkpoint?: (entryPath: string) => Promise<void>;
   readonly filesystem?: Partial<CheckoutFilesystem>;
+  /** Called after any restoration, before the error that caused it is thrown. */
+  readonly onRestored?: (restoration: CheckoutRestoration) => Promise<void>;
+}
+
+/** Boundaries for one verified removal. */
+export interface CheckoutRemovalOptions extends CheckoutDismantleOptions {
+  /** Proves the snapshotted checkout clean; runs after the snapshot so later writes diverge from it. */
+  readonly prove: () => Promise<void>;
   /** Defaults to {@link resolveCheckoutWitness} for the checkout's root. */
   readonly witness?: CheckoutWitness;
 }
@@ -142,13 +171,7 @@ export class CheckoutRestoredError extends Error {
 export type CheckoutRemovalRecovery =
   | { readonly kind: 'cleared' }
   | { readonly kind: 'finished'; readonly root: string }
-  | {
-      readonly kind: 'restored';
-      readonly root: string;
-      readonly restoreTo: string;
-      readonly changed: readonly string[];
-      readonly displaced: readonly string[];
-    };
+  | ({ readonly kind: 'restored'; readonly root: string; readonly restoreTo: string } & CheckoutRestoration);
 
 /** Filesystem probes {@link resolveCheckoutWitness} reads. */
 export interface CheckoutWitnessProbe {
@@ -250,7 +273,7 @@ const exists = async (file: string): Promise<boolean> => {
  * Flushes a directory so renames inside it survive a crash.
  * @param directory - Directory whose entries changed.
  */
-const syncDirectory = async (directory: string): Promise<void> => {
+export const syncDirectory = async (directory: string): Promise<void> => {
   let handle: nodeFs.FileHandle | undefined;
   try {
     handle = await nodeFs.open(directory, 'r');
@@ -267,7 +290,7 @@ const syncDirectory = async (directory: string): Promise<void> => {
  * @param file - Destination path.
  * @param data - Complete new content.
  */
-const writeDurable = async (file: string, data: string): Promise<void> => {
+export const writeDurable = async (file: string, data: string): Promise<void> => {
   const temporary = `${file}.tmp`;
   const handle = await nodeFs.open(temporary, 'w');
   try {
@@ -431,6 +454,104 @@ export async function snapshotCheckout(
 }
 
 /**
+ * Records several directories as the parts of one future checkout root: part
+ * `name` becomes a directory entry `name`, with every entry beneath it under
+ * `name/`. The parts can be recorded where they are and moved under the root
+ * afterwards, since moving a directory changes no identity a record compares.
+ * @param parts - Each part's name under the future root and its current directory.
+ * @param filesystemNow - Current time as stamped by the parts' own filesystem.
+ * @param witness - Under `hash`, every regular file records its content hash.
+ * @returns Pre-order entries relative to the future root.
+ * @throws {CheckoutContentChangedError} When an entry vanished while it was being read.
+ * @throws {CheckoutRemovalBlockedError} When an entry cannot be read.
+ */
+export async function recordCheckoutParts(
+  parts: readonly { readonly name: string; readonly root: string }[],
+  filesystemNow: bigint,
+  witness: CheckoutWitness
+): Promise<CheckoutEntry[]> {
+  const entries: CheckoutEntry[] = [];
+  for (const { name, root } of parts) {
+    let stats: BigIntStats;
+    try {
+      stats = await nodeFs.lstat(root, { bigint: true });
+    } catch (error) {
+      if (codeOf(error) === 'ENOENT') throw new CheckoutContentChangedError('Checkout changed during snapshot', [name]);
+      throw new CheckoutRemovalBlockedError(codeOf(error) ?? String(error), 'lstat', name);
+    }
+    entries.push({
+      path: name,
+      kind: 'directory',
+      mode: Number(stats.mode),
+      ino: String(stats.ino),
+      size: String(stats.size),
+      mtimeNs: String(stats.mtimeNs),
+      ctimeNs: String(stats.ctimeNs)
+    });
+    for (const entry of await snapshotCheckout(root, filesystemNow, witness))
+      entries.push({ ...entry, path: join(name, entry.path) });
+  }
+  return entries;
+}
+
+/**
+ * Lists what changed in a recorded checkout without touching it: entries gone
+ * or no longer matching their recorded identity, and entries not recorded at
+ * all. Content hashes are not compared; {@link dismantleCheckout} compares
+ * them as it holds each entry, so this is the cheap check that lets a changed
+ * checkout be reported without being taken apart and restored.
+ * @param root - Directory the record is relative to.
+ * @param entries - Its record.
+ * @param witness - Under `ctime`, the change time must match as well.
+ * @returns Root-relative paths, sorted; empty when nothing visibly changed.
+ */
+export async function findCheckoutChanges(
+  root: string,
+  entries: readonly CheckoutEntry[],
+  witness: CheckoutWitness
+): Promise<string[]> {
+  const changed: string[] = [];
+  await batched(entries, async (entry) => {
+    const check: IdentityCheck = { ctimeNs: witness === 'ctime' ? entry.ctimeNs : undefined, hash: false };
+    if (!(await unchanged(entry, join(root, entry.path), check))) changed.push(entry.path);
+  });
+  const recorded = new Set(entries.map((entry) => entry.path));
+  const directories = ['', ...entries.filter((entry) => entry.kind === 'directory').map((entry) => entry.path)];
+  await batched(directories, async (directory) => {
+    let names: string[];
+    try {
+      names = await nodeFs.readdir(join(root, directory));
+    } catch (error) {
+      // A recorded directory that is gone or replaced was already reported above.
+      if (codeOf(error) === 'ENOENT' || codeOf(error) === 'ENOTDIR') return;
+      throw error;
+    }
+    for (const name of names) {
+      const path = directory === '' ? name : join(directory, name);
+      if (!recorded.has(path)) changed.push(path);
+    }
+  });
+  return changed.sort();
+}
+
+/**
+ * Re-records an entry at its restored path, keeping what restoration proved unchanged.
+ * @param entry - The recorded entry.
+ * @param target - Where restoration placed it.
+ * @returns The entry with its new inode, mode and times.
+ */
+const reobserve = async (entry: CheckoutEntry, target: string): Promise<CheckoutEntry> => {
+  const stats = await nodeFs.lstat(target, { bigint: true });
+  return {
+    ...entry,
+    mode: Number(stats.mode),
+    ino: String(stats.ino),
+    mtimeNs: String(stats.mtimeNs),
+    ctimeNs: String(stats.ctimeNs)
+  };
+};
+
+/**
  * Places a held entry at its original path without ever replacing whatever now occupies it.
  * @param entry - The entry's snapshot identity.
  * @param held - Where the entry is held.
@@ -492,22 +613,25 @@ const makeDirectory = async (directory: string): Promise<boolean> => {
  * @param manifest - The removal's manifest.
  * @param fs - Injectable mutations.
  * @param ctimes - Change times observed right after each entry was held, by index.
- * @returns Root-relative entries whose held content diverged, and recovery names that were used.
+ * @returns Root-relative entries whose held content diverged, recovery names that were used, and
+ * the restored identity of every entry recreated or placed back after a check the witness trusts.
  */
 const restoreHeld = async (
   holding: string,
   manifest: CheckoutRemovalManifest,
   fs: CheckoutFilesystem,
   ctimes: ReadonlyMap<number, string>
-): Promise<{ changed: string[]; displaced: string[] }> => {
+): Promise<CheckoutRestoration> => {
   const changed: string[] = [];
   const displaced: string[] = [];
-  const created: Array<{ readonly path: string; readonly mode: number }> = [];
+  const refreshed = new Map<number, CheckoutEntry>();
+  const unverified: string[] = [];
+  const created: Array<{ readonly path: string; readonly mode: number; readonly index?: number }> = [];
   if (await makeDirectory(manifest.root)) created.push({ path: manifest.root, mode: manifest.rootMode });
   for (const [index, entry] of manifest.entries.entries()) {
     const target = join(manifest.root, entry.path);
     if (entry.kind === 'directory') {
-      if (await makeDirectory(target)) created.push({ path: target, mode: entry.mode });
+      if (await makeDirectory(target)) created.push({ path: target, mode: entry.mode, index });
       continue;
     }
     const held = join(holding, String(index));
@@ -521,6 +645,12 @@ const restoreHeld = async (
       if (codeOf(error) !== 'ENOENT' && codeOf(error) !== 'ENOTDIR') throw error;
       placed = false;
     }
+    // Without a persisted post-move change time, a regular file without a hash was proven by size and
+    // modification time alone, which a write can restore; such an entry keeps its original record.
+    const trusted =
+      entry.kind !== 'file' || manifest.witness === 'hash' || ctimes.has(index) || entry.sha256 !== undefined;
+    if (placed && clean && trusted) refreshed.set(index, await reobserve(entry, target));
+    else if (placed && clean) unverified.push(entry.path);
     if (placed) continue;
     if (clean || entry.kind === 'special') {
       await nodeFs.unlink(held);
@@ -536,9 +666,14 @@ const restoreHeld = async (
     }
     displaced.push(alternate);
   }
-  for (const directory of created.reverse()) await nodeFs.chmod(directory.path, directory.mode & 0o7777);
+  for (const directory of created.reverse()) {
+    await nodeFs.chmod(directory.path, directory.mode & 0o7777);
+    const entry = directory.index === undefined ? undefined : manifest.entries[directory.index];
+    if (entry !== undefined && directory.index !== undefined)
+      refreshed.set(directory.index, await reobserve(entry, directory.path));
+  }
   await dismantleHolding(holding);
-  return { changed, displaced };
+  return { changed, displaced, refreshed, unverified };
 };
 
 /**
@@ -547,6 +682,7 @@ const restoreHeld = async (
  * @param manifest - The removal's manifest.
  * @param fs - Injectable mutations.
  * @param ctimes - Change times observed right after each entry was held.
+ * @param onRestored - Told what restoration found, once it completed.
  * @returns What {@link restoreHeld} found.
  * @throws {CheckoutRemovalBlockedError} When restoration itself was refused; the manifest is kept.
  */
@@ -554,15 +690,19 @@ const restoreOrBlock = async (
   holding: string,
   manifest: CheckoutRemovalManifest,
   fs: CheckoutFilesystem,
-  ctimes: ReadonlyMap<number, string>
-): Promise<{ changed: string[]; displaced: string[] }> => {
+  ctimes: ReadonlyMap<number, string>,
+  onRestored: CheckoutDismantleOptions['onRestored']
+): Promise<CheckoutRestoration> => {
+  let restoration: CheckoutRestoration;
   try {
-    return await restoreHeld(holding, manifest, fs, ctimes);
+    restoration = await restoreHeld(holding, manifest, fs, ctimes);
   } catch (error) {
     const code = codeOf(error);
     if (code === undefined) throw error;
     throw new CheckoutRemovalBlockedError(code, 'restore', holding);
   }
+  await onRestored?.(restoration);
+  return restoration;
 };
 
 /**
@@ -595,23 +735,9 @@ const filesystemWith = (overrides: Partial<CheckoutFilesystem> = {}): CheckoutFi
 });
 
 /**
- * Deletes a quarantined checkout itself instead of handing live content to a recursive delete.
- *
- * Order: create the holding area, snapshot every entry, let the caller prove the checkout clean,
- * write the manifest durably, then move each entry into the holding area. A file is checked against
- * its full identity immediately before it moves, and against size, modification time and inode after.
- * Directories are removed only with `rmdir`, so a writer creating anything inside one is refused.
- * After the root is gone a durable marker, carrying each held entry's post-move change time, commits
- * the removal; every held entry is re-verified, and only then unlinked. Any divergence or failure
- * before that point restores every entry without replacing newer ones.
- *
- * Identity soundness under `ctime`: every write or metadata change updates change time, which
- * userspace cannot forge on Linux or macOS, so the pre-move check proves a non-racy file unchanged
- * since the snapshot; afterwards only descriptors opened earlier reach it, and their writes advance
- * change time past the value persisted in the marker. Racy files compare content hashes as well.
- * Under `hash`, change time is never trusted and every regular file's content is compared before it
- * moves and again once removal committed. Writes through a descriptor after the final verification
- * land in an unlinked file under any deletion scheme.
+ * Deletes a quarantined checkout itself instead of handing live content to a recursive delete:
+ * creates the holding area, records every entry, lets the caller prove the checkout clean, then
+ * {@link dismantleCheckout}s it against that record.
  * @param layout - Quarantine root, its absent holding sibling, and the path a refusal returns to.
  * @param options - Cleanliness proof, owner fence, timing seam, witness and injectable mutations.
  * @throws {CheckoutContentChangedError} When content diverged before the root was removed.
@@ -622,29 +748,78 @@ export async function removeQuarantinedCheckout(
   layout: CheckoutRemovalLayout,
   options: CheckoutRemovalOptions
 ): Promise<void> {
-  const fs = filesystemWith(options.filesystem);
   const { root, holding } = layout;
   const witness = options.witness ?? (await resolveCheckoutWitness(root));
   await nodeFs.mkdir(holding);
-  let entries: CheckoutEntry[];
-  let rootMode: number;
+  let record: CheckoutRecord;
   try {
     await options.checkpoint?.(holding);
-    rootMode = (await nodeFs.lstat(root)).mode;
-    entries = await snapshotCheckout(root, (await nodeFs.lstat(holding, { bigint: true })).mtimeNs, witness);
+    const rootMode = (await nodeFs.lstat(root)).mode;
+    const entries = await snapshotCheckout(root, (await nodeFs.lstat(holding, { bigint: true })).mtimeNs, witness);
     await options.prove();
+    record = { rootMode, witness, entries };
   } catch (error) {
     await nodeFs.rmdir(holding);
     throw error;
   }
-  const manifest: CheckoutRemovalManifest = {
-    version: 1,
-    root,
-    restoreTo: layout.restoreTo,
-    rootMode,
-    witness,
-    entries
-  };
+  await dismantle(layout, record, options);
+}
+
+/**
+ * Deletes a checkout entry by entry against a record taken when it was proven clean, through a
+ * fresh holding area; see {@link dismantle} for the order and why it is sound.
+ * @param layout - The checkout root, its absent holding sibling, and the path a refusal returns to.
+ * @param record - What the checkout held when it was proven clean.
+ * @param options - Owner fence, timing seam, injectable mutations and restoration callback.
+ * @throws {CheckoutContentChangedError} When content diverged before the root was removed.
+ * @throws {CheckoutRemovalBlockedError} When an operation was refused; the checkout is restored.
+ * @throws {CheckoutRestoredError} When held content diverged after the root was removed.
+ */
+export async function dismantleCheckout(
+  layout: CheckoutRemovalLayout,
+  record: CheckoutRecord,
+  options: CheckoutDismantleOptions
+): Promise<void> {
+  await nodeFs.mkdir(layout.holding);
+  await options.checkpoint?.(layout.holding);
+  await dismantle(layout, record, options);
+}
+
+/**
+ * Deletes a checkout entry by entry, through a holding area that already exists, against a record
+ * taken when it was proven clean.
+ *
+ * Order: write the manifest durably into the holding area, then move each entry into it. A file is
+ * checked against its recorded identity immediately before it moves, and against size,
+ * modification time and inode after. Directories are removed only with `rmdir`, so a writer
+ * creating anything inside one is refused. After the root is gone a durable marker, carrying each
+ * held entry's post-move change time, commits the removal; every held entry is re-verified, and only
+ * then unlinked. Any divergence or failure before that point restores every entry without replacing
+ * newer ones.
+ *
+ * Identity soundness under `ctime`: every write or metadata change updates change time, which
+ * userspace cannot forge on Linux or macOS, so the pre-move check proves a non-racy file unchanged
+ * since the record; afterwards only descriptors opened earlier reach it, and their writes advance
+ * change time past the value persisted in the marker. Racy files compare content hashes as well.
+ * Under `hash`, change time is never trusted and every regular file's content is compared before it
+ * moves and again once removal committed. Writes through a descriptor after the final verification
+ * land in an unlinked file under any deletion scheme.
+ * @param layout - The checkout root, its holding sibling, and the path a refusal returns to.
+ * @param record - What the checkout held when it was proven clean.
+ * @param options - Owner fence, timing seam, injectable mutations and restoration callback.
+ * @throws {CheckoutContentChangedError} When content diverged before the root was removed.
+ * @throws {CheckoutRemovalBlockedError} When an operation was refused; the checkout is restored.
+ * @throws {CheckoutRestoredError} When held content diverged after the root was removed.
+ */
+const dismantle = async (
+  layout: CheckoutRemovalLayout,
+  record: CheckoutRecord,
+  options: CheckoutDismantleOptions
+): Promise<void> => {
+  const fs = filesystemWith(options.filesystem);
+  const { root, holding } = layout;
+  const { witness, entries } = record;
+  const manifest: CheckoutRemovalManifest = { version: 1, root, restoreTo: layout.restoreTo, ...record };
   await writeDurable(join(holding, MANIFEST), JSON.stringify(manifest));
   const ctimes = new Map<number, string>();
   const take = async (index: number): Promise<void> => {
@@ -686,7 +861,7 @@ export async function removeQuarantinedCheckout(
       throw classify(error, 'rmdir', '.');
     });
   } catch (error) {
-    const { changed } = await restoreOrBlock(holding, manifest, fs, ctimes);
+    const { changed } = await restoreOrBlock(holding, manifest, fs, ctimes, options.onRestored);
     if (error instanceof Diverged)
       throw new CheckoutContentChangedError('Checkout changed during removal', [...new Set([error.path, ...changed])]);
     if (error instanceof Blocked) throw new CheckoutRemovalBlockedError(error.code, error.syscall, error.path);
@@ -700,12 +875,12 @@ export async function removeQuarantinedCheckout(
       diverged.push(entry.path);
   });
   if (diverged.length > 0) {
-    const restored = await restoreOrBlock(holding, manifest, fs, ctimes);
+    const restored = await restoreOrBlock(holding, manifest, fs, ctimes, options.onRestored);
     throw new CheckoutRestoredError(holding, [...new Set([...diverged, ...restored.changed])], restored.displaced);
   }
   await batched([...ctimes.keys()], (index) => fs.unlink(join(holding, String(index))));
   await dismantleHolding(holding);
-}
+};
 
 /**
  * Reads the post-move change times a committed removal persisted.
@@ -781,6 +956,6 @@ export async function recoverCheckoutRemoval(
       return { kind: 'finished', root: manifest.root };
     }
   }
-  const { changed, displaced } = await restoreHeld(holding, manifest, fs, ctimes);
-  return { kind: 'restored', root: manifest.root, restoreTo: manifest.restoreTo, changed, displaced };
+  const restoration = await restoreHeld(holding, manifest, fs, ctimes);
+  return { kind: 'restored', root: manifest.root, restoreTo: manifest.restoreTo, ...restoration };
 }

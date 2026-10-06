@@ -1,15 +1,17 @@
 /**
  * Slot-level removal against real git worktrees and real slot locks:
- * quarantine and verified removal with move-back only into an absent slot
- * path, residue recovery under the slot's `removal` lock, the occupant probe
- * on injected and real `/proc` and `lsof` results, and the fsmonitor stop.
+ * quarantine and the committed move into `.purge` with move-back only into an
+ * absent slot path, residue recovery under the slot's `removal` lock, the
+ * occupant probe on injected and real `/proc` and `lsof` results, and the
+ * fsmonitor stop. Submodule set-aside and the purge are in
+ * `worktree-purge.test.ts`.
  * @summary Slot quarantine, removal, residue recovery, occupant probe and fsmonitor stop
  */
 import { type ChildProcess, execFileSync, spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { GitBoundedResult } from '../src/bounded-git.js';
 import { ShutdownError } from '../src/config/runtime-shutdown.js';
@@ -26,11 +28,12 @@ import {
   quarantineSlot,
   recoverSlotResidue,
   recoverSlotResidueLocked,
-  removeQuarantinedCheckout,
+  removedCopyPathFor,
   removeQuarantinedSlot,
   requireCurrentSlotLock,
   type SlotGitError,
   type SlotRemovalGit,
+  type SlotRemovalStep,
   type SlotResidueLocker,
   slotOccupied,
   stopSlotFsmonitor
@@ -63,11 +66,14 @@ function worktreePaths(repo: string): string[] {
 }
 
 /**
- * A git runner answering every call with one canned result, recording the arguments.
- * @param result - What each call returns.
+ * A git runner answering every call with a canned result, recording the arguments.
+ * @param result - What each call returns, or a function of its arguments giving it.
  * @returns The runner and the arguments it saw.
  */
-function cannedGit(result: Partial<GitBoundedResult>): { git: SlotRemovalGit; calls: string[][] } {
+function cannedGit(result: Partial<GitBoundedResult> | ((args: readonly string[]) => Partial<GitBoundedResult>)): {
+  git: SlotRemovalGit;
+  calls: string[][];
+} {
   const calls: string[][] = [];
   return {
     calls,
@@ -81,7 +87,7 @@ function cannedGit(result: Partial<GitBoundedResult>): { git: SlotRemovalGit; ca
           timedOut: false,
           aborted: false,
           stopReport: { survivors: [], complete: true },
-          ...result
+          ...(typeof result === 'function' ? result(args) : result)
         };
       }
     }
@@ -188,29 +194,41 @@ describe('slot removal', () => {
     });
 
     it('passes core.fsmonitor=false to every git call', async () => {
-      const { git: runner, calls } = cannedGit({});
+      const { git: runner, calls } = cannedGit((args) =>
+        args.includes('rev-parse') ? { stdout: join(base, 'no-git-dir') } : {}
+      );
       await quarantineSlot(repo, slotPath, { git: runner });
-      expect(calls.length).toBeGreaterThan(0);
+      expect(calls.map((args) => args[2])).toEqual(['rev-parse', 'ls-files', 'worktree']);
       for (const args of calls) expect(args.slice(0, 2)).toEqual(['-c', 'core.fsmonitor=false']);
     });
 
-    it('reports a refused move as a slot git error', async () => {
-      await expect(quarantineSlot(repo, join(slotRoot, '9'))).rejects.toMatchObject({
+    it('reports a refused move as a slot git error and leaves the slot in place', async () => {
+      git(repo, 'worktree', 'lock', slotPath);
+      await expect(quarantineSlot(repo, slotPath)).rejects.toMatchObject({
         name: 'SlotGitError'
       } satisfies Partial<SlotGitError>);
+      expect(await readFile(join(slotPath, 'tracked.txt'), 'utf8')).toBe('tracked\n');
+      expect(await readdir(slotRoot)).toEqual(['1']);
     });
 
-    it('removes a clean quarantined checkout and drops git’s record of it', async () => {
+    it('commits a clean quarantined checkout to its copy under .purge and drops git’s record of it', async () => {
       const { lock } = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
+      const copy = removedCopyPathFor(quarantine);
+      expect(copy).toMatch(new RegExp(`^${join(slotRoot, '.purge', '1')}\\.${UUID}$`));
       await expect(removeQuarantinedSlot({ repoRoot: repo, slotPath, quarantine, lock })).resolves.toEqual({
         status: 'removed',
+        copy,
         processesNotInspected: expect.any(Number)
       });
       expect(existsSync(quarantine)).toBe(false);
-      expect(existsSync(`${quarantine}.held`)).toBe(false);
       expect(worktreePaths(repo)).not.toContain(quarantine);
-      expect((await readdir(slotRoot)).filter((name) => name !== '.locks')).toEqual([]);
+      expect((await readdir(slotRoot)).filter((name) => name !== '.locks')).toEqual(['.purge']);
+      expect((await readdir(join(slotRoot, '.purge'))).sort()).toEqual([basename(copy), `${basename(copy)}.json`]);
+      expect(await readdir(copy)).toEqual(['checkout']);
+      expect(await readFile(join(copy, 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
+      // The branch stays; only the checkout went.
+      expect(git(repo, 'branch', '--list', 'slot-1')).toContain('slot-1');
     });
 
     it('refuses an untracked file and moves the checkout back to its absent slot path', async () => {
@@ -222,6 +240,8 @@ describe('slot removal', () => {
       expect(await readFile(join(slotPath, 'untracked.txt'), 'utf8')).toBe('work in progress\n');
       expect(existsSync(quarantine)).toBe(false);
       expect(worktreePaths(repo)).toContain(slotPath);
+      // The refused removal left no copy or record behind.
+      expect(await readdir(join(slotRoot, '.purge'))).toEqual([]);
     });
 
     it.runIf(process.platform === 'linux')(
@@ -263,7 +283,7 @@ describe('slot removal', () => {
         { repoRoot: repo, slotPath, quarantine, lock },
         { occupants: { platform: 'linux', uid: 1000, proc: hidden } }
       );
-      expect(outcome).toEqual({ status: 'removed', processesNotInspected: 1 });
+      expect(outcome).toEqual({ status: 'removed', copy: removedCopyPathFor(quarantine), processesNotInspected: 1 });
       expect(existsSync(quarantine)).toBe(false);
     });
 
@@ -294,7 +314,7 @@ describe('slot removal', () => {
           { repoRoot: repo, slotPath, quarantine, lock },
           { occupants: { platform: 'linux', uid: 1000, proc: others } }
         )
-      ).resolves.toEqual({ status: 'removed', processesNotInspected: 1 });
+      ).resolves.toEqual({ status: 'removed', copy: removedCopyPathFor(quarantine), processesNotInspected: 1 });
     });
 
     it('never nests the checkout into a recreated slot path, leaving it at the quarantine', async () => {
@@ -310,20 +330,20 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).toContain(quarantine);
     });
 
-    it('stops between entries once the fence closes and leaves the restored quarantine for recovery', async () => {
+    it('stops before its commit once the fence closes and leaves the quarantine for recovery', async () => {
       const { lock, env } = await removalLock();
       const quarantine = await quarantineSlot(repo, slotPath);
       const removal = removeQuarantinedSlot(
         { repoRoot: repo, slotPath, quarantine, lock },
         {
-          checkpoint: async (entry) => {
-            if (entry === join(quarantine, 'tracked.txt')) void env.shutdown.shutdownAndExit(0, 'completed');
+          checkpoint: async (step) => {
+            if (step === 'recorded') void env.shutdown.shutdownAndExit(0, 'completed');
           }
         }
       );
       await expect(removal).rejects.toThrow(ShutdownError);
       expect(await readFile(join(quarantine, 'tracked.txt'), 'utf8')).toBe('tracked\n');
-      expect(existsSync(`${quarantine}.held`)).toBe(false);
+      expect(existsSync(join(removedCopyPathFor(quarantine), 'checkout'))).toBe(false);
       expect(existsSync(slotPath)).toBe(false);
     });
 
@@ -348,17 +368,18 @@ describe('slot removal', () => {
   });
 
   describe('residue', () => {
-    it('lists quarantines and holding areas per ordinal, ignoring other entries', async () => {
+    it('lists quarantines and set-aside submodules per ordinal, ignoring other entries', async () => {
       const first = `${join(slotRoot, '1')}.deleting-11111111-1111-4111-8111-111111111111`;
       const third = `${join(slotRoot, '3')}.deleting-33333333-3333-4333-8333-333333333333`;
       await mkdir(first);
-      await mkdir(`${first}.held`);
+      await mkdir(`${first}.submodules`);
+      await mkdir(`${third}.submodules`);
       await mkdir(`${third}.held`);
       await mkdir(join(slotRoot, '2'));
       await mkdir(join(slotRoot, '4.deleting-not-a-uuid'));
       await expect(findSlotResidue(slotRoot)).resolves.toEqual([
-        { ordinal: 1, slotPath: join(slotRoot, '1'), quarantines: [first], holdings: [`${first}.held`] },
-        { ordinal: 3, slotPath: join(slotRoot, '3'), quarantines: [], holdings: [`${third}.held`] }
+        { ordinal: 1, slotPath: join(slotRoot, '1'), quarantines: [first], setAsides: [`${first}.submodules`] },
+        { ordinal: 3, slotPath: join(slotRoot, '3'), quarantines: [], setAsides: [`${third}.submodules`] }
       ]);
     });
 
@@ -387,48 +408,43 @@ describe('slot removal', () => {
       expect(await readdir(slotPath)).toEqual([]);
     });
 
-    it('finishes a committed removal and prunes the vanished quarantine', async () => {
-      const quarantine = await quarantineSlot(repo, slotPath);
-      let reached = false;
-      void removeQuarantinedCheckout(
-        { root: quarantine, holding: `${quarantine}.held`, restoreTo: slotPath },
-        {
-          prove: async () => undefined,
-          requireCurrent: () => undefined,
-          filesystem: {
-            unlink: async () => {
-              reached = true;
-              await frozen();
-            }
-          }
-        }
-      );
-      await until(() => reached);
+    /**
+     * Starts a removal of the quarantined slot that freezes, as a crash would, at one step.
+     * @param quarantine - Where {@link quarantineSlot} moved the slot.
+     * @param at - The step it freezes at.
+     */
+    async function frozenRemoval(quarantine: string, at: SlotRemovalStep): Promise<void> {
       const { lock } = await removalLock();
-      await expect(recoverSlotResidueLocked({ repoRoot: repo, slotPath, lock })).resolves.toEqual([
-        { kind: 'removal_finished', quarantine },
-        { kind: 'pruned', quarantine }
-      ]);
-      expect(existsSync(`${quarantine}.held`)).toBe(false);
-      expect(worktreePaths(repo)).not.toContain(quarantine);
-    });
-
-    it('restores an interrupted removal and moves it back to its absent slot path', async () => {
-      const quarantine = await quarantineSlot(repo, slotPath);
       let reached = false;
-      void removeQuarantinedCheckout(
-        { root: quarantine, holding: `${quarantine}.held`, restoreTo: slotPath },
+      void removeQuarantinedSlot(
+        { repoRoot: repo, slotPath, quarantine, lock },
         {
-          prove: async () => undefined,
-          requireCurrent: () => undefined,
-          checkpoint: async (entry) => {
-            if (entry !== join(quarantine, '.git')) return;
+          checkpoint: async (step) => {
+            if (step !== at) return;
             reached = true;
             await frozen();
           }
         }
       );
       await until(() => reached);
+      // The crashed owner's lock is abandoned; recovery takes a later generation.
+      await lock.release();
+    }
+
+    it('prunes the vanished quarantine of a removal that committed before git’s record was dropped', async () => {
+      const quarantine = await quarantineSlot(repo, slotPath);
+      await frozenRemoval(quarantine, 'committed');
+      const { lock } = await removalLock();
+      await expect(recoverSlotResidueLocked({ repoRoot: repo, slotPath, lock })).resolves.toEqual([
+        { kind: 'pruned', quarantine }
+      ]);
+      expect(worktreePaths(repo)).not.toContain(quarantine);
+      expect(await readFile(join(removedCopyPathFor(quarantine), 'checkout', 'tracked.txt'), 'utf8')).toBe('tracked\n');
+    });
+
+    it('moves a recorded but uncommitted removal back to its absent slot path', async () => {
+      const quarantine = await quarantineSlot(repo, slotPath);
+      await frozenRemoval(quarantine, 'recorded');
       const { lock } = await removalLock();
       await expect(recoverSlotResidueLocked({ repoRoot: repo, slotPath, lock })).resolves.toEqual([
         { kind: 'moved_back', quarantine, slotPath }
@@ -447,29 +463,21 @@ describe('slot removal', () => {
       expect(worktreePaths(repo)).not.toContain(quarantine);
     });
 
-    it('keeps a holding area it cannot account for and reports the failure', async () => {
-      const quarantine = await quarantineSlot(repo, slotPath);
-      let reached = false;
-      void removeQuarantinedCheckout(
-        { root: quarantine, holding: `${quarantine}.held`, restoreTo: slotPath },
-        {
-          prove: async () => undefined,
-          requireCurrent: () => undefined,
-          checkpoint: async (entry) => {
-            if (entry !== join(quarantine, '.git')) return;
-            reached = true;
-            await frozen();
-          }
-        }
+    it('keeps set-aside submodules it cannot put back and reports the failure', async () => {
+      const area = `${quarantinePathFor(slotPath)}.submodules`;
+      await mkdir(join(area, '0'), { recursive: true });
+      await writeFile(
+        join(area, 'setaside.json'),
+        JSON.stringify({ version: 1, gitDir: join(base, 'g'), paths: ['lib'] })
       );
-      await until(() => reached);
-      await writeFile(join(`${quarantine}.held`, 'stray'), 'unknown\n');
+      // Something now occupies the place the held submodule checkout must return to.
+      await mkdir(join(slotPath, 'lib'));
+      await writeFile(join(slotPath, 'lib', 'newcomer.txt'), 'new\n');
       const { lock } = await removalLock();
-      const reports = await recoverSlotResidueLocked({ repoRoot: repo, slotPath, lock });
-      expect(reports).toEqual([
-        { kind: 'recovery_failed', holding: `${quarantine}.held`, detail: expect.stringMatching(/unrecorded stray/) }
+      await expect(recoverSlotResidueLocked({ repoRoot: repo, slotPath, lock })).resolves.toEqual([
+        { kind: 'recovery_failed', holding: area, detail: expect.stringMatching(/is not the empty directory/) }
       ]);
-      expect(await readdir(`${quarantine}.held`)).toContain('manifest.json');
+      expect(await readdir(area)).toEqual(['0', 'setaside.json']);
     });
 
     it('recovers a slot under a free lock and releases it', async () => {

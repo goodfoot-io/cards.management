@@ -1,38 +1,58 @@
 /**
- * Slot-level removal for default-configuration: quarantines a slot checkout
- * with `git worktree move`, deletes it through verified checkout removal under
- * the slot's lock fence, recovers removal residue, and reports processes still
- * inside a slot instead of signalling them.
- * @summary Verified slot removal, residue recovery and occupant probing
+ * Slot-level removal for default-configuration: sets a slot's initialized
+ * submodules aside and quarantines its checkout with `git worktree move`,
+ * proves it clean and unoccupied under the slot's lock fence, commits the
+ * removal by moving the recorded copy into `<slotRoot>/.purge`, and leaves the
+ * copy for the next pass's {@link purgeRemovedSlots} to delete against that
+ * record. Also recovers removal residue, and reports processes still inside a
+ * slot instead of signalling them.
+ * @summary Slot removal with a deferred, verified purge, residue recovery and occupant probing
  */
 
 import { randomUUID } from 'node:crypto';
 import * as nodeFs from 'node:fs/promises';
-import { basename, dirname, join, sep } from 'node:path';
+import { basename, dirname, isAbsolute, join, sep } from 'node:path';
 import { type GitBoundedResult, type RunGitBoundedOptions, runGitBounded, ShutdownError } from './bounded-git.js';
 import {
   CheckoutContentChangedError,
+  type CheckoutEntry,
+  type CheckoutFilesystem,
+  type CheckoutRecord,
   CheckoutRemovalBlockedError,
+  type CheckoutRemovalRecovery,
+  type CheckoutRestoration,
   CheckoutRestoredError,
   type CheckoutWitness,
+  dismantleCheckout,
+  findCheckoutChanges,
+  recordCheckoutParts,
   recoverCheckoutRemoval,
-  removeQuarantinedCheckout
+  resolveCheckoutWitness,
+  syncDirectory,
+  writeDurable
 } from './checkout-removal.js';
 import { type BoundedCommandOptions, type BoundedCommandResult, runBoundedCommand } from './process-identity.js';
+import type { WorktreePurgeSummary } from './protocol/types/worktree-slots.js';
 import { type AcquireSlotLockResult, readSlotLockSnapshot, type SlotLock, type SlotLockPrevious } from './slot-lock.js';
 
 export {
   CheckoutContentChangedError,
+  type CheckoutDismantleOptions,
   type CheckoutEntry,
   type CheckoutFilesystem,
+  type CheckoutRecord,
   CheckoutRemovalBlockedError,
   type CheckoutRemovalLayout,
   type CheckoutRemovalManifest,
   type CheckoutRemovalOptions,
   type CheckoutRemovalRecovery,
+  type CheckoutRestoration,
   CheckoutRestoredError,
   type CheckoutWitness,
   type CheckoutWitnessProbe,
+  dismantleCheckout,
+  findCheckoutChanges,
+  recordCheckoutParts,
   recoverCheckoutRemoval,
   removeQuarantinedCheckout,
   resolveCheckoutWitness,
@@ -54,6 +74,14 @@ export interface SlotRemovalGit {
   run(cwd: string, args: readonly string[], options: RunGitBoundedOptions): Promise<GitBoundedResult>;
 }
 
+/**
+ * A point in {@link removeQuarantinedSlot} after which a crash leaves distinct
+ * residue: `recorded` once the removal record is durable and before the
+ * commit, `committed` once the copy is under `.purge` and before git's record
+ * is dropped, `unregistered` once git's record is dropped.
+ */
+export type SlotRemovalStep = 'recorded' | 'committed' | 'unregistered';
+
 /** Shared options of the slot git steps. */
 export interface SlotRemovalOptions {
   readonly git?: SlotRemovalGit;
@@ -61,8 +89,8 @@ export interface SlotRemovalOptions {
   readonly timeoutMs?: number;
   /** Removal witness; defaults to the one {@link resolveCheckoutWitness} picks for the slot. */
   readonly witness?: CheckoutWitness;
-  /** Timing seam passed to verified removal. */
-  readonly checkpoint?: (entryPath: string) => Promise<void>;
+  /** Timing seam: awaited at each {@link SlotRemovalStep} of a removal. */
+  readonly checkpoint?: (step: SlotRemovalStep) => Promise<void>;
   /** Overrides of the occupant probe the quarantined checkout must pass. */
   readonly occupants?: OccupantProbeOptions;
 }
@@ -88,7 +116,17 @@ export class SlotGitError extends Error {
 
 const DEFAULT_GIT: SlotRemovalGit = { run: runGitBounded };
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
-const RESIDUE_NAME = new RegExp(`^([1-9]\\d*)\\.deleting-(${UUID})(\\.held)?$`);
+/** Beside a slot: its quarantine `<n>.deleting-<uuid>` and that quarantine's set-aside submodules. */
+const RESIDUE_NAME = new RegExp(`^([1-9]\\d*)\\.deleting-(${UUID})(\\.submodules)?$`);
+/** Under `.purge`: a removed copy `<n>.<uuid>`, its removal record and its purge's holding area. */
+const COPY_NAME = new RegExp(`^([1-9]\\d*)\\.(${UUID})(\\.json|\\.held)?$`);
+/** The slot root's directory of removed copies waiting for a purge. */
+export const REMOVED_COPIES_DIR = '.purge';
+const SET_ASIDE_SUFFIX = '.submodules';
+const SET_ASIDE_RECORD = 'setaside.json';
+/** Inside a removed copy: the quarantined checkout, and the submodules set aside from it. */
+const CHECKOUT_PART = 'checkout';
+const SUBMODULES_PART = 'submodules';
 
 const codeOf = (error: unknown): string | undefined => (error as NodeJS.ErrnoException | null)?.code;
 
@@ -168,7 +206,12 @@ export type SlotRemovalLock = Pick<SlotLock, 'slotRoot' | 'ordinal' | 'generatio
  * when the probe did not run, for the pass's report-level count.
  */
 export type SlotRemovalOutcome =
-  | { readonly status: 'removed'; readonly processesNotInspected: number }
+  | {
+      readonly status: 'removed';
+      /** The removed copy under `.purge`, which the next {@link purgeRemovedSlots} deletes. */
+      readonly copy: string;
+      readonly processesNotInspected: number;
+    }
   | {
       readonly status: 'refused';
       readonly reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'removal_restored';
@@ -182,18 +225,141 @@ export type SlotRemovalOutcome =
  * A fresh quarantine path beside a slot: `<slot>.deleting-<uuid>`.
  * @param slotPath - The slot checkout being quarantined.
  * @returns A sibling path that no other removal will pick.
- * @throws {Error} Always: not implemented yet.
  */
 export function quarantinePathFor(slotPath: string): string {
   return `${slotPath}.deleting-${randomUUID()}`;
 }
 
 /**
- * Moves a slot checkout to a fresh quarantine with `git worktree move`.
+ * Where a quarantine's checkout goes once its removal commits: `<slotRoot>/.purge/<n>.<uuid>`.
+ * @param quarantine - A path {@link quarantinePathFor} returned.
+ * @returns `<slotRoot>/.purge/<n>.<uuid>` for the quarantine `<slotRoot>/<n>.deleting-<uuid>`.
+ * @throws {Error} When the path is not a quarantine.
+ */
+export function removedCopyPathFor(quarantine: string): string {
+  const match = RESIDUE_NAME.exec(basename(quarantine));
+  if (match === null || match[3] !== undefined) throw new Error(`${quarantine} is not a slot quarantine`);
+  return join(dirname(quarantine), REMOVED_COPIES_DIR, `${match[1]}.${match[2]}`);
+}
+
+/** What {@link setAsideSubmodules} wrote first, so the set-aside can always be reversed. */
+interface SetAsideRecord {
+  readonly version: 1;
+  /** The slot's own git directory, whose `modules` holds the submodule repositories. */
+  readonly gitDir: string;
+  /** Slot-relative paths of the initialized submodules; checkout `i` is held at `<area>/<i>`. */
+  readonly paths: readonly string[];
+}
+
+/**
+ * Moves a slot's initialized top-level submodule checkouts and its
+ * `<gitDir>/modules` into a set-aside area, recreating each checkout as the
+ * empty directory an uninitialized submodule has. Git refuses to move or remove
+ * a worktree with initialized submodules or a `modules` directory, and the
+ * modules live in the worktree's own git directory, which removal deletes; set
+ * aside, the slot reads as clean and uninitialized, and nothing is lost.
+ * Renames only: nothing is deinitialized, which would edit the shared config.
+ * @param slotPath - The slot checkout.
+ * @param area - The absent set-aside area, `<quarantine>.submodules`.
+ * @param options - Git runner and deadline.
+ * @returns Whether anything was set aside; the area exists only then.
+ * @throws {SlotGitError} When git cannot name the slot's git directory or index.
+ */
+export async function setAsideSubmodules(
+  slotPath: string,
+  area: string,
+  options: SlotRemovalOptions = {}
+): Promise<boolean> {
+  const gitDir = (await requireSlotGit(slotPath, ['rev-parse', '--absolute-git-dir'], options)).stdout.trim();
+  if (!isAbsolute(gitDir)) throw new Error(`git rev-parse --absolute-git-dir named no directory for ${slotPath}`);
+  const paths: string[] = [];
+  for (const path of await listGitlinks(slotPath, options))
+    if (await exists(join(slotPath, path, '.git'))) paths.push(path);
+  const modules = await exists(join(gitDir, 'modules'));
+  if (paths.length === 0 && !modules) return false;
+  await nodeFs.mkdir(area);
+  const record: SetAsideRecord = { version: 1, gitDir, paths };
+  await writeDurable(join(area, SET_ASIDE_RECORD), JSON.stringify(record));
+  for (const [index, path] of paths.entries()) {
+    const checkout = join(slotPath, path);
+    const mode = (await nodeFs.lstat(checkout)).mode;
+    await nodeFs.rename(checkout, join(area, String(index)));
+    // Without the empty directory, status reports the submodule deleted.
+    await nodeFs.mkdir(checkout);
+    await nodeFs.chmod(checkout, mode & 0o7777);
+  }
+  if (modules) await nodeFs.rename(join(gitDir, 'modules'), join(area, 'modules'));
+  await syncDirectory(area);
+  await syncDirectory(dirname(area));
+  return true;
+}
+
+/**
+ * Reverses {@link setAsideSubmodules} into the slot checkout, however far it
+ * got: each held checkout replaces the empty directory left in its place, and
+ * the modules return to the slot's git directory.
+ * @param area - Where {@link setAsideSubmodules} held them, `<quarantine>.submodules`.
+ * @param slotPath - The slot checkout, back at its own path.
+ * @throws {Error} When something now occupies a place a held part must return to.
+ */
+export async function restoreSetAsideSubmodules(area: string, slotPath: string): Promise<void> {
+  let record: SetAsideRecord;
+  try {
+    record = JSON.parse(await nodeFs.readFile(join(area, SET_ASIDE_RECORD), 'utf8')) as SetAsideRecord;
+  } catch (error) {
+    // Interrupted before its record: nothing was moved yet.
+    if (codeOf(error) !== 'ENOENT') throw error;
+    await nodeFs.unlink(join(area, `${SET_ASIDE_RECORD}.tmp`)).catch((unlinkError: unknown) => {
+      if (codeOf(unlinkError) !== 'ENOENT') throw unlinkError;
+    });
+    await nodeFs.rmdir(area);
+    return;
+  }
+  if (record.version !== 1 || typeof record.gitDir !== 'string' || !Array.isArray(record.paths))
+    throw new Error(`Unreadable set-aside record in ${area}`);
+  const modules = join(area, 'modules');
+  if (await exists(modules)) {
+    if (await exists(join(record.gitDir, 'modules')))
+      throw new Error(`${join(record.gitDir, 'modules')} exists, so ${modules} cannot return to it`);
+    await nodeFs.rename(modules, join(record.gitDir, 'modules'));
+  }
+  for (const [index, path] of record.paths.entries()) {
+    const held = join(area, String(index));
+    if (!(await exists(held))) continue;
+    const checkout = join(slotPath, path);
+    try {
+      await nodeFs.rmdir(checkout);
+    } catch (error) {
+      if (codeOf(error) !== 'ENOENT')
+        throw new Error(`${checkout} is not the empty directory the set-aside left, so ${held} cannot return to it`);
+    }
+    await nodeFs.rename(held, checkout);
+  }
+  await nodeFs.unlink(join(area, SET_ASIDE_RECORD));
+  await nodeFs.rmdir(area);
+  await syncDirectory(dirname(area));
+}
+
+/**
+ * Lists the submodule paths a checkout's index records.
+ * @param checkout - Any checkout of the repository, at its current path.
+ * @param options - Git runner and deadline.
+ * @returns Checkout-relative gitlink paths.
+ */
+const listGitlinks = async (checkout: string, options: SlotRemovalOptions): Promise<string[]> =>
+  (await requireSlotGit(checkout, ['ls-files', '--stage', '-z'], options)).stdout
+    .split('\0')
+    .filter((record) => record.startsWith('160000 '))
+    .map((record) => record.slice(record.indexOf('\t') + 1));
+
+/**
+ * Sets the slot's initialized submodules aside, then moves the slot checkout
+ * to a fresh quarantine with `git worktree move`. A refused move puts the
+ * submodules back.
  * @param repoRoot - Repository owning the checkout's administrative metadata.
  * @param slotPath - The slot checkout.
  * @param options - Git runner and deadline.
- * @returns The quarantine path.
+ * @returns The quarantine path; its set-aside area, when there is one, is `<quarantine>.submodules`.
  * @throws {SlotGitError} When git refuses the move.
  * @throws {ShutdownError} When the shutdown fence has closed.
  */
@@ -203,23 +369,113 @@ export async function quarantineSlot(
   options: SlotRemovalOptions = {}
 ): Promise<string> {
   const quarantine = quarantinePathFor(slotPath);
-  await requireSlotGit(repoRoot, ['worktree', 'move', slotPath, quarantine], options);
+  const area = `${quarantine}${SET_ASIDE_SUFFIX}`;
+  const setAside = await setAsideSubmodules(slotPath, area, options);
+  try {
+    await requireSlotGit(repoRoot, ['worktree', 'move', slotPath, quarantine], options);
+  } catch (error) {
+    if (setAside) await restoreSetAsideSubmodules(area, slotPath);
+    throw error;
+  }
   return quarantine;
 }
 
+/** The durable record of a committed removal, `<copy>.json`, against which the purge deletes the copy. */
+export interface RemovedSlotRecord extends CheckoutRecord {
+  readonly version: 1;
+  /** Where the checkout was quarantined, which git may still record. */
+  readonly quarantine: string;
+  readonly slotPath: string;
+}
+
 /**
- * Deletes a quarantined slot checkout under its lock, then drops git's record
- * of it. The cleanliness proof runs on the quarantine and includes the occupant
- * probe, so a process that entered after the caller's own probe refuses as
- * `in_use`. A refusal restores the checkout and moves it back only while the
- * slot path is absent; otherwise it stays at the quarantine as `removal_restored`.
+ * Proves a quarantined checkout removable after it was recorded: git shows no
+ * change, no uninitialized submodule directory hides a file from git, and no
+ * process is proven inside the checkout or its set-aside submodules.
+ * @param quarantine - The quarantined checkout.
+ * @param probed - Directories the occupant probe must find empty of processes.
+ * @param tally - Raised to the largest number of processes a probe could not inspect.
+ * @param tally.uninspected - That number so far.
+ * @param options - Git runner, deadline and probe overrides.
+ * @throws {CheckoutContentChangedError} When the checkout holds changes.
+ * @throws {SlotOccupiedError} When a process is proven inside.
+ * @throws {OccupantProbeError} When a probe could not decide.
+ */
+const proveRemovable = async (
+  quarantine: string,
+  probed: readonly string[],
+  tally: { uninspected: number },
+  options: SlotRemovalOptions
+): Promise<void> => {
+  const status = await requireSlotGit(quarantine, ['status', '--porcelain', '--untracked-files=all'], options);
+  const changed = status.stdout
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => line.slice(3));
+  if (changed.length > 0) throw new CheckoutContentChangedError('Checkout has uncommitted changes', changed);
+  // Status never looks inside an uninitialized submodule's directory.
+  const hidden: string[] = [];
+  for (const path of await listGitlinks(quarantine, options)) {
+    const names = await nodeFs.readdir(join(quarantine, path)).catch((error: unknown) => {
+      if (codeOf(error) === 'ENOENT') return [];
+      throw error;
+    });
+    hidden.push(...names.map((name) => join(path, name)));
+  }
+  if (hidden.length > 0)
+    throw new CheckoutContentChangedError('Uninitialized submodule directories hold files git does not show', hidden);
+  for (const directory of probed) {
+    // A process that entered between the caller's probe and the move is inside the quarantine now.
+    const probe = await findSlotOccupants(directory, options.occupants);
+    tally.uninspected = Math.max(tally.uninspected, processesNotInspected(probe));
+    if (slotOccupied(probe)) throw new SlotOccupiedError(probe);
+  }
+};
+
+/**
+ * Deletes an empty copy directory and the record of a removal that did not commit.
+ * @param copy - The copy directory.
+ */
+const discardUncommittedCopy = async (copy: string): Promise<void> => {
+  for (const file of [`${copy}.json`, `${copy}.json.tmp`])
+    await nodeFs.unlink(file).catch((error: unknown) => {
+      if (codeOf(error) !== 'ENOENT') throw error;
+    });
+  await nodeFs.rmdir(copy).catch((error: unknown) => {
+    if (codeOf(error) !== 'ENOENT') throw error;
+  });
+};
+
+/**
+ * Moves a committed removal's set-aside submodules into its copy, where its record expects them.
+ * @param area - The set-aside area beside the slot.
+ * @param copy - The removed copy.
+ * @returns Whether there was a set-aside area to move.
+ */
+const joinSetAside = async (area: string, copy: string): Promise<boolean> => {
+  if (!(await exists(area))) return false;
+  await nodeFs.rename(area, join(copy, SUBMODULES_PART));
+  await syncDirectory(dirname(area));
+  return true;
+};
+
+/**
+ * Removes a quarantined slot under its lock. It records every entry of the
+ * quarantine and of its set-aside submodules, proves them clean and
+ * unoccupied, writes the record durably to `<copy>.json`, and commits by
+ * renaming the quarantine to `<copy>/checkout`; the set-aside follows to
+ * `<copy>/submodules`, and git's record of the vanished quarantine is dropped.
+ * Nothing is deleted here: the copy waits for the next pass's
+ * {@link purgeRemovedSlots}. A refusal moves the checkout back, then the
+ * submodules, only while the slot path is absent; otherwise it stays at the
+ * quarantine as `removal_restored`.
  * @param target - The repository, the slot path, its quarantine and the held lock.
  * @param target.repoRoot - Repository owning the checkout's administrative metadata.
  * @param target.slotPath - Path the checkout returns to on refusal.
  * @param target.quarantine - Where {@link quarantineSlot} moved it.
  * @param target.lock - The slot's held `removal` lock.
  * @param options - Git runner, deadline, witness and timing seam.
- * @returns Removed, or refused with the cleanup reason.
+ * @returns Removed with its copy, or refused with the cleanup reason.
  * @throws {ShutdownError} When the fence closed; the residue is left for recovery.
  * @throws {SlotGitError} When a git step other than the proof failed.
  */
@@ -233,51 +489,71 @@ export async function removeQuarantinedSlot(
   options: SlotRemovalOptions = {}
 ): Promise<SlotRemovalOutcome> {
   const { repoRoot, slotPath, quarantine, lock } = target;
-  let uninspected = 0;
+  const area = `${quarantine}${SET_ASIDE_SUFFIX}`;
+  const copy = removedCopyPathFor(quarantine);
+  const tally = { uninspected: 0 };
   lock.checkpoint();
+  const setAside = await exists(area);
+  await nodeFs.mkdir(dirname(copy), { recursive: true });
+  await nodeFs.mkdir(copy);
   try {
-    await removeQuarantinedCheckout(
-      { root: quarantine, holding: `${quarantine}.held`, restoreTo: slotPath },
-      {
-        prove: async () => {
-          const status = await requireSlotGit(quarantine, ['status', '--porcelain', '--untracked-files=all'], options);
-          const changed = status.stdout
-            .split('\n')
-            .filter((line) => line.length > 0)
-            .map((line) => line.slice(3));
-          if (changed.length > 0) throw new CheckoutContentChangedError('Checkout has uncommitted changes', changed);
-          // A process that entered between the caller's probe and the move is inside the quarantine now.
-          const probe = await findSlotOccupants(quarantine, options.occupants);
-          uninspected = processesNotInspected(probe);
-          if (slotOccupied(probe)) throw new SlotOccupiedError(probe);
-        },
-        requireCurrent: () => requireCurrentSlotLock(lock),
-        ...(options.checkpoint === undefined ? {} : { checkpoint: options.checkpoint }),
-        ...(options.witness === undefined ? {} : { witness: options.witness })
-      }
+    const witness = options.witness ?? (await resolveCheckoutWitness(quarantine));
+    const parts = [{ name: CHECKOUT_PART, root: quarantine }];
+    if (setAside) parts.push({ name: SUBMODULES_PART, root: area });
+    const entries = await recordCheckoutParts(parts, (await nodeFs.lstat(copy, { bigint: true })).mtimeNs, witness);
+    await proveRemovable(
+      quarantine,
+      parts.map((part) => part.root),
+      tally,
+      options
     );
+    const record: RemovedSlotRecord = {
+      version: 1,
+      quarantine,
+      slotPath,
+      rootMode: (await nodeFs.lstat(copy)).mode,
+      witness,
+      entries
+    };
+    await requireCurrentSlotLock(lock);
+    await writeDurable(`${copy}.json`, JSON.stringify(record));
+    await options.checkpoint?.('recorded');
+    lock.checkpoint();
+    await nodeFs.rename(quarantine, join(copy, CHECKOUT_PART)).catch((error: unknown) => {
+      throw new CheckoutRemovalBlockedError(codeOf(error) ?? String(error), 'rename', '.');
+    });
   } catch (error) {
-    let reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked' | 'removal_restored';
+    let reason: 'uncommitted_changes' | 'in_use' | 'removal_blocked';
     if (error instanceof CheckoutContentChangedError) reason = 'uncommitted_changes';
     else if (error instanceof SlotOccupiedError || error instanceof OccupantProbeError) reason = 'in_use';
     else if (error instanceof CheckoutRemovalBlockedError) reason = 'removal_blocked';
-    else if (error instanceof CheckoutRestoredError) reason = 'removal_restored';
     else throw error;
-    const detail = error.message;
-    const refused = { status: 'refused', detail, processesNotInspected: uninspected } as const;
-    // A refused restoration leaves entries held; recovery owns the quarantine from here.
-    if (error instanceof CheckoutRemovalBlockedError && error.syscall === 'restore')
-      return { ...refused, reason, checkoutPath: quarantine };
+    await discardUncommittedCopy(copy);
+    const refused = { status: 'refused', detail: error.message, processesNotInspected: tally.uninspected } as const;
     lock.checkpoint();
     // `git worktree move` into an existing directory nests the checkout inside it.
     if (await exists(slotPath)) return { ...refused, reason: 'removal_restored', checkoutPath: quarantine };
     await requireSlotGit(repoRoot, ['worktree', 'move', quarantine, slotPath], options);
+    if (setAside)
+      try {
+        await restoreSetAsideSubmodules(area, slotPath);
+      } catch (restoreError) {
+        // Left for residue recovery, which reports it until the slot can take the submodules back.
+        const why = restoreError instanceof Error ? restoreError.message : String(restoreError);
+        const detail = `${error.message}; its submodules stay set aside at ${area}: ${why}`;
+        return { ...refused, detail, reason, checkoutPath: slotPath };
+      }
     return { ...refused, reason, checkoutPath: slotPath };
   }
+  await syncDirectory(dirname(copy));
+  await syncDirectory(dirname(quarantine));
+  await options.checkpoint?.('committed');
+  await joinSetAside(area, copy);
   lock.checkpoint();
-  // With the directory gone this drops only git's administrative record.
+  // The quarantine path no longer exists, so this drops only git's record of it.
   await requireSlotGit(repoRoot, ['worktree', 'remove', quarantine], options);
-  return { status: 'removed', processesNotInspected: uninspected };
+  await options.checkpoint?.('unregistered');
+  return { status: 'removed', copy, processesNotInspected: tally.uninspected };
 }
 
 /**
@@ -302,35 +578,29 @@ export async function requireCurrentSlotLock(lock: SlotRemovalLock): Promise<voi
 // Residue
 // ============================================================================
 
-/** Removal residue of one slot: quarantines and their holding areas. */
+/** Removal residue of one slot: quarantines and their set-aside submodules. */
 export interface SlotResidue {
   readonly ordinal: number;
   readonly slotPath: string;
-  /** `<slot>.deleting-<uuid>` directories, with or without a holding area. */
+  /** `<slot>.deleting-<uuid>` directories. */
   readonly quarantines: readonly string[];
-  /** `<slot>.deleting-<uuid>.held` directories. */
-  readonly holdings: readonly string[];
+  /** `<slot>.deleting-<uuid>.submodules` directories. */
+  readonly setAsides: readonly string[];
 }
 
 /** One thing residue recovery did or found. */
 export type SlotResidueReport =
-  /** A committed removal was finished. */
+  /** A committed removal's set-aside submodules joined its removed copy. */
   | { readonly kind: 'removal_finished'; readonly quarantine: string }
-  /** A quarantine was returned to its absent slot path. */
+  /** A quarantine was returned to its absent slot path, with its set-aside submodules. */
   | { readonly kind: 'moved_back'; readonly quarantine: string; readonly slotPath: string }
-  /** Restored content stays at the quarantine, or came back with changed or displaced entries. */
-  | {
-      readonly kind: 'removal_restored';
-      readonly quarantine: string;
-      readonly slotPath: string;
-      readonly changed: readonly string[];
-      readonly displaced: readonly string[];
-    }
+  /** Submodules set aside by a removal interrupted before its quarantine move were put back. */
+  | { readonly kind: 'submodules_restored'; readonly setAside: string; readonly slotPath: string }
   /** A lone quarantine could not go back because the slot path exists. */
   | { readonly kind: 'quarantine_stranded'; readonly quarantine: string; readonly slotPath: string }
   /** Git's record of a vanished quarantine was dropped. */
   | { readonly kind: 'pruned'; readonly quarantine: string }
-  /** A holding area could not be recovered; its manifest is kept. */
+  /** A set-aside area could not be put back; it is kept as it is. */
   | { readonly kind: 'recovery_failed'; readonly holding: string; readonly detail: string };
 
 /**
@@ -339,37 +609,61 @@ export type SlotResidueReport =
  * @returns Residue per ordinal, ascending.
  */
 export async function findSlotResidue(slotRoot: string): Promise<readonly SlotResidue[]> {
-  let names: string[];
-  try {
-    names = await nodeFs.readdir(slotRoot);
-  } catch (error) {
-    if (codeOf(error) === 'ENOENT') return [];
-    throw error;
-  }
-  const residue = new Map<number, { quarantines: string[]; holdings: string[] }>();
-  for (const name of names.sort()) {
+  const residue = new Map<number, { quarantines: string[]; setAsides: string[] }>();
+  for (const name of (await readdirOrEmpty(slotRoot)).sort()) {
     const match = RESIDUE_NAME.exec(name);
     if (match === null) continue;
     const ordinal = Number(match[1]);
-    const slot = residue.get(ordinal) ?? { quarantines: [], holdings: [] };
+    const slot = residue.get(ordinal) ?? { quarantines: [], setAsides: [] };
     residue.set(ordinal, slot);
-    (match[3] === undefined ? slot.quarantines : slot.holdings).push(join(slotRoot, name));
+    (match[3] === undefined ? slot.quarantines : slot.setAsides).push(join(slotRoot, name));
   }
   return [...residue.entries()]
     .sort(([left], [right]) => left - right)
-    .map(([ordinal, { quarantines, holdings }]) => ({
+    .map(([ordinal, { quarantines, setAsides }]) => ({
       ordinal,
       slotPath: join(slotRoot, String(ordinal)),
       quarantines,
-      holdings
+      setAsides
     }));
 }
 
 /**
- * Recovers one slot's removal residue under a lock the caller already holds:
- * finishes or restores each quarantine and holding pair, prunes the metadata
- * of vanished quarantines, and moves a lone quarantine back while the slot
- * path is absent or reports it `quarantine_stranded`.
+ * Lists a directory, treating an absent one as empty.
+ * @param directory - Directory to list.
+ * @returns Its entry names.
+ */
+const readdirOrEmpty = async (directory: string): Promise<string[]> => {
+  try {
+    return await nodeFs.readdir(directory);
+  } catch (error) {
+    if (codeOf(error) === 'ENOENT') return [];
+    throw error;
+  }
+};
+
+/**
+ * Puts set-aside submodules back into the slot, reporting a refusal instead of throwing.
+ * @param area - The set-aside area.
+ * @param slotPath - The slot checkout.
+ * @returns A `recovery_failed` report, or null once restored.
+ */
+const restoreOrReport = async (area: string, slotPath: string): Promise<SlotResidueReport | null> => {
+  try {
+    await restoreSetAsideSubmodules(area, slotPath);
+    return null;
+  } catch (error) {
+    return { kind: 'recovery_failed', holding: area, detail: error instanceof Error ? error.message : String(error) };
+  }
+};
+
+/**
+ * Recovers one slot's removal residue under a lock the caller already holds.
+ * A committed removal (its copy holds the checkout) only has its set-aside
+ * submodules joined to the copy. Otherwise a quarantine moves back while the
+ * slot path is absent, then its submodules return, or it is reported
+ * `quarantine_stranded`; submodules set aside before an interrupted move
+ * return to the slot. Git's records of vanished quarantines are pruned.
  * @param target - The repository, the slot path and the held lock.
  * @param target.repoRoot - Repository owning the checkouts' administrative metadata.
  * @param target.slotPath - The slot checkout path.
@@ -384,58 +678,45 @@ export async function recoverSlotResidueLocked(
   options: SlotRemovalOptions = {}
 ): Promise<readonly SlotResidueReport[]> {
   const { repoRoot, slotPath, lock } = target;
-  const prefix = `${basename(slotPath)}.deleting-`;
-  const quarantineName = new RegExp(`^${prefix.replaceAll('.', '\\.')}${UUID}$`);
+  const ordinal = basename(slotPath);
   const quarantines = new Set<string>();
-  for (const name of await nodeFs.readdir(dirname(slotPath)).catch((error: unknown) => {
-    if (codeOf(error) === 'ENOENT') return [];
-    throw error;
-  })) {
-    const quarantine = name.endsWith('.held') ? name.slice(0, -'.held'.length) : name;
-    if (quarantineName.test(quarantine)) quarantines.add(join(dirname(slotPath), quarantine));
+  for (const name of await readdirOrEmpty(dirname(slotPath))) {
+    const match = RESIDUE_NAME.exec(name);
+    if (match?.[1] === ordinal) quarantines.add(join(dirname(slotPath), `${ordinal}.deleting-${match[2]}`));
   }
   const reports: SlotResidueReport[] = [];
   for (const quarantine of [...quarantines].sort()) {
     lock.checkpoint();
-    const holding = `${quarantine}.held`;
-    let restored: { readonly changed: readonly string[]; readonly displaced: readonly string[] } | null = null;
-    if (await exists(holding)) {
-      let recovery: Awaited<ReturnType<typeof recoverCheckoutRemoval>>;
-      try {
-        recovery = await recoverCheckoutRemoval(holding);
-      } catch (error) {
-        reports.push({
-          kind: 'recovery_failed',
-          holding,
-          detail: error instanceof Error ? error.message : String(error)
-        });
-        continue;
-      }
-      if (recovery.kind === 'finished') {
-        reports.push({ kind: 'removal_finished', quarantine });
-        continue;
-      }
-      if (recovery.kind === 'restored') restored = recovery;
-    }
-    if (!(await exists(quarantine))) continue;
-    const clean = restored === null || (restored.changed.length === 0 && restored.displaced.length === 0);
-    if (await exists(slotPath)) {
-      reports.push(
-        restored === null
-          ? { kind: 'quarantine_stranded', quarantine, slotPath }
-          : { kind: 'removal_restored', quarantine, slotPath, ...restored }
-      );
+    const area = `${quarantine}${SET_ASIDE_SUFFIX}`;
+    const copy = removedCopyPathFor(quarantine);
+    if (await exists(join(copy, CHECKOUT_PART))) {
+      if (await joinSetAside(area, copy)) reports.push({ kind: 'removal_finished', quarantine });
       continue;
     }
-    lock.checkpoint();
-    await requireSlotGit(repoRoot, ['worktree', 'move', quarantine, slotPath], options);
-    reports.push(
-      clean || restored === null
-        ? { kind: 'moved_back', quarantine, slotPath }
-        : { kind: 'removal_restored', quarantine, slotPath, ...restored }
-    );
+    if (await exists(quarantine)) {
+      if (await exists(slotPath)) {
+        reports.push({ kind: 'quarantine_stranded', quarantine, slotPath });
+        continue;
+      }
+      lock.checkpoint();
+      await requireSlotGit(repoRoot, ['worktree', 'move', quarantine, slotPath], options);
+      reports.push({ kind: 'moved_back', quarantine, slotPath });
+      const failed = (await exists(area)) ? await restoreOrReport(area, slotPath) : null;
+      if (failed !== null) reports.push(failed);
+    } else if (await exists(area)) {
+      // Interrupted between the set-aside and the move, so the checkout never left the slot path.
+      const failed = (await exists(slotPath))
+        ? await restoreOrReport(area, slotPath)
+        : ({
+            kind: 'recovery_failed',
+            holding: area,
+            detail: `${slotPath} is gone, so the submodules set aside at ${area} have nowhere to return`
+          } as const);
+      reports.push(failed ?? { kind: 'submodules_restored', setAside: area, slotPath });
+    }
   }
   lock.checkpoint();
+  const quarantineName = new RegExp(`^${ordinal}\\.deleting-${UUID}$`);
   for (const registered of await registeredWorktrees(repoRoot, options)) {
     if (dirname(registered) !== dirname(slotPath) || !quarantineName.test(basename(registered))) continue;
     if (await exists(registered)) continue;
@@ -482,7 +763,7 @@ export async function recoverSlotResidue(
   options: SlotRemovalOptions & { readonly repoRoot: string }
 ): Promise<readonly SlotResidueRecovery[]> {
   const ordinals = new Set((await findSlotResidue(slotRoot)).map((residue) => residue.ordinal));
-  // A quarantine that vanished without a holding area leaves only git's record behind.
+  // A quarantine that vanished leaves only git's record behind.
   for (const registered of await registeredWorktrees(options.repoRoot, options)) {
     const match = dirname(registered) === slotRoot ? RESIDUE_NAME.exec(basename(registered)) : null;
     if (match !== null && match[3] === undefined && !(await exists(registered))) ordinals.add(Number(match[1]));
@@ -500,6 +781,329 @@ export async function recoverSlotResidue(
     );
   }
   return recoveries;
+}
+
+// ============================================================================
+// Purge
+// ============================================================================
+
+/** A removed slot copy waiting under its slot root's `.purge`. */
+export interface RemovedSlotCopy {
+  readonly ordinal: number;
+  /** `<slotRoot>/.purge/<n>.<uuid>`; the directory itself may already be gone, leaving its record. */
+  readonly copy: string;
+}
+
+/**
+ * Lists the removed copies of a slot root, without locking. Each one reserves
+ * its ordinal: a slot must not be recreated at an ordinal whose copy still
+ * waits, since the purge deletes under that ordinal's lock.
+ * @param slotRoot - The card's slot root.
+ * @returns One per copy, its record or its purge's holding area, by ordinal then name.
+ */
+export async function findRemovedSlotCopies(slotRoot: string): Promise<readonly RemovedSlotCopy[]> {
+  const copies = new Map<string, RemovedSlotCopy>();
+  const directory = join(slotRoot, REMOVED_COPIES_DIR);
+  for (const name of await readdirOrEmpty(directory)) {
+    const match = COPY_NAME.exec(name);
+    if (match === null) continue;
+    const copy = join(directory, `${match[1]}.${match[2]}`);
+    copies.set(copy, { ordinal: Number(match[1]), copy });
+  }
+  return [...copies.values()].sort(
+    (left, right) => left.ordinal - right.ordinal || left.copy.localeCompare(right.copy)
+  );
+}
+
+/** What {@link purgeRemovedSlots} did with one removed copy. */
+export type RemovedCopyPurge = { readonly copy: string; readonly processesNotInspected: number } & (
+  | { readonly status: 'purged' }
+  /** Left for a later pass: busy, locked or out of budget. */
+  | { readonly status: 'pending'; readonly detail: string }
+  /** It may hold work, so it is never deleted automatically; the detail says to check it and delete it by hand. */
+  | { readonly status: 'kept'; readonly detail: string }
+);
+
+/** Options of {@link purgeRemovedSlots}. */
+export interface RemovedSlotPurgeOptions extends Omit<SlotRemovalOptions, 'checkpoint' | 'witness'> {
+  /** The repository owning the removed checkouts' administrative metadata. */
+  readonly repoRoot: string;
+  /** Epoch milliseconds after which no further entry is deleted; the rest stays pending. */
+  readonly deadline: number;
+  /** Injectable mutations of the dismantle. */
+  readonly filesystem?: Partial<CheckoutFilesystem>;
+  /** Timing seam passed to the dismantle. */
+  readonly checkpoint?: (entryPath: string) => Promise<void>;
+}
+
+/** The purge's deadline passed; the copy is left for a later pass. */
+class PurgeDeadlineError extends Error {
+  constructor() {
+    super('The cleanup budget ran out');
+    this.name = 'PurgeDeadlineError';
+  }
+}
+
+/**
+ * The detail of a kept copy.
+ * @param reason - Why it was kept.
+ * @param copy - The removed copy the detail names for deletion by hand.
+ * @returns The reason, then the exact path to check and delete by hand.
+ */
+const keptDetail = (reason: string, copy: string): string =>
+  `${reason}. Check its contents, then delete ${copy} by hand`;
+
+/**
+ * Reads a copy's removal record, or null when it is absent or unreadable.
+ * @param copy - The removed copy, whose record is its `.json` sibling.
+ * @returns The parsed record when it is version 1 with entries, a witness and a root mode.
+ */
+const readRemovedSlotRecord = async (copy: string): Promise<RemovedSlotRecord | null> => {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await nodeFs.readFile(`${copy}.json`, 'utf8'));
+  } catch {
+    return null;
+  }
+  const record = parsed as Partial<RemovedSlotRecord> | null;
+  if (
+    record?.version !== 1 ||
+    !Array.isArray(record.entries) ||
+    (record.witness !== 'ctime' && record.witness !== 'hash') ||
+    typeof record.rootMode !== 'number'
+  )
+    return null;
+  return record as RemovedSlotRecord;
+};
+
+/**
+ * Re-records a copy whose entries a refused dismantle restored unchanged, so
+ * the restoration's own renames and recreated directories do not read as
+ * changes on the next pass. A restoration that found anything changed or
+ * displaced keeps the original record, and with it the copy kept; so does
+ * every entry it could not re-verify.
+ * @param copy - The removed copy, whose `.json` record is rewritten.
+ * @param record - Its record.
+ * @param restoration - What the restoration found.
+ */
+const refreshRemovedSlotRecord = async (
+  copy: string,
+  record: RemovedSlotRecord,
+  restoration: CheckoutRestoration
+): Promise<void> => {
+  if (restoration.changed.length > 0 || restoration.displaced.length > 0) return;
+  const entries = record.entries.map((entry, index): CheckoutEntry => restoration.refreshed.get(index) ?? entry);
+  await writeDurable(`${copy}.json`, JSON.stringify({ ...record, entries }));
+};
+
+/**
+ * Removes a file, treating an absent one as removed.
+ * @param path - The file.
+ */
+const unlinkIfPresent = async (path: string): Promise<void> => {
+  await nodeFs.unlink(path).catch((error: unknown) => {
+    if (codeOf(error) !== 'ENOENT') throw error;
+  });
+};
+
+/**
+ * Purges one removed copy under its ordinal's lock.
+ * @param copy - A removed copy under `.purge`, taken under its ordinal lock.
+ * @param lock - The ordinal's held lock.
+ * @param options - Repository, deadline, git runner and probe overrides.
+ * @returns What happened to it, or null when only the leftovers of an uncommitted removal were cleared.
+ * @throws {ShutdownError} When the fence closed.
+ */
+const purgeRemovedCopy = async (
+  copy: string,
+  lock: SlotRemovalLock,
+  options: RemovedSlotPurgeOptions
+): Promise<RemovedCopyPurge | null> => {
+  const held = `${copy}.held`;
+  const pending = (detail: string, processesNotInspected = 0): RemovedCopyPurge => ({
+    copy,
+    status: 'pending',
+    detail,
+    processesNotInspected
+  });
+  const kept = (reason: string, processesNotInspected = 0): RemovedCopyPurge => ({
+    copy,
+    status: 'kept',
+    detail: keptDetail(reason, copy),
+    processesNotInspected
+  });
+  if (Date.now() >= options.deadline) return pending(new PurgeDeadlineError().message);
+  lock.checkpoint();
+  if (await exists(held)) {
+    // An earlier purge of this copy was interrupted mid-dismantle.
+    let recovery: CheckoutRemovalRecovery;
+    try {
+      recovery = await recoverCheckoutRemoval(held, options.filesystem);
+    } catch (error) {
+      return kept(
+        `Its interrupted purge cannot be resolved: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+    if (recovery.kind === 'finished') {
+      await unlinkIfPresent(`${copy}.json`);
+      await syncDirectory(dirname(copy));
+      return { copy, status: 'purged', processesNotInspected: 0 };
+    }
+    if (recovery.kind === 'restored') {
+      if (recovery.changed.length > 0 || recovery.displaced.length > 0)
+        return kept(
+          `It changed during an interrupted purge: ${[...recovery.changed, ...recovery.displaced].join(', ')}`
+        );
+      const record = await readRemovedSlotRecord(copy);
+      if (record !== null) await refreshRemovedSlotRecord(copy, record, recovery);
+      if (recovery.unverified.length > 0)
+        return kept(
+          `Its purge was interrupted, and these entries cannot be proven unchanged since: ${recovery.unverified.join(', ')}`
+        );
+    }
+  }
+  if (!(await exists(join(copy, CHECKOUT_PART)))) {
+    if (await exists(copy)) {
+      // A removal that never committed; its checkout went back to the slot.
+      try {
+        await nodeFs.rmdir(copy);
+      } catch (error) {
+        if (codeOf(error) === 'ENOTEMPTY' || codeOf(error) === 'EEXIST')
+          return kept('It holds files but no removed checkout');
+        throw error;
+      }
+    }
+    await unlinkIfPresent(`${copy}.json.tmp`);
+    await unlinkIfPresent(`${copy}.json`);
+    return null;
+  }
+  // Finish what a removal interrupted after its commit.
+  const match = COPY_NAME.exec(basename(copy)) as RegExpExecArray;
+  const slotRoot = dirname(dirname(copy));
+  const quarantine = join(slotRoot, `${match[1]}.deleting-${match[2]}`);
+  await joinSetAside(`${quarantine}${SET_ASIDE_SUFFIX}`, copy);
+  if ((await registeredWorktrees(options.repoRoot, options)).includes(quarantine) && !(await exists(quarantine))) {
+    lock.checkpoint();
+    await requireSlotGit(options.repoRoot, ['worktree', 'remove', quarantine], options);
+  }
+  const record = await readRemovedSlotRecord(copy);
+  if (record === null) return kept('It has no readable removal record');
+  let uninspected = 0;
+  try {
+    const probe = await findSlotOccupants(copy, options.occupants);
+    uninspected = processesNotInspected(probe);
+    if (slotOccupied(probe)) return pending(`It is ${describeSlotOccupancy(probe)}`, uninspected);
+  } catch (error) {
+    if (error instanceof OccupantProbeError) return pending(error.message);
+    throw error;
+  }
+  const changes = await findCheckoutChanges(copy, record.entries, record.witness);
+  if (changes.length > 0) return kept(`It changed after its removal: ${changes.join(', ')}`, uninspected);
+  // Whether a refused dismantle put every entry back as recorded, so the copy can wait for a later pass.
+  let restoredIntact = false;
+  try {
+    await dismantleCheckout({ root: copy, holding: held, restoreTo: copy }, record, {
+      requireCurrent: async () => {
+        if (Date.now() >= options.deadline) throw new PurgeDeadlineError();
+        await requireCurrentSlotLock(lock);
+      },
+      onRestored: async (restoration) => {
+        await refreshRemovedSlotRecord(copy, record, restoration);
+        restoredIntact =
+          restoration.changed.length === 0 && restoration.displaced.length === 0 && restoration.unverified.length === 0;
+      },
+      ...(options.filesystem === undefined ? {} : { filesystem: options.filesystem }),
+      ...(options.checkpoint === undefined ? {} : { checkpoint: options.checkpoint })
+    });
+  } catch (error) {
+    if (error instanceof ShutdownError) throw error;
+    if (error instanceof CheckoutContentChangedError || error instanceof CheckoutRestoredError)
+      return kept(`It changed during its purge: ${error.changed.join(', ')}`, uninspected);
+    // A refused operation leaves an intact copy for a later pass; a refused restoration leaves it as it is.
+    if (error instanceof CheckoutRemovalBlockedError)
+      return restoredIntact ? pending(error.message, uninspected) : kept(error.message, uninspected);
+    if (error instanceof Error) {
+      if (!restoredIntact)
+        return kept(`Its purge stopped and could not prove it restored: ${error.message}`, uninspected);
+      return pending(error.message, uninspected);
+    }
+    throw error;
+  }
+  await unlinkIfPresent(`${copy}.json`);
+  await syncDirectory(dirname(copy));
+  return { copy, status: 'purged', processesNotInspected: uninspected };
+};
+
+/**
+ * Deletes the removed slot copies of every card of a repository, deleted
+ * cards included, each under its ordinal's `removal` lock. A copy is deleted
+ * entry by entry against the record its removal took, after a probe finds no
+ * process inside: one that changed since its removal is kept and reported,
+ * never deleted, and one that is busy, locked or past the deadline stays
+ * pending for a later pass.
+ * @param cardsDir - The repository's slot namespace, whose entries are card slot roots.
+ * @param lockerFor - Takes a slot lock of the given slot root around a function.
+ * @param options - Repository, deadline, git runner and probe overrides.
+ * @returns One outcome per copy, except leftovers of removals that never committed, which are cleared silently.
+ * @throws {ShutdownError} When the fence closed.
+ */
+export async function purgeRemovedSlots(
+  cardsDir: string,
+  lockerFor: (slotRoot: string) => SlotResidueLocker,
+  options: RemovedSlotPurgeOptions
+): Promise<readonly RemovedCopyPurge[]> {
+  const outcomes: RemovedCopyPurge[] = [];
+  for (const card of (await readdirOrEmpty(cardsDir)).sort()) {
+    const slotRoot = join(cardsDir, card);
+    const byOrdinal = new Map<number, string[]>();
+    for (const { ordinal, copy } of await findRemovedSlotCopies(slotRoot))
+      byOrdinal.set(ordinal, [...(byOrdinal.get(ordinal) ?? []), copy]);
+    for (const [ordinal, copies] of byOrdinal) {
+      if (Date.now() >= options.deadline) {
+        for (const copy of copies)
+          outcomes.push({
+            copy,
+            status: 'pending',
+            detail: new PurgeDeadlineError().message,
+            processesNotInspected: 0
+          });
+        continue;
+      }
+      const result = await lockerFor(slotRoot)(ordinal, 'removal', async (lock) => {
+        const purged: RemovedCopyPurge[] = [];
+        for (const copy of copies) {
+          const outcome = await purgeRemovedCopy(copy, lock, options);
+          if (outcome !== null) purged.push(outcome);
+        }
+        return purged;
+      });
+      if (result.status === 'done') outcomes.push(...result.value);
+      else
+        for (const copy of copies)
+          outcomes.push({
+            copy,
+            status: 'pending',
+            detail: `Slot ${String(ordinal)} lock is ${result.status}`,
+            processesNotInspected: 0
+          });
+    }
+  }
+  return outcomes;
+}
+
+/**
+ * Folds a purge's outcomes into the report's summary.
+ * @param outcomes - What {@link purgeRemovedSlots} returned.
+ * @returns Counts of purged and pending copies, and every kept copy with its detail.
+ */
+export function summarizeRemovedSlotPurge(outcomes: readonly RemovedCopyPurge[]): WorktreePurgeSummary {
+  return {
+    purged: outcomes.filter((outcome) => outcome.status === 'purged').length,
+    pending: outcomes.filter((outcome) => outcome.status === 'pending').length,
+    kept: outcomes.flatMap((outcome) =>
+      outcome.status === 'kept' ? [{ path: outcome.copy, detail: outcome.detail }] : []
+    )
+  };
 }
 
 // ============================================================================

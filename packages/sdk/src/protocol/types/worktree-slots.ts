@@ -69,6 +69,25 @@ export interface WorktreeMaintenanceStageFailure {
   readonly message: string;
 }
 
+/** A removed slot copy the purge kept because it may hold work; it is never deleted automatically. */
+export interface WorktreePurgeKeptCopy {
+  readonly path: string;
+  /** Why it was kept, and that it is to be checked, then deleted by hand. */
+  readonly detail: string;
+}
+
+/**
+ * What a pass's purge of removed slot copies did, across every card of the
+ * repository. A removed slot's checkout is set aside as a copy and deleted on
+ * a later pass; a copy that changed since its removal is kept.
+ */
+export interface WorktreePurgeSummary {
+  readonly purged: number;
+  /** Copies left for a later pass: busy, locked, or out of budget. */
+  readonly pending: number;
+  readonly kept: readonly WorktreePurgeKeptCopy[];
+}
+
 /** Authenticated preview used before requesting cleanup or card deletion. */
 export interface WorktreeCleanupPreview {
   readonly cardId: string;
@@ -83,6 +102,11 @@ export interface WorktreeCleanupPreview {
    * plays no part in {@link clearsCardDeletion}.
    */
   readonly processesNotInspected: number;
+  /**
+   * The pass's purge of removed slot copies; all zero and empty in a preview,
+   * which purges nothing. It plays no part in {@link clearsCardDeletion}.
+   */
+  readonly purge: WorktreePurgeSummary;
   /** Present when a stage failed and the decisions may be incomplete. */
   readonly failure?: WorktreeMaintenanceStageFailure;
 }
@@ -164,6 +188,11 @@ export const worktreeCleanupPreviewSchema = z
     decisions: z.array(worktreeCleanupDecisionSchema),
     unknownLocks: worktreeUnknownLocksSchema,
     processesNotInspected: z.int().nonnegative(),
+    purge: z.strictObject({
+      purged: z.int().nonnegative(),
+      pending: z.int().nonnegative(),
+      kept: z.array(z.strictObject({ path: z.string().min(1), detail: z.string() }))
+    }),
     failure: z.strictObject({ stage: z.enum(['discovery', 'self_probe']), message: z.string() }).optional()
   })
   .refine((preview) => preview.canDeleteCard === clearsCardDeletion(preview), {
