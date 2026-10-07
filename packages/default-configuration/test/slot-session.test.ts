@@ -76,7 +76,9 @@ describe('openSlotSession', () => {
   it('spawns nothing once the shutdown fence has closed', async () => {
     const session = await open('exec-1');
     let spawned = false;
-    void fx.shutdown.shutdownAndExit(0, 'cancel');
+    // The shutdown hook releases the lock asynchronously; awaiting it keeps that
+    // write from racing the fixture's teardown of the slot directory.
+    const shutdown = fx.shutdown.shutdownAndExit(0, 'cancel');
 
     await expect(
       session.spawnAgent(() => {
@@ -85,6 +87,7 @@ describe('openSlotSession', () => {
       })
     ).rejects.toBeInstanceOf(ShutdownError);
     expect(spawned).toBe(false);
+    await shutdown;
   });
 
   it('offers a handoff that sets the switch latch and names the slot', async () => {

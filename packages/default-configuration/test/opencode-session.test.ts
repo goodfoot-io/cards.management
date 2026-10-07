@@ -690,6 +690,22 @@ describe('opencode-session library', () => {
       await expect(promise).resolves.toBeUndefined();
     });
 
+    it('scopes the slot client to the workspace so card reads are not rejected', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnOpencodeSession } = await import('../src/lib/opencode-session.js');
+      const { slotClientCardUrl } = await import('./helpers/slot-session-stub.js');
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const promise = spawnOpencodeSession(baseInput(), createMockContext(), {});
+      await flushMicrotasks();
+
+      expect((await slotClientCardUrl()).searchParams.get('workspacePath')).toBe('/test/workspace');
+
+      child.emit('close', 0);
+      await promise;
+    });
+
     it('spawns opencode run with worktree argv, OPENCODE_CONFIG, and card env vars', async () => {
       const { spawn } = await import('node:child_process');
       const fs = await import('node:fs/promises');

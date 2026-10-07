@@ -297,7 +297,7 @@ export async function spawnAntigravitySession(
   // absence from this path is a regression, not an accepted trade.
   await establishAntigravityMarkerStore();
 
-  const client = await createCardsClient(context.logger);
+  const client = await createCardsClient(context.logger, { workspacePath: input.repoRoot });
   if (!client) {
     throw new Error('Cards API discovery failed — cannot start session');
   }

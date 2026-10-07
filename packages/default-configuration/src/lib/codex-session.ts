@@ -906,7 +906,7 @@ export async function spawnCodexSession(
     executionMode: input.executionMode
   });
 
-  const client = await createCardsClient(context.logger);
+  const client = await createCardsClient(context.logger, { workspacePath: input.repoRoot });
   if (!client) {
     throw new Error('Cards API discovery failed — cannot start session');
   }

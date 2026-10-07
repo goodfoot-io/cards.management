@@ -314,7 +314,7 @@ export async function spawnClaudeSession(
     });
   }
 
-  const client = await createCardsClient(context.logger);
+  const client = await createCardsClient(context.logger, { workspacePath: input.repoRoot });
   if (!client) {
     throw new Error('Cards API discovery failed — cannot start session');
   }

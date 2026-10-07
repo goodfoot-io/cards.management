@@ -724,6 +724,31 @@ describe('claude-session shared utilities', () => {
       await promise;
     });
 
+    it('scopes the slot client to the workspace so card reads are not rejected', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+      const { slotClientCardUrl } = await import('./helpers/slot-session-stub.js');
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const promise = spawnClaudeSession(baseInput(), createMockContext(), {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      expect((await slotClientCardUrl()).searchParams.get('workspacePath')).toBe('/test/workspace');
+
+      child.emit('close', 0);
+      await promise;
+    });
+
     it('registers onSwitchToInteractive when supportsSwitchToInteractive is true', async () => {
       const { spawn } = await import('node:child_process');
       const { spawnClaudeSession } = await import('../src/lib/claude-session.js');

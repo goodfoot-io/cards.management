@@ -658,6 +658,51 @@ describe('codex-session library', () => {
       await promise;
     });
 
+    it('scopes the slot client to the workspace so card reads are not rejected', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnCodexSession } = await import('../src/lib/codex-session.js');
+      const { slotClientCardUrl } = await import('./helpers/slot-session-stub.js');
+
+      const handlers = new Map<string, (...args: unknown[]) => void>();
+      const child = {
+        pid: 12345,
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          handlers.set(event, cb);
+        }),
+        kill: vi.fn(),
+        stdout: null,
+        stderr: null,
+        emit(event: string, ...args: unknown[]) {
+          handlers.get(event)?.(...args);
+          return true;
+        }
+      } as unknown as ChildProcess;
+
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const input: ActionInput = {
+        executionId: 'execution-test',
+        cardId: 'card-123',
+        actionName: 'Launch',
+        environment: 'default',
+        executionMode: 'interactive',
+        repoRoot: '/test/workspace',
+        cardRepoPath: '/test/repo',
+        configPath: '/test/config',
+        extensionPath: '/test/extension',
+        exitWhenDone: false,
+        marketplacePath: '/test/extension/dist/marketplace'
+      };
+
+      const promise = spawnCodexSession(input, createMockContext(), {});
+      await flushMicrotasks();
+
+      expect((await slotClientCardUrl()).searchParams.get('workspacePath')).toBe('/test/workspace');
+
+      child.emit('close', 0);
+      await promise;
+    });
+
     it('starts the slot cleanup pass after the spawn and runs the end pass only once codex closes', async () => {
       const { spawn } = await import('node:child_process');
       const { spawnCodexSession } = await import('../src/lib/codex-session.js');

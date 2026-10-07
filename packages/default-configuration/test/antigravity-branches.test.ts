@@ -350,6 +350,22 @@ describe('launch action — antigravity branch', () => {
     await promise;
   });
 
+  it('scopes the slot client to the workspace so card reads are not rejected', async () => {
+    const { spawn } = await import('node:child_process');
+    const { slotClientCardUrl } = await import('./helpers/slot-session-stub.js');
+    const child = createMockChild();
+    vi.mocked(spawn).mockReturnValue(child);
+
+    const action = (await import('../src/actions/launch.js')).default;
+    const promise = action(baseInput(), createMockContext());
+    await flushMicrotasks();
+
+    expect((await slotClientCardUrl()).searchParams.get('workspacePath')).toBe('/test/workspace');
+
+    child.emit('close', 0);
+    await promise;
+  });
+
   it('does not settle a successful child exit before the launcher-owned final poll settles', async () => {
     const { spawn } = await import('node:child_process');
     const { finalizePersistedSqlitePollSession } = await import('@cards.management/sdk/transcript-sync');
