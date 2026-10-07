@@ -24,6 +24,7 @@
     "./config/logger": "./src/config/logger.ts",
     "./config/schema": "./src/config/schema.ts",
     "./config/env": "./src/config/env.ts",
+    "./config/completion-handoff": "./src/config/completion-handoff.ts",
     "./marketplace": "./src/marketplace.ts",
     "./stream-store": "./src/stream-store/index.ts",
     "./worktree": "./src/worktree.ts",

@@ -50,6 +50,7 @@ import { createFileClientOutbox, resolveOutboxRoot } from '../client/runtime/out
 import type { RuntimeEnvelope, RuntimePayload } from '../protocol/index.js';
 import { commandReportPayloadSchema } from '../protocol/types/runtime-messages.js';
 import type { ActionCommand, CardsAssistantCommand, WorktreeMaintenanceCommand } from './command-types.js';
+import { EXECUTION_COMPLETION_DIR_ENV, watchCompletionRequest } from './completion-handoff.js';
 import { extractActionInput, extractCardsAssistantInput, extractWorktreeMaintenanceInput } from './env.js';
 import { EXIT_CODES, writeError } from './exit-codes.js';
 import type {
@@ -65,7 +66,8 @@ import {
   configureShutdown,
   installShutdownSignalHandlers,
   registerShutdownHook,
-  shutdownAndExit
+  shutdownAndExit,
+  shutdownSignal
 } from './runtime-shutdown.js';
 
 /**
@@ -332,6 +334,7 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
 
       // Callback registration state
       let cancelCallback: (() => void | Promise<void>) | undefined;
+      let completionArmed = false;
       let switchToInteractiveCallback: (() => unknown | Promise<unknown>) | undefined;
       let commandProcessed = false;
       const commandEffects = new Map<string, Promise<void>>();
@@ -366,6 +369,23 @@ export async function executeCommand(command: AnyCommand): Promise<void> {
         onShutdown: registerShutdownHook,
         onCancel: (callback) => {
           cancelCallback = callback;
+        },
+        onComplete: (callback) => {
+          if (completionArmed) throw new Error('onComplete may be registered only once');
+          completionArmed = true;
+          const directory = process.env[EXECUTION_COMPLETION_DIR_ENV];
+          // Outside a wrapper nothing can ask for completion.
+          if (directory === undefined) return;
+          watchCompletionRequest(
+            directory,
+            () => {
+              logger.info('Completion requested by the wrapper; finishing the action');
+              void Promise.resolve()
+                .then(callback)
+                .catch((error: unknown) => logger.error(`Completion callback failed: ${getErrorMessage(error)}`));
+            },
+            { signal: shutdownSignal }
+          );
         },
         onSwitchToInteractive: (callback) => {
           switchToInteractiveCallback = callback;

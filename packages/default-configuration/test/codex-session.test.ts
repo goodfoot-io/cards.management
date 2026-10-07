@@ -39,6 +39,19 @@ vi.mock('../src/lib/worktrees/index.js', async () => ({
   openSlotSession: (await import('./helpers/slot-session-stub.js')).openSlotSessionStub
 }));
 
+vi.mock('../src/lib/codex-termination.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/lib/codex-termination.js')>();
+  const { createSyntheticProcessTreeAuthority } = await import('./helpers/process-tree-authority.js');
+  return {
+    ...actual,
+    createCodexTerminationController: (
+      child: Parameters<typeof actual.createCodexTerminationController>[0],
+      options: Parameters<typeof actual.createCodexTerminationController>[1]
+    ) =>
+      actual.createCodexTerminationController(child, { ...options, authority: createSyntheticProcessTreeAuthority() })
+  };
+});
+
 vi.mock('cross-spawn', async () => {
   // spawnAgentCli routes the agent launch through cross-spawn; forward it to the
   // mocked node:child_process.spawn so existing spawn('claude'/'codex', ...)
@@ -609,6 +622,7 @@ describe('codex-session library', () => {
         cwd: process.cwd(),
         onShutdown: vi.fn(() => () => {}),
         onCancel: vi.fn(),
+        onComplete: vi.fn(),
         onSwitchToInteractive: vi.fn()
       };
     }
@@ -701,6 +715,56 @@ describe('codex-session library', () => {
 
       child.emit('close', 0);
       await promise;
+    });
+
+    it('ends codex on a completion request and still runs the end pass before returning', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnCodexSession } = await import('../src/lib/codex-session.js');
+      const { slotSessionEvents } = await import('./helpers/slot-session-stub.js');
+      slotSessionEvents.length = 0;
+
+      const handlers = new Map<string, (...args: unknown[]) => void>();
+      const child = {
+        pid: 12345,
+        on: vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+          handlers.set(event, cb);
+        }),
+        kill: vi.fn(),
+        stdout: null,
+        stderr: null
+      } as unknown as ChildProcess;
+      vi.mocked(spawn).mockReturnValue(child);
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      const context = createMockContext();
+      const promise = spawnCodexSession(
+        {
+          executionId: 'execution-test',
+          cardId: 'card-123',
+          actionName: 'Chat',
+          environment: 'default',
+          executionMode: 'background',
+          repoRoot: '/test/workspace',
+          cardRepoPath: '/test/repo',
+          configPath: '/test/config',
+          extensionPath: '/test/extension',
+          exitWhenDone: true,
+          marketplacePath: '/test/extension/dist/marketplace'
+        },
+        context,
+        { prompt: 'Do the work' }
+      );
+      await flushMicrotasks();
+
+      const onComplete = vi.mocked(context.onComplete).mock.calls[0]![0] as () => Promise<void>;
+      await onComplete();
+      expect(kill).toHaveBeenCalledWith(-12345, 'SIGTERM');
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup']);
+
+      handlers.get('close')?.(null, 'SIGTERM');
+      await expect(promise).resolves.toBeUndefined();
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup', 'finish']);
+      kill.mockRestore();
     });
 
     it('starts the slot cleanup pass after the spawn and runs the end pass only once codex closes', async () => {

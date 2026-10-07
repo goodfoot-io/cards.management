@@ -199,6 +199,20 @@ export interface ActionContext {
   onCancel(callback: () => void | Promise<void>): void;
 
   /**
+   * Registers how the action finishes on its own when its work is complete.
+   *
+   * A completion request (`cards shutdown`) otherwise stops the action's whole
+   * process group, so no end-of-session work runs. Once a callback is
+   * registered under a wrapper, the wrapper instead asks the handler to finish
+   * and waits a bounded time for it to exit. The callback should end the agent
+   * so the action returns normally; the runtime does not shut down for it, so
+   * the shutdown fence stays open for the work that follows.
+   *
+   * @param callback - Ends the agent; runs at most once
+   */
+  onComplete(callback: () => void | Promise<void>): void;
+
+  /**
    * Register a callback to handle switching from background to interactive mode.
    *
    * The callback should return serializable data that will be passed to the

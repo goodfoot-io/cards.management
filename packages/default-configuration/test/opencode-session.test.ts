@@ -638,6 +638,7 @@ describe('opencode-session library', () => {
         cwd: process.cwd(),
         onShutdown: vi.fn(() => () => {}),
         onCancel: vi.fn(),
+        onComplete: vi.fn(),
         onSwitchToInteractive: vi.fn()
       };
     }
@@ -704,6 +705,30 @@ describe('opencode-session library', () => {
 
       child.emit('close', 0);
       await promise;
+    });
+
+    it('ends opencode on a completion request and still runs the end pass before returning', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnOpencodeSession } = await import('../src/lib/opencode-session.js');
+      const { slotSessionEvents } = await import('./helpers/slot-session-stub.js');
+      slotSessionEvents.length = 0;
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnOpencodeSession(baseInput(), context, {});
+      await flushMicrotasks();
+
+      const onComplete = vi.mocked(context.onComplete).mock.calls[0]![0] as () => Promise<void>;
+      await onComplete();
+      expect(kill).toHaveBeenCalledWith(-12345, 'SIGTERM');
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup']);
+
+      child.emit('close', null, 'SIGTERM');
+      await expect(promise).resolves.toBeUndefined();
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup', 'finish']);
+      kill.mockRestore();
     });
 
     it('spawns opencode run with worktree argv, OPENCODE_CONFIG, and card env vars', async () => {

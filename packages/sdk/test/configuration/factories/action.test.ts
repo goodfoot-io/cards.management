@@ -43,6 +43,7 @@ describe('defineAction', () => {
     cwd: '/workspace',
     onShutdown: vi.fn(),
     onCancel: vi.fn(),
+    onComplete: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
 

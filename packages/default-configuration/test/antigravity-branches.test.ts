@@ -252,6 +252,7 @@ function createMockContext(): ActionContext {
     cwd: process.cwd(),
     onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
+    onComplete: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
 }
@@ -953,6 +954,39 @@ describe('launch action — antigravity branch', () => {
 
     // The run keeps the ordinary completion path a card-requested termination
     // has always taken; the latch adds no failure to it.
+    killSpy.mockRestore();
+  });
+
+  it('ends agy on a completion request, runs the end pass, and does not fail on the exit it caused', async () => {
+    const { spawn } = await import('node:child_process');
+    const { slotSessionEvents } = await import('./helpers/slot-session-stub.js');
+    slotSessionEvents.length = 0;
+    const child = createMockChild();
+    vi.mocked(spawn).mockReturnValue(child);
+    let exited = false;
+    const killSpy = vi.spyOn(process, 'kill').mockImplementation(((_pid: number, signal?: string | number) => {
+      if (signal === 'SIGTERM') {
+        exited = true;
+        return true;
+      }
+      if (exited) throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+      return true;
+    }) as typeof process.kill);
+
+    const context = createMockContext();
+    const action = (await import('../src/actions/launch.js')).default;
+    const promise = action(baseInput({ executionMode: 'background' }), context);
+    await flushMicrotasks();
+
+    const onComplete = vi.mocked(context.onComplete).mock.calls[0]![0] as () => Promise<void>;
+    await onComplete();
+    expect(killSpy).toHaveBeenCalledWith(-12345, 'SIGTERM');
+    expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup']);
+
+    child.emit('close', null, 'SIGTERM');
+    await expect(promise).resolves.toBeUndefined();
+    expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup', 'finish']);
+
     killSpy.mockRestore();
   });
 

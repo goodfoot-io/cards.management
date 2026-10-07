@@ -394,10 +394,13 @@ export async function spawnAntigravitySession(
     return transcriptFinalization;
   };
 
-  // Set when Cards cancels the run. The truncation latch reads it to tell an
-  // `agy` print timeout that interrupted a run Cards had already decided to
-  // end from one that silently truncated work still in progress.
+  // Set when Cards cancels or completes the run. The truncation latch reads it
+  // to tell an `agy` print timeout that interrupted a run Cards had already
+  // decided to end from one that silently truncated work still in progress.
   let cardsTerminationRequested = false;
+  // Set when the run completed and Cards ended the agent for it, so the exit
+  // that termination causes is expected rather than a failure of the run.
+  let completionRequested = false;
 
   context.onCancel(async () => {
     cardsTerminationRequested = true;
@@ -413,6 +416,14 @@ export async function spawnAntigravitySession(
       result,
       transcriptFinalization: finalization
     });
+  });
+  // A completion ends only the agent; the end pass below still runs before the action returns.
+  context.onComplete(async () => {
+    cardsTerminationRequested = true;
+    completionRequested = true;
+    context.logger.info(`${input.actionName} completion requested, terminating agy`, { sessionId });
+    const result = await termination.terminate();
+    context.logger.info(`${input.actionName} completion termination completed`, { sessionId, result });
   });
 
   // Background mode: stderr is the diagnostic channel and also the only one
@@ -483,13 +494,13 @@ export async function spawnAntigravitySession(
     // the checks below, including the truncation latch, so a latched run is
     // still drained rather than abandoned with members alive.
     const normalDrain = await termination.terminate();
-    if (outcome.signal) {
+    if (outcome.signal && !completionRequested) {
       throw new AntigravitySessionFailureError(
         'signal-termination',
         `${input.actionName} action failed: agy terminated on signal ${outcome.signal}`
       );
     }
-    if (outcome.exitCode !== 0) {
+    if (outcome.exitCode !== 0 && !completionRequested) {
       throw new AntigravitySessionFailureError(
         'nonzero-exit',
         `${input.actionName} action failed: agy exited with code ${outcome.exitCode}`

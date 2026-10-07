@@ -208,6 +208,7 @@ function createMockContext(): ActionContext {
     cwd: process.cwd(),
     onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
+    onComplete: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
 }

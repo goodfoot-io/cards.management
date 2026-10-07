@@ -971,6 +971,12 @@ export async function spawnCodexSession(
     const result = await termination.terminate('cancel');
     context.logger.info(`${input.actionName} cancellation termination completed`, { result });
   });
+  // A completion ends only the agent; the end pass below still runs before the action returns.
+  context.onComplete(async () => {
+    context.logger.info(`${input.actionName} completion requested, terminating codex`);
+    const result = await termination.terminate('shutdown');
+    context.logger.info(`${input.actionName} completion termination completed`, { result });
+  });
 
   if (!isInteractive) {
     child.stderr?.on('data', (chunk: Buffer) => {

@@ -192,6 +192,7 @@ function createMockContext(): ActionContext {
     cwd: process.cwd(),
     onShutdown: vi.fn(() => () => {}),
     onCancel: vi.fn(),
+    onComplete: vi.fn(),
     onSwitchToInteractive: vi.fn()
   };
 }
@@ -846,6 +847,39 @@ describe('claude-session shared utilities', () => {
 
       child.emit('close', 0);
       await promise;
+    });
+
+    it('ends the agent on a completion request and still runs the end pass before returning', async () => {
+      const { spawn } = await import('node:child_process');
+      const { spawnClaudeSession } = await import('../src/lib/claude-session.js');
+      const { slotSessionEvents } = await import('./helpers/slot-session-stub.js');
+      slotSessionEvents.length = 0;
+      const kill = vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+      process.env['EXTENSION_PATH'] = '/test/extension';
+      process.env['MARKETPLACE_PATH'] = '/test/extension/dist/marketplace';
+
+      const child = createMockChild();
+      vi.mocked(spawn).mockReturnValue(child);
+
+      const context = createMockContext();
+      const promise = spawnClaudeSession(baseInput(), context, {
+        prompt: 'test prompt',
+        sessionId: 'session-123',
+        resume: false,
+        supportsSwitchToInteractive: false
+      });
+      await flushMicrotasks();
+
+      const onComplete = vi.mocked(context.onComplete).mock.calls[0]![0] as () => Promise<void>;
+      await onComplete();
+      expect(kill).toHaveBeenCalledWith(-child.pid!, 'SIGTERM');
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup']);
+
+      child.emit('close', null, 'SIGTERM');
+      await expect(promise).resolves.toBeUndefined();
+      expect(slotSessionEvents).toEqual(['spawn', 'beginCleanup', 'finish']);
+      kill.mockRestore();
     });
 
     describe('cross-platform CLI spawn', () => {

@@ -389,6 +389,13 @@ export async function spawnClaudeSession(
     const result = await termination.terminate('cancel');
     context.logger.info(`${input.actionName} cancellation termination completed`, { sessionId, result });
   });
+  // A completion ends only the agent; the end pass below still runs before the action returns.
+  context.onComplete(async () => {
+    cardsTerminationRequested = true;
+    context.logger.info(`${input.actionName} completion requested, terminating claude`, { sessionId });
+    const result = await termination.terminate('shutdown');
+    context.logger.info(`${input.actionName} completion termination completed`, { sessionId, result });
+  });
 
   if (supportsSwitchToInteractive) {
     context.onSwitchToInteractive(async () => {
