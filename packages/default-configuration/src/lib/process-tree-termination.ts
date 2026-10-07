@@ -15,6 +15,10 @@ export interface OwnedProcessIdentity {
 
 export interface ProcessTreeAuthority {
   identify(processId: number): Promise<OwnedProcessIdentity | null>;
+  /**
+   * Lists the tree rooted at `identity`: the root itself and its live descendants.
+   * @returns Empty once the root has exited; null when the tree cannot be listed or the root pid was recycled.
+   */
   members?(identity: OwnedProcessIdentity): Promise<readonly OwnedProcessIdentity[] | null>;
   signal(identity: OwnedProcessIdentity, signal: NodeJS.Signals): Promise<'sent' | 'exited' | 'refused'>;
 }
@@ -103,18 +107,37 @@ export function createProcessTreeAuthority(): ProcessTreeAuthority {
     },
     async members(identity) {
       if (process.platform === 'win32') return [identity];
-      const result = await run('ps', ['-eo', 'pid=,pgid=,stat=']);
+      // The owned tree is the root and its descendants. Providers share their
+      // launcher's process group, so group membership would also name the
+      // launcher itself and every transient sibling it spawns — including the
+      // `ps` taking this listing.
+      const result = await run('ps', ['-eo', 'pid=,ppid=,stat=']);
       if (result.failed) return null;
-      const processIds = result.stdout
-        .split('\n')
-        .map((line) => line.trim().split(/\s+/))
-        .filter(
-          (fields) => fields.length === 3 && Number(fields[1]) === identity.groupId && !fields[2]?.startsWith('Z')
-        )
-        .map((fields) => Number(fields[0]));
-      const identified = await Promise.all(processIds.map((processId) => authority.identify(processId)));
-      if (identified.some((value) => value === null)) return null;
-      return identified.map((value) => ({ ...(value as OwnedProcessIdentity), groupId: identity.groupId }));
+      const children = new Map<number, number[]>();
+      for (const line of result.stdout.split('\n')) {
+        const fields = line.trim().split(/\s+/);
+        if (fields.length !== 3 || fields[2]?.startsWith('Z')) continue;
+        const [processId, parentId] = [Number(fields[0]), Number(fields[1])];
+        children.set(parentId, [...(children.get(parentId) ?? []), processId]);
+      }
+      const root = await authority.identify(identity.processId);
+      if (root === null) return [];
+      // A recycled root pid names someone else's tree.
+      if (root.bootId !== identity.bootId || root.startedAtToken !== identity.startedAtToken) return null;
+      const descendants: number[] = [];
+      const pending = [...(children.get(identity.processId) ?? [])];
+      for (let processId = pending.shift(); processId !== undefined; processId = pending.shift()) {
+        descendants.push(processId);
+        pending.push(...(children.get(processId) ?? []));
+      }
+      const identified = await Promise.all(descendants.map((processId) => authority.identify(processId)));
+      // A descendant that exited since the listing needs no signal.
+      return [
+        identity,
+        ...identified
+          .filter((value): value is OwnedProcessIdentity => value !== null)
+          .map((value) => ({ ...value, groupId: identity.groupId }))
+      ];
     }
   };
   return authority;
@@ -188,8 +211,18 @@ export async function terminateProcessMembers(
   }
   // Rescan before force: the graceful window may have let the tree gain or
   // lose members (e.g. a late fork), so force must not act on a stale set.
-  const rescanned = authority.members ? await authority.members(members[0] as OwnedProcessIdentity) : members;
-  if (rescanned === null || rescanned.length === 0) return 'failed';
+  // Every surviving member is rescanned, not only the root, so descendants
+  // orphaned by a root that already exited are still forced.
+  let rescanned: readonly OwnedProcessIdentity[] = members;
+  if (authority.members) {
+    const listings = await Promise.all(members.map((member) => authority.members?.(member) ?? null));
+    if (listings.some((listing) => listing === null)) return 'failed';
+    const byProcess = new Map<number, OwnedProcessIdentity>();
+    for (const listing of listings) for (const member of listing ?? []) byProcess.set(member.processId, member);
+    rescanned = [...byProcess.values()];
+  }
+  // Nothing left to force: every member exited after the graceful wait.
+  if (rescanned.length === 0) return 'graceful';
   const forceMembers =
     options.excludeProcessId === undefined
       ? rescanned
@@ -224,7 +257,9 @@ export function createOwnedTreeTerminator(
       if (current === null) return 'graceful';
       if (current.bootId !== owned.bootId || current.startedAtToken !== owned.startedAtToken) return 'failed';
       const members = authority.members ? await authority.members(owned) : [owned];
-      if (members === null || members.length === 0) return 'failed';
+      if (members === null) return 'failed';
+      // The root exited since it was identified: nothing is left to stop.
+      if (members.length === 0) return 'graceful';
       return terminateProcessMembers(members, authority, options);
     })();
     return termination;
