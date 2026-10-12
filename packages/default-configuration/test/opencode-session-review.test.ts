@@ -9,6 +9,7 @@ import { createTranscriptProjection, replayTranscript } from '../src/streams/lib
 import { SessionContent } from '../src/streams/lib/session/SessionContent';
 import type { NativeTranscriptSource } from '../src/streams/lib/session/types';
 import { OPENCODE_PRESENTATION } from '../src/streams/opencode-session/www/components/expanded/OpencodePresentation';
+import type { OpencodePayloads } from '../src/streams/opencode-session/www/lib/project-session';
 import { opencodeSessionProjector } from '../src/streams/opencode-session/www/lib/project-session';
 
 function source(lines: readonly string[]): NativeTranscriptSource {
@@ -47,7 +48,7 @@ const cases = [
     { type: 'file' },
     { type: 'patch', files: null },
     { payload: 'malformed' }
-  ].map((data, index) => [`part-${index}`, envelope('part', { id: 'p', messageID: 'm', ...data })])
+  ].map((data, index) => [`part-${index}`, envelope('part', { id: 'p', messageID: 'm', ...data })] as const)
 ] as const;
 
 describe('OpenCode review invariants', () => {
@@ -163,7 +164,7 @@ describe('OpenCode revision inspection bounds', () => {
       (row) => row.kind === 'provider' && row.providerKind === kind
     )!;
     const html = renderToStaticMarkup(
-      createElement(SessionContent, {
+      createElement(SessionContent<OpencodePayloads>, {
         rows: projection.rows,
         providerParts: OPENCODE_PRESENTATION,
         providerRows: OPENCODE_PRESENTATION,

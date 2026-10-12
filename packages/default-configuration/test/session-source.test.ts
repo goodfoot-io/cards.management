@@ -163,7 +163,7 @@ describe('native source subscription', () => {
   it('notifies every subscriber once and makes already queued callbacks inert after cleanup', async () => {
     const store = nativeStore();
     const adapter = createNativeTranscriptSubscription(store, binding);
-    const notifications = [0, 0];
+    const notifications: [number, number] = [0, 0];
     const first = adapter.subscribe(() => {
       notifications[0]++;
     });

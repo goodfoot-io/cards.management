@@ -696,10 +696,10 @@ describe('mounted session interaction', () => {
     expect(result.expanded).toBe('true');
     expect(result.body).toBe(true);
     expect(result.count).toBe('1');
-    expect(result.after.one).toBeGreaterThan(result.before.one!);
-    expect(result.after.event).toBeGreaterThan(result.before.event!);
-    expect(result.after.observer).toBeGreaterThan(result.before.observer!);
-    expect(result.after.two).toBe(result.before.two);
+    expect(result.after['one']).toBeGreaterThan(result.before['one']!);
+    expect(result.after['event']).toBeGreaterThan(result.before['event']!);
+    expect(result.after['observer']).toBeGreaterThan(result.before['observer']!);
+    expect(result.after['two']).toBe(result.before['two']);
   });
 
   it('keeps absent, false, and interrupted-render event snapshots coherent in StrictMode', async () => {

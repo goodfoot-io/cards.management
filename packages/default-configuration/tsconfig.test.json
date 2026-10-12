@@ -9,6 +9,6 @@
     "moduleResolution": "bundler",
     "jsx": "react-jsx"
   },
-  "include": ["test/**/*.ts", "test/**/*.tsx", "src/types/*.d.ts"],
+  "include": ["test/**/*.ts", "test/**/*.tsx", "src/types/*.d.ts", "src/streams/lib/session/styles.d.ts"],
   "exclude": ["node_modules", "dist"]
 }

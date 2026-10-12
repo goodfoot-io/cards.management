@@ -5,7 +5,12 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
-import type { NativeTranscriptSource, SessionPart, SessionToolPart } from '../src/streams/lib/session/types';
+import type {
+  NativeTranscriptSource,
+  SessionPart,
+  SessionTextPart,
+  SessionToolPart
+} from '../src/streams/lib/session/types';
 import { opencodeNativeUpdateLines } from '../src/streams/opencode-session/www/lib/native-updates';
 import { parseOpencodeLine } from '../src/streams/opencode-session/www/lib/parser';
 import type { OpencodePayloads } from '../src/streams/opencode-session/www/lib/project-session';
@@ -71,17 +76,17 @@ describe('OpenCode native projection contract', () => {
     expect(projection.rows.some((row) => row.kind === 'message' && row.role === 'assistant')).toBe(true);
     expect(
       parts(projection.rows)
-        .filter((part) => part.kind === 'text')
+        .filter((part): part is SessionTextPart => part.kind === 'text')
         .map((part) => part.text)
     ).toContain('Please inspect this project.');
     expect(
       parts(projection.rows)
-        .filter((part) => part.kind === 'text')
+        .filter((part): part is SessionTextPart => part.kind === 'text')
         .map((part) => part.text)
     ).toContain('**The project is ready.**');
     expect(
       parts(projection.rows)
-        .filter((part) => part.kind === 'reasoning')
+        .filter((part): part is SessionTextPart => part.kind === 'reasoning')
         .map((part) => part.text)
     ).toContain('Inspecting the project structure.');
 
@@ -154,7 +159,7 @@ describe('OpenCode native projection contract', () => {
       envelope('part', { id: 'conflict-part-id', messageID: 'same-message-id', type: 'reasoning', text: 'after' }, 5)
     ];
     const projection = replayTranscript(opencodeSessionProjector, source(lines));
-    const text = parts(projection.rows).filter((part) => part.kind === 'text');
+    const text = parts(projection.rows).filter((part): part is SessionTextPart => part.kind === 'text');
     expect(text.filter((part) => part.text === 'repeat')).toHaveLength(2);
     expect(new Set(parts(projection.rows).map((part) => part.id)).size).toBe(parts(projection.rows).length);
     expect(parts(projection.rows).some((part) => part.kind === 'provider' && part.providerKind === 'event')).toBe(true);

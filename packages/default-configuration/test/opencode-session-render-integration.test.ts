@@ -10,7 +10,12 @@ import { describe, expect, it } from 'vitest';
 import { SessionHeader } from '../src/streams/lib/SessionHeader';
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import { SessionViewport } from '../src/streams/lib/session/SessionViewport';
-import type { NativeTranscriptSource, SessionHeaderFacts, SessionPart } from '../src/streams/lib/session/types';
+import type {
+  NativeTranscriptSource,
+  SessionHeaderFacts,
+  SessionPart,
+  SessionTextPart
+} from '../src/streams/lib/session/types';
 import {
   OPENCODE_PRESENTATION,
   OpenCodeTool,
@@ -141,11 +146,11 @@ describe('OpenCode native projection and Cards rendering integration', () => {
     expect(new Set(allParts.filter((part) => part.kind === 'provider').map((part) => part.providerKind))).toEqual(
       new Set(['messageDetails', 'attachment', 'step', 'editedFiles', 'event', 'nativeDetails'])
     );
-    expect(allParts.filter((part) => part.kind === 'text').map((part) => part.text)).toEqual([
+    expect(allParts.filter((part): part is SessionTextPart => part.kind === 'text').map((part) => part.text)).toEqual([
       'Please inspect this project.',
       '**The project is ready.**'
     ]);
-    expect(allParts.filter((part) => part.kind === 'reasoning')).toHaveLength(1);
+    expect(allParts.filter((part): part is SessionTextPart => part.kind === 'reasoning')).toHaveLength(1);
     expect(allParts.filter((part) => part.kind === 'tool')).toMatchObject([
       { callId: 'call-read-1', status: 'complete', output: '# OpenCode project' },
       { callId: 'call-error-1', status: 'error', output: 'permission denied' }
@@ -332,7 +337,9 @@ describe('OpenCode native projection and Cards rendering integration', () => {
       ])
     );
     expect(revisedAfterIdle.header.status).toBe('running');
-    expect(parts(revisedAfterIdle.rows).filter((part) => part.kind === 'text')).toHaveLength(1);
+    expect(parts(revisedAfterIdle.rows).filter((part): part is SessionTextPart => part.kind === 'text')).toHaveLength(
+      1
+    );
     const revisedHtml = renderProjection(revisedAfterIdle.rows, revisedAfterIdle.header);
     expect(revisedHtml).toContain('Turn one revised after idle.');
     expect(revisedHtml).toContain('Turn one.');

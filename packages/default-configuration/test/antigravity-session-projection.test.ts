@@ -97,7 +97,7 @@ function describeRows(rows: readonly AntigravityRow[]): unknown[] {
     return {
       kind: row.kind,
       role: row.kind === 'message' ? row.role : undefined,
-      label: row.label,
+      label: row.kind === 'message' ? row.label : undefined,
       parts: row.parts.map((part) => (part.kind === 'text' ? { kind: part.kind, text: part.text } : part.kind))
     };
   });

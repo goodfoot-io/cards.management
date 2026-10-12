@@ -309,7 +309,7 @@ describe('renderAntigravityTranscript — (idx, hash) idempotence and collation 
       idx: 2,
       detail: 'step_format 9 has no decoder in this build'
     });
-    if (item.kind !== 'unreadable') return;
+    if (item?.kind !== 'unreadable') throw new Error('expected an unreadable item');
     expect(item.withheldBytes).toBe('\x00\x01binary-garbage'.length);
     expect(JSON.stringify(item)).not.toContain('binary-garbage');
   });
