@@ -87,9 +87,9 @@ A watcher (`fs.watch` on parent dir + 5s polling fallback) observes the complete
 
 The database contains durable acknowledged workspace refresh requests as well as Git-derived projections. Never delete it or its WAL/SHM/journal files to recover a cache.
 
-The owning service [replaces an incompatible branch projection transactionally](./packages/cards/hybrid-store/src/store/HybridStore.ts#L2228-L2240), invalidates cached reconciliation heads, and reads registrations from Git again. Queue identities, retry/claim evidence, sequence counters, event history, and read state remain intact; followers do not perform the replacement.
+The owning service [replaces an incompatible branch projection transactionally](./packages/cards/hybrid-store/src/store/HybridStore.ts#L2232-L2245), invalidates cached reconciliation heads, and reads registrations from Git again. Queue identities, retry/claim evidence, sequence counters, event history, and read state remain intact; followers do not perform the replacement.
 
-Unreadable SQLite, IO failures, and unrecoverable FTS corruption [refuse startup](./packages/extension/src/lifecycle/cardsApiLifecycle.ts#L1190-L1253). Preserve the database and every sidecar, card repositories, runtime admission records, and the original error. Correct storage availability/permissions or obtain recovery assistance that preserves acknowledged requests before restarting. Execution admission and process tracking remain in the separate durable admission journal; worktree slots are assigned by default-configuration's per-slot locks, not by the server.
+Unreadable SQLite, IO failures, and unrecoverable FTS corruption [refuse startup](./packages/extension/src/lifecycle/cardsApiLifecycle.ts#L1202-L1265). Preserve the database and every sidecar, card repositories, runtime admission records, and the original error. Correct storage availability/permissions or obtain recovery assistance that preserves acknowledged requests before restarting. Execution admission and process tracking remain in the separate durable admission journal; worktree slots are assigned by default-configuration's per-slot locks, not by the server.
 
 ### Unreadable Admission Recovery
 
