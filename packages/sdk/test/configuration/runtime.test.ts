@@ -6,6 +6,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { LAUNCH_PROTOCOL } from '@cards.management/sdk/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ActionCommand, CardsAssistantCommand } from '../../src/config/command-types.js';
 import { CARDS_ENV_VARS } from '../../src/config/env.js';
@@ -447,7 +448,10 @@ describe('executeCommand', () => {
       expect.objectContaining({
         type: 'execution.interactiveHandoff',
         causationId: 'switch-command-1',
-        payload: { launchProtocol: 2, continuation: { kind: 'inline', value: '{"sessionId":"claude-session-1"}' } }
+        payload: {
+          launchProtocol: LAUNCH_PROTOCOL,
+          continuation: { kind: 'inline', value: '{"sessionId":"claude-session-1"}' }
+        }
       })
     );
     expect(exitSpy).toHaveBeenCalledWith(EXIT_CODES.SWITCH_TO_INTERACTIVE);

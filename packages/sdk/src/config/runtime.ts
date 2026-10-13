@@ -48,6 +48,7 @@ import {
 } from '../client/runtime/index.js';
 import { createFileClientOutbox, resolveOutboxRoot } from '../client/runtime/outbox/index.js';
 import type { RuntimeEnvelope, RuntimePayload } from '../protocol/index.js';
+import { LAUNCH_PROTOCOL } from '../protocol/types/index.js';
 import { commandReportPayloadSchema } from '../protocol/types/runtime-messages.js';
 import type { ActionCommand, CardsAssistantCommand, WorktreeMaintenanceCommand } from './command-types.js';
 import { EXECUTION_COMPLETION_DIR_ENV, watchCompletionRequest } from './completion-handoff.js';
@@ -733,7 +734,7 @@ async function handleSwitchToInteractiveCommand(
     const continuation = await toPromise(callback());
     const accepted = await sendDurable(
       'execution.interactiveHandoff',
-      { launchProtocol: 2, continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
+      { launchProtocol: LAUNCH_PROTOCOL, continuation: { kind: 'inline', value: JSON.stringify(continuation) } },
       command.messageId
     );
     await recordObserved();

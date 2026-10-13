@@ -1,3 +1,4 @@
+import { LAUNCH_PROTOCOL } from '@cards.management/sdk/protocol';
 /**
  * Tests for card CLI binary functions.
  *
@@ -662,7 +663,7 @@ describe('card binary', () => {
     const actionIdentity = { requestId: 'request-1', messageId: 'message-1' };
     const launchBody = (params: Record<string, unknown> = {}) => ({
       ...actionIdentity,
-      launchProtocol: 2,
+      launchProtocol: LAUNCH_PROTOCOL,
       params: {
         actionId: 'launch',
         environmentName: 'default',

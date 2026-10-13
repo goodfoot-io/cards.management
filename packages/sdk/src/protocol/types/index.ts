@@ -175,7 +175,6 @@ export type {
 export type { NotificationCreateRequest, NotificationSeverity } from './notifications.js';
 // --- Response Envelope Types ---
 export type { ApiError, ApiSuccess, FieldError } from './response.js';
-// --- Runtime Protocol: Launch Admission ---
 export type {
   AdmissionRejectionReason,
   AdmissionScope,
@@ -195,6 +194,8 @@ export type {
   RetrievedAdmission,
   SpawnPhase
 } from './runtime-admission.js';
+// --- Runtime Protocol: Launch Admission ---
+export { LAUNCH_PROTOCOL } from './runtime-admission.js';
 // --- Runtime Protocol: Authorization and Delivery Table ---
 export {
   type AuthorizationContext,

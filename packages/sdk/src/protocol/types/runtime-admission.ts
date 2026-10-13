@@ -25,6 +25,9 @@
 import type { ExecutionIdentity, ProducerRole, RuntimeScope } from './runtime-identity.js';
 import type { RuntimePayload } from './runtime-messages.js';
 
+/** Current launch protocol stamped by callers and required for fresh admission. */
+export const LAUNCH_PROTOCOL = 2;
+
 /**
  * The original caller request ID: minted once at a launch ingress (CLI, UI, or
  * HTTP), persisted by the caller before sending, and reused verbatim on every
@@ -127,7 +130,7 @@ export interface LaunchAdmissionRequest {
    */
   readonly credentialRoles: readonly ProducerRole[];
   /** Launch protocol of the launching build; outside the immutable, fingerprinted parameters. */
-  readonly launchProtocol?: number;
+  readonly launchProtocol: number;
   /** Server-only preowned source, authenticated before fresh successor admission. */
   readonly sourceExecutionId?: string;
 }

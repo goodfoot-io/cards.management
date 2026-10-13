@@ -18,6 +18,7 @@ import type {
 } from '../../protocol/types/index.js';
 import {
   executionIdentitySchema,
+  LAUNCH_PROTOCOL,
   MAX_COMMAND_REPORT_BYTES,
   producerRoleSchema,
   RUNTIME_MESSAGE_PAYLOADS
@@ -389,7 +390,7 @@ export function createRuntimeActionClient(options: RuntimeActionClientOptions): 
     async launch(cardId, request): Promise<PublicActionLaunchResult> {
       const value = await transport(`/cards/${encodeURIComponent(cardId)}/runtime/actions`, {
         method: 'POST',
-        body: JSON.stringify({ ...request, launchProtocol: 2 })
+        body: JSON.stringify({ ...request, launchProtocol: LAUNCH_PROTOCOL })
       });
       if (isHttpRejection(value)) {
         return { status: 'rejected', requestId: request.requestId, messageId: request.messageId, reason: value };

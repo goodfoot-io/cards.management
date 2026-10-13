@@ -1,3 +1,4 @@
+import { LAUNCH_PROTOCOL } from '@cards.management/sdk/protocol';
 /**
  * Root-command wire contracts: the launch union's two strict variants, the
  * bounded opaque `execution.commandReport`, `launchProtocol` replacing
@@ -91,7 +92,9 @@ describe('execution.commandReport', () => {
 describe('launchProtocol', () => {
   it('replaces worktreeProtocol on the interactive handoff', () => {
     const continuation = { kind: 'inline', value: '{"sessionId":"s"}' };
-    expect(interactiveHandoffPayloadSchema.safeParse({ continuation, launchProtocol: 2 }).success).toBe(true);
+    expect(interactiveHandoffPayloadSchema.safeParse({ continuation, launchProtocol: LAUNCH_PROTOCOL }).success).toBe(
+      true
+    );
     expect(interactiveHandoffPayloadSchema.safeParse({ continuation }).success).toBe(true);
     expect(interactiveHandoffPayloadSchema.safeParse({ continuation, worktreeProtocol: 2 }).success).toBe(false);
   });

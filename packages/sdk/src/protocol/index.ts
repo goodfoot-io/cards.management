@@ -293,6 +293,7 @@ export {
   isCodingAgentId,
   isHtmlCardDocPath,
   isHtmlCardDocSidecarPath,
+  LAUNCH_PROTOCOL,
   type LegacyCleanupResultPayload,
   LIFECYCLE_GUARDS,
   type LifecycleGuard,

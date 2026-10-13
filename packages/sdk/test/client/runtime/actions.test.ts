@@ -5,6 +5,7 @@
  */
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { LAUNCH_PROTOCOL } from '@cards.management/sdk/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createRuntimeActionClient,
@@ -72,7 +73,7 @@ describe('runtime action HTTP client', () => {
     await client?.launch('main-672', REQUEST);
 
     expect(requests).toEqual([
-      { method: 'POST', url: '/cards/main-672/runtime/actions', body: { ...REQUEST, launchProtocol: 2 } }
+      { method: 'POST', url: '/cards/main-672/runtime/actions', body: { ...REQUEST, launchProtocol: LAUNCH_PROTOCOL } }
     ]);
   });
 
@@ -293,8 +294,8 @@ describe('runtime action HTTP client', () => {
     await reconstructed.launch('main-672', REQUEST);
 
     expect(requests.map(({ body }) => body)).toEqual([
-      { ...REQUEST, launchProtocol: 2 },
-      { ...REQUEST, launchProtocol: 2 }
+      { ...REQUEST, launchProtocol: LAUNCH_PROTOCOL },
+      { ...REQUEST, launchProtocol: LAUNCH_PROTOCOL }
     ]);
   });
 
@@ -320,8 +321,8 @@ describe('runtime action HTTP client', () => {
       '/cards/other%20card/runtime/actions/request-1'
     ]);
     expect(requests.slice(0, 2).map(({ body }) => body)).toEqual([
-      { ...REQUEST, launchProtocol: 2 },
-      { ...REQUEST, launchProtocol: 2 }
+      { ...REQUEST, launchProtocol: LAUNCH_PROTOCOL },
+      { ...REQUEST, launchProtocol: LAUNCH_PROTOCOL }
     ]);
   });
 });

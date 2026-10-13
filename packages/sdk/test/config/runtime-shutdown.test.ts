@@ -9,6 +9,7 @@ import { type ChildProcess, spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { LAUNCH_PROTOCOL } from '@cards.management/sdk/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { EXIT_CODES } from '../../src/config/exit-codes.js';
 import {
@@ -324,7 +325,7 @@ await executeCommand(command);
     expect(await run.exited).toEqual({ code: EXIT_CODES.SWITCH_TO_INTERACTIVE, signal: null });
     expect(lines(log)).toEqual(['ready', 'second:switch', 'first:switch:true']);
     expect(harness.server.received.find((envelope) => envelope.type === 'execution.interactiveHandoff')).toMatchObject({
-      payload: { launchProtocol: 2 }
+      payload: { launchProtocol: LAUNCH_PROTOCOL }
     });
   });
 });
