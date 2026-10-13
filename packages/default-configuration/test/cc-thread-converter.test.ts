@@ -350,4 +350,76 @@ describe('Claude semantic preservation', () => {
     expect(open).toContain('of 5242880');
     expect(open.length).toBeLessThan(100000);
   });
+  it('presents current Claude system and metadata records instead of reporting them unrecognized', () => {
+    // Shapes copied from current Claude Code transcripts with commands, paths and identifiers scrubbed.
+    const stop = {
+      type: 'system',
+      subtype: 'stop_hook_summary',
+      hookCount: 1,
+      hookInfos: [{ command: 'node hooks/stop.mjs', durationMs: 337 }],
+      hookErrors: [],
+      hookAdditionalContext: [],
+      preventedContinuation: false,
+      stopReason: '',
+      hasOutput: true,
+      level: 'suggestion',
+      toolUseID: 'stop-tool'
+    };
+    const values = [
+      stop,
+      { ...stop, hookErrors: ['stop.mjs exited 2'], hookInfos: [] },
+      { ...stop, preventedContinuation: true, stopReason: 'Card is not finished' },
+      { type: 'system', subtype: 'informational', content: 'wiki: hooks.json: unknown key ignored', level: 'notice' },
+      {
+        type: 'system',
+        subtype: 'scheduled_task_fire',
+        content: 'Running scheduled task (Oct 5 10:25am)',
+        taskId: 'task',
+        cron: '13,43 * * * *',
+        prompt: 'Progress check'
+      },
+      {
+        type: 'system',
+        subtype: 'local_command',
+        content:
+          '<command-name>/usage</command-name>\n            <command-message>usage</command-message>\n            <command-args></command-args>',
+        level: 'info'
+      },
+      {
+        type: 'system',
+        subtype: 'local_command',
+        content: '<local-command-stdout>Settings dialog dismissed</local-command-stdout>',
+        level: 'info'
+      },
+      { type: 'system', subtype: 'bridge_status', content: '/remote-control is active', url: 'https://example.test' },
+      { type: 'relocated', relocatedCwd: '/workspace' },
+      { type: 'agent-name', agentName: 'Fixture agent' },
+      { type: 'fork-context-ref', agentId: 'agent', parentSessionId: 'parent-session', contextLength: 143 },
+      { type: 'atis-latch', atis: '' },
+      { type: 'cost-state', totalCostUSD: 0, modelUsage: {} }
+    ];
+    const projected = project(values);
+    const structural = rowsDeep(projected.rows).filter((row) => row.kind === 'structural');
+    expect(structural.map((row) => row.label)).toEqual([
+      'Stop hooks · 1 hook · 0.3s',
+      'Stop hook errors · stop.mjs exited 2',
+      'Stop hook prevented continuation · Card is not finished',
+      'wiki: hooks.json: unknown key ignored',
+      'Running scheduled task (Oct 5 10:25am)',
+      'Command · /usage',
+      'Command output · Settings dialog dismissed',
+      '/remote-control is active',
+      'Relocated to /workspace',
+      'Agent: Fixture agent',
+      'Forked context from session parent-session'
+    ]);
+    expect(structural.map((row) => row.kind === 'structural' && row.tone)).toEqual([
+      'info',
+      'error',
+      'error',
+      ...Array(8).fill('info')
+    ]);
+    expect(parts(projected.rows).some((part) => part.kind === 'raw' && part.reason === 'unknown')).toBe(false);
+    expect(render(values)).not.toContain('Unrecognized');
+  });
 });

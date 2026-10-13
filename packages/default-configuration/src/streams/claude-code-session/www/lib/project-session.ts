@@ -483,8 +483,20 @@ function structural(state: ClaudeProjectionState, event: Event): void {
   const type = string(v['type']);
   const subtype = string(v['subtype']);
   switch (type) {
+    // Session bookkeeping with no reader-facing meaning, like the permission and prompt latches.
     case 'permission-mode':
     case 'last-prompt':
+    case 'atis-latch':
+    case 'cost-state':
+      return;
+    case 'agent-name':
+      if (v['agentName']) coordinationLine(state, event, `Agent: ${String(v['agentName'])}`);
+      return;
+    case 'relocated':
+      status(state, event, `Relocated to ${string(v['relocatedCwd'])}`);
+      return;
+    case 'fork-context-ref':
+      status(state, event, `Forked context from session ${string(v['parentSessionId'])}`);
       return;
     case 'mode':
       if (v['mode']) coordinationLine(state, event, `Mode: ${String(v['mode'])}`);
@@ -605,6 +617,18 @@ function structural(state: ClaudeProjectionState, event: Event): void {
         );
         return;
       }
+      if (subtype === 'stop_hook_summary') {
+        stopHookSummary(state, event);
+        return;
+      }
+      if (['informational', 'scheduled_task_fire', 'bridge_status'].includes(subtype)) {
+        status(state, event, string(v['content']), false, v['level'] === 'error');
+        return;
+      }
+      if (subtype === 'local_command') {
+        status(state, event, localCommandLabel(string(v['content'])));
+        return;
+      }
       if (subtype === 'away_summary') {
         add(state, event, 'away', 'boundary', [
           {
@@ -627,6 +651,43 @@ function structural(state: ClaudeProjectionState, event: Event): void {
       `Unrecognized ${type === 'system' ? `system event · ${subtype}` : `message · ${type || 'record'}`}`
     )
   ]);
+}
+/**
+ * Summarizes Stop hook completion; failures and blocked continuation take the error tone.
+ * @param state - Source-local semantic reducer state.
+ * @param event - Native `stop_hook_summary` system event.
+ */
+function stopHookSummary(state: ClaudeProjectionState, event: Event): void {
+  const v = event.value;
+  const errors = Array.isArray(v['hookErrors']) ? v['hookErrors'].map(String).filter(Boolean) : [];
+  if (v['preventedContinuation'] === true) {
+    const reason = string(v['stopReason']);
+    status(state, event, `Stop hook prevented continuation${reason ? ` · ${reason}` : ''}`, false, true);
+    return;
+  }
+  if (errors.length) {
+    status(state, event, `Stop hook errors · ${truncate(errors.join('; '), 120)}`, false, true);
+    return;
+  }
+  const count = Number(v['hookCount'] ?? 0);
+  const infos = Array.isArray(v['hookInfos']) ? v['hookInfos'] : [];
+  const milliseconds = infos.reduce((total: number, info) => total + Number(object(info)?.['durationMs'] ?? 0), 0);
+  status(state, event, `Stop hooks · ${count} hook${count === 1 ? '' : 's'} · ${(milliseconds / 1000).toFixed(1)}s`);
+}
+/**
+ * Labels a local slash command or its captured output from Claude's tagged command text.
+ * @param content - Native `local_command` content with command or output tags.
+ * @returns A one-line command or output label.
+ */
+function localCommandLabel(content: string): string {
+  const tagged = (tag: string): string | undefined =>
+    new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(content)?.[1]?.trim();
+  const name = tagged('command-name');
+  const args = tagged('command-args');
+  if (name) return `Command · ${name}${args ? ` ${args}` : ''}`;
+  const output = tagged('local-command-stdout') ?? tagged('local-command-stderr');
+  if (output !== undefined) return `Command output · ${truncate(stripMarkup(output).trim(), 120)}`;
+  return `Command · ${truncate(stripMarkup(content).trim(), 120)}`;
 }
 /**
  * Reuses grouped row objects when their surviving leaves are unchanged.
