@@ -101,6 +101,30 @@ describe('parseCodexLine — root envelope shapes', () => {
       expect(result.payload.type).toBe('agent_message');
     }
   });
+
+  // Root records written by Codex CLI 0.161 rollouts, which postdate the rust-v0.137.0 reference.
+  it('parses a world_state line', () => {
+    const raw = envelope('world_state', { full: true, state: { model: 'gpt-fixture', agents_md: '# Fixture' } });
+    const result = parseCodexLine(raw);
+    expect(result.kind).toBe('world_state');
+    if (result.kind === 'world_state') {
+      expect(result.payload.full).toBe(true);
+      expect(result.payload.state).toEqual({ model: 'gpt-fixture', agents_md: '# Fixture' });
+    }
+  });
+
+  it('parses a token_usage_record line', () => {
+    const raw = envelope('token_usage_record', {
+      turn_id: 'turn',
+      response_id: 'response',
+      usage: { total_tokens: 42 }
+    });
+    const result = parseCodexLine(raw);
+    expect(result.kind).toBe('token_usage_record');
+    if (result.kind === 'token_usage_record') {
+      expect(result.payload.usage?.total_tokens).toBe(42);
+    }
+  });
 });
 
 // ============================================================================
