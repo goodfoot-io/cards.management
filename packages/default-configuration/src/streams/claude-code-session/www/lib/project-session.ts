@@ -892,6 +892,9 @@ export const claudeSessionProjector: NativeTranscriptProjector<ClaudeProjectionS
       rows: projectRows(state),
       header: {
         ...state.header,
+        // Stream lifecycle closure is authoritative when interactive transcripts omit a result.
+        // Derive rather than persist this fallback so a resumed stream returns to running.
+        status: state.header.status === 'running' && source.meta?.isActive === false ? 'done' : state.header.status,
         ...(source.meta?.role === 'subagent' || source.meta?.role === 'auxiliary'
           ? { agentId: source.meta.agentId }
           : {})
