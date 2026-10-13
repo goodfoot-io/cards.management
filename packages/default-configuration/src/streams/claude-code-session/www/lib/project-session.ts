@@ -181,12 +181,14 @@ function add(
  * @param error - Whether the native event reports an error.
  */
 function status(state: ClaudeProjectionState, event: Event, label: string, boundary = false, error = false): void {
+  const selector = `status/${event.segments.length}`;
+  // One record can emit several statuses, so each carries its own detail leaf rather than sharing one ID.
   const segment = add(
     state,
     event,
-    `status/${event.segments.length}`,
+    selector,
     boundary ? 'boundary' : 'service',
-    [detail(state, event)],
+    [detail(state, event, `${selector}/detail`)],
     label
   );
   if (error && segment.row.kind === 'structural') segment.row = { ...segment.row, tone: 'error' };
@@ -869,7 +871,12 @@ export const claudeSessionProjector: NativeTranscriptProjector<ClaudeProjectionS
         value['isMeta'] !== true
       ) {
         const last = event.segments.at(-1);
-        if (last && (last.category === 'user' || last.category === 'assistant'))
+        // A status recategorized as a message already carries this record's details.
+        if (
+          last &&
+          (last.category === 'user' || last.category === 'assistant') &&
+          !last.row.parts.some((part) => part.kind === 'raw' && part.semanticKey === event.key)
+        )
           last.row = { ...last.row, parts: [...last.row.parts, detail(state, event)] };
       }
     } catch {
