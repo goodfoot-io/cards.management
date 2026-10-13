@@ -279,6 +279,11 @@ describe('mounted session interaction', () => {
       'opencode-session/www/components/expanded/OpencodeExpandedView.tsx',
       'antigravity-session/www/components/expanded/AntigravityExpandedView.tsx'
     ].map((path) => JSON.stringify(join(packageDirectory, 'src/streams', path)));
+    const opencodeSmoke = JSON.stringify(
+      (await readFile(join(packageDirectory, 'test/fixtures/opencode/smoke-session.jsonl'), 'utf8'))
+        .trimEnd()
+        .split('\n')
+    );
     await writeFile(
       join(directory, 'main.jsx'),
       `
@@ -328,7 +333,7 @@ describe('mounted session interaction', () => {
       function ProviderApp() {
         const [sourceKey, setSourceKey] = useState('first');
         const [generation, setGeneration] = useState('one');
-        const [lines, setLines] = useState(() => location.search.endsWith('-history')
+        const [lines, setLines] = useState(() => location.search === '?opencode-smoke' ? ${opencodeSmoke} : location.search.endsWith('-history')
           ? Array.from({length:40}, (_, i) => JSON.stringify({type:'future_record',value:'history raw '+(i+1)}))
           : [JSON.stringify({type:'future_record',value:'initial raw'})]);
         const [meta, setMeta] = useState(null);
@@ -338,7 +343,7 @@ describe('mounted session interaction', () => {
           metadata: () => setMeta({lineCount:lines.length,isActive:false}),
           append: () => setLines(previous => [...previous, JSON.stringify({type:'future_record',value:'appended raw'})])
         };
-        const View = location.search.startsWith('?codex') ? CodexSourceView : location.search === '?opencode' ? OpencodeSourceView : AntigravitySourceView;
+        const View = location.search.startsWith('?codex') ? CodexSourceView : location.search.startsWith('?opencode') ? OpencodeSourceView : AntigravitySourceView;
         return <View source={{sourceKey,generation,filename:'fixture',lines,headLineNumber:1,meta,isLoading:false,error:null}} />;
       }
       function ClaudeApp() {
@@ -1025,7 +1030,8 @@ describe('mounted session interaction', () => {
     ['', 'Following latest'],
     ['?long-tail', 'Reading history'],
     ['?codex-history', 'Following latest'],
-    ['?antigravity-history', 'Following latest']
+    ['?antigravity-history', 'Following latest'],
+    ['?opencode-smoke', 'Following latest']
   ])('opens %s history without an empty tail and reports whether the reader is at the latest row', async (query, intent) => {
     if (query) {
       await browser('open', `${origin}/${query}`);
@@ -1063,5 +1069,28 @@ describe('mounted session interaction', () => {
     } else expect(result.opening.gap).toBeLessThan(1);
     expect(result.held).toBe('Reading history');
     expect(result.returned).toEqual({ status: 'Following latest', gap: 0 });
+  });
+
+  it('opens the OpenCode smoke session at the live end with its final disclosure in view', async () => {
+    await browser('set', 'viewport', '1280', '1000');
+    try {
+      await browser('open', `${origin}/?opencode-smoke`);
+      await browser('wait', '--text', 'Incremental smoke event');
+      const result = await evaluate<{ status: string; gap: number; disclosureBelow: number }>(`(async () => {
+        for(let i=0;i<10;i++) await new Promise(resolve => requestAnimationFrame(resolve));
+        const root = document.querySelector('.session-viewport');
+        const disclosure = [...root.querySelectorAll('.session-row[data-session-id]')].at(-1).querySelector('button');
+        return {
+          status: document.querySelector('.session-controls [role=status]').textContent,
+          gap: root.scrollHeight - root.scrollTop - root.clientHeight,
+          disclosureBelow: disclosure.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom
+        };
+      })()`);
+      // Only the opening prompt used to be a turn, so its session-long tail held the reader short of the reply.
+      expect(result).toMatchObject({ status: 'Following latest', gap: 0 });
+      expect(result.disclosureBelow).toBeLessThan(0);
+    } finally {
+      await browser('set', 'viewport', '1280', '720');
+    }
   });
 });

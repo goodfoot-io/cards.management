@@ -799,7 +799,7 @@ function projectMessage(source: OpencodeSourceIdentity, message: MessageState): 
     provenance,
     kind: 'message',
     role: message.role,
-    anchor: message.role === 'user' ? 'turn' : 'none',
+    anchor: message.role === 'user' || message.role === 'assistant' ? 'turn' : 'none',
     parts: [...(info ? [info] : []), ...content]
   };
   message.projectedRevision = message.revision;

@@ -352,7 +352,7 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
           provenance: [...provenance],
           kind: 'message',
           role,
-          anchor: role === 'user' ? 'turn' : 'none',
+          anchor: 'turn',
           parts
         }
       ];
