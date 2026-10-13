@@ -3,7 +3,7 @@
  * @summary Session completion announcement derivation
  */
 import { describe, expect, it } from 'vitest';
-import { completionAnnouncement, completionFacts } from '../src/streams/lib/session/announcements';
+import { createCompletionAnnouncer } from '../src/streams/lib/session/announcements';
 import type { SessionHeaderFacts, SessionRow, SessionToolPart } from '../src/streams/lib/session/types';
 
 const at = (lineNumber: number) => [{ sourceKey: 'source', generation: 'one', lineNumber, selector: 'record' }];
@@ -28,7 +28,11 @@ const announce = (
   before: readonly SessionRow[],
   after: readonly SessionRow[],
   status: [SessionHeaderFacts['status'], SessionHeaderFacts['status']] = ['running', 'running']
-) => completionAnnouncement(completionFacts(before, status[0]), completionFacts(after, status[1]), 'Codex');
+) => {
+  const announce = createCompletionAnnouncer('Codex');
+  announce(before, status[0]);
+  return announce(after, status[1]);
+};
 
 describe('session completion announcements', () => {
   const history = [reply('first', 1), tool('call', 2, 'pending')];
@@ -46,26 +50,55 @@ describe('session completion announcements', () => {
     expect(announce(history, [...history, tool('later', 3, 'running')])).toBeUndefined();
   });
 
-  it('waits for a streamed reply its provider marks unfinished', () => {
-    const streamed = (line: number, done: boolean): SessionRow => ({
-      ...reply('streamed', line),
-      parts: [
-        { id: 'streamed/details', kind: 'provider', providerKind: 'details', data: { done }, provenance: at(line) },
-        ...reply('streamed', line).parts
-      ]
-    });
+  const streamed = (id: string, line: number, done: boolean | undefined): SessionRow => ({
+    ...reply(id, line),
+    parts: [
+      ...(done === undefined
+        ? []
+        : [
+            {
+              id: `${id}/details`,
+              kind: 'provider' as const,
+              providerKind: 'details',
+              data: { done },
+              provenance: at(line)
+            }
+          ]),
+      ...reply(id, line).parts
+    ]
+  });
+  const streaming = () => {
+    let calls = 0;
     const registry = {
-      details: { render: () => null, disclosureKeys: () => [], finished: (data: { done: boolean }) => data.done }
+      details: {
+        render: () => null,
+        disclosureKeys: () => [],
+        finished: (data: { done: boolean }) => {
+          calls++;
+          return data.done;
+        }
+      }
     };
-    const facts = (rows: readonly SessionRow[]) => completionFacts(rows as never, 'running', registry as never);
-    expect(completionAnnouncement(facts(history), facts([...history, streamed(3, false)]), 'OpenCode')).toBeUndefined();
-    expect(
-      completionAnnouncement(
-        facts([...history, streamed(3, false)]),
-        facts([...history, streamed(4, true)]),
-        'OpenCode'
-      )
-    ).toBe('New reply from OpenCode');
+    return { announce: createCompletionAnnouncer('OpenCode', registry as never), calls: () => calls };
+  };
+
+  it('waits for a streamed reply its provider marks unfinished', () => {
+    const { announce } = streaming();
+    announce(history, 'running');
+    expect(announce([...history, streamed('streamed', 4, false)], 'running')).toBeUndefined();
+    expect(announce([...history, streamed('streamed', 5, true)], 'running')).toBe('New reply from OpenCode');
+    expect(announce([...history, streamed('streamed', 5, true)], 'running')).toBeUndefined();
+  });
+
+  it('derives facts only for rows whose object changed', () => {
+    const { announce, calls } = streaming();
+    const rows = Array.from({ length: 200 }, (_, index) => streamed(`row-${index}`, index + 1, true));
+    announce(rows, 'running');
+    expect(calls()).toBe(200);
+    expect(announce([...rows, streamed('appended', 500, true)], 'running')).toBe('New reply from OpenCode');
+    expect(calls()).toBe(201);
+    announce([...rows, streamed('appended', 500, true)], 'running');
+    expect(calls()).toBe(202);
   });
 
   it('announces a running session that ends, with or without an error', () => {

@@ -15,36 +15,41 @@ export interface SessionToolProgress {
   readonly status: SessionToolPart['status'];
 }
 
-/** The completion-relevant facts of one projection, compared against the next. */
-export interface SessionCompletionFacts {
-  /** Each row's newest native line; only a row carrying lines newer than every previous line changed live. */
-  readonly rows: ReadonlyMap<string, number>;
-  readonly lastLine: number;
-  readonly replies: ReadonlySet<string>;
-  readonly tools: ReadonlyMap<string, SessionToolProgress & { readonly row: string }>;
-  readonly status: SessionHeaderFacts['status'];
+/** Completion-relevant facts of one row, derived once per row object. */
+interface RowFacts {
+  readonly row: object;
+  /** Newest native line; only a row carrying lines newer than everything shown before changed live. */
+  readonly newest: number;
+  readonly reply: boolean;
+  readonly tools: readonly (readonly [string, SessionToolProgress])[];
 }
+
+/** Announces completions for successive projections of one transcript.
+ * @param rows - Current projected rows.
+ * @param status - Current provider session status.
+ * @returns One polite message, or undefined when nothing meaningful completed.
+ */
+export type SessionCompletionAnnouncer = <Payloads extends object>(
+  rows: readonly SessionRow<Payloads>[],
+  status: SessionHeaderFacts['status']
+) => string | undefined;
 
 const finished = (status: SessionToolPart['status'] | undefined): boolean =>
   status === 'complete' || status === 'error';
 
-/** Collects replies and tool progress from top-level rows and their parts.
- * @param rows - Current projected rows.
- * @param status - Current provider session status.
- * @param providerParts - Provider part registry declaring tool progress.
+/** Creates the announcer that remembers what the reader was shown, re-deriving only changed rows.
+ * Providers keep unchanged row objects across appends, so an update costs one identity check per
+ * unchanged row rather than a walk over every part, provenance entry and provider declaration.
+ * @param agent - Provider-facing agent name for reply announcements.
+ * @param providerParts - Provider part registry declaring tool progress and streamed completion.
  * @param providerRows - Provider row registry declaring tool progress.
- * @returns Facts for the next comparison.
+ * @returns Stateful announcer for one transcript and one pair of registries.
  */
-export function completionFacts<Payloads extends object>(
-  rows: readonly SessionRow<Payloads>[],
-  status: SessionHeaderFacts['status'],
+export function createCompletionAnnouncer<Payloads extends object>(
+  agent: string,
   providerParts?: SessionProviderRegistry<Payloads>,
   providerRows?: SessionProviderRegistry<Payloads>
-): SessionCompletionFacts {
-  const lines = new Map<string, number>();
-  let lastLine = 0;
-  const replies = new Set<string>();
-  const tools = new Map<string, SessionToolProgress & { row: string }>();
+): SessionCompletionAnnouncer {
   const entry = (
     registry: SessionProviderRegistry<Payloads> | undefined,
     leaf: SessionRow<Payloads> | SessionPart<Payloads>
@@ -56,60 +61,81 @@ export function completionFacts<Payloads extends object>(
     if (leaf.kind === 'tool') return { name: leaf.name, status: leaf.status };
     return leaf.kind === 'provider' ? entry(registry, leaf)?.progress?.(leaf.data as never) : undefined;
   };
-  for (const row of rows) {
+  const derive = (row: SessionRow<Payloads>): RowFacts => {
     let newest = 0;
     for (const leaf of [row, ...row.parts])
       for (const origin of leaf.provenance) newest = Math.max(newest, origin.lineNumber);
-    lines.set(row.id, newest);
-    lastLine = Math.max(lastLine, newest);
+    const declared = row.parts.flatMap((part) => {
+      const declares = entry(providerParts, part)?.finished;
+      return part.kind === 'provider' && declares ? [declares(part.data as never)] : [];
+    });
     // A streamed reply speaks once its provider marks the message finished, not on its first text.
-    const finished = row.parts.every(
-      (part) => part.kind !== 'provider' || (entry(providerParts, part)?.finished?.(part.data as never) ?? true)
-    );
-    if (
-      row.kind === 'message' &&
-      row.role === 'assistant' &&
-      finished &&
-      row.parts.some((part) => part.kind === 'text')
-    )
-      replies.add(row.id);
+    const done = declared.every(Boolean);
+    const tools: [string, SessionToolProgress][] = [];
     const own = progress(providerRows, row);
-    if (own) tools.set(row.id, { ...own, row: row.id });
+    if (own) tools.push([row.id, own]);
     for (const part of row.parts) {
       const found = progress(providerParts, part);
-      if (found) tools.set(part.id, { ...found, row: row.id });
+      if (found) tools.push([part.id, found]);
     }
-  }
-  return { rows: lines, lastLine, replies, tools, status };
-}
-
-/** Coalesces every completion between two projections into at most one polite message.
- * @param previous - Facts from the last announced projection.
- * @param next - Facts from the current projection.
- * @param agent - Provider-facing agent name for reply announcements.
- * @returns One announcement, or undefined when nothing meaningful completed.
- */
-export function completionAnnouncement(
-  previous: SessionCompletionFacts,
-  next: SessionCompletionFacts,
-  agent: string
-): string | undefined {
-  // A first load or a reset shares no rows with what was shown; neither is a completion.
-  if (![...next.rows.keys()].some((id) => previous.rows.has(id))) return undefined;
-  // Prepended history and regrouped rows carry only native lines the reader was already shown.
-  const live = (row: string): boolean => (next.rows.get(row) ?? 0) > previous.lastLine;
-  const messages: string[] = [];
-  if ([...next.replies].some((id) => !previous.replies.has(id) && live(id))) messages.push(`New reply from ${agent}`);
-  for (const [id, tool] of next.tools) {
-    const before = previous.tools.get(id);
-    if (finished(tool.status) && (before ? !finished(before.status) : live(tool.row)))
-      messages.push(`${tool.name} ${tool.status === 'error' ? 'failed' : 'completed'}`);
-  }
-  if (previous.status === 'running' && next.status === 'done') messages.push('Session ended');
-  if (previous.status === 'running' && next.status === 'error') messages.push('Session ended with an error');
-  const unique = [...new Set(messages)];
-  if (unique.length === 0) return undefined;
-  return unique.length <= 3
-    ? unique.join('. ')
-    : `${unique.slice(0, 2).join('. ')}, and ${unique.length - 2} more updates`;
+    const reply =
+      row.kind === 'message' && row.role === 'assistant' && done && row.parts.some((part) => part.kind === 'text');
+    return { row, newest, reply, tools };
+  };
+  const shown = new Map<string, RowFacts>();
+  const toolStatus = new Map<string, SessionToolPart['status']>();
+  let lastLine = 0;
+  let lastStatus: SessionHeaderFacts['status'] | undefined;
+  return ((rows: readonly SessionRow<Payloads>[], status: SessionHeaderFacts['status']) => {
+    const previousLine = lastLine;
+    const previousStatus = lastStatus;
+    const changed: [RowFacts, RowFacts | undefined][] = [];
+    let shared = 0;
+    let changedLine = 0;
+    for (const row of rows) {
+      const before = shown.get(row.id);
+      if (before) shared++;
+      if (before?.row === row) continue;
+      const facts = derive(row);
+      shown.set(row.id, facts);
+      changedLine = Math.max(changedLine, facts.newest);
+      changed.push([facts, before]);
+    }
+    // Removed rows are rare (regrouping, reset); prune only when the shown set outgrew the projection.
+    if (shown.size > rows.length) {
+      const present = new Set(rows.map((row) => row.id));
+      for (const id of shown.keys()) if (!present.has(id)) shown.delete(id);
+    }
+    lastStatus = status;
+    const learn = () => {
+      for (const [facts] of changed) for (const [id, tool] of facts.tools) toolStatus.set(id, tool.status);
+    };
+    // A first load or a reset shares no rows with what was shown; neither is a completion.
+    if (shared === 0) {
+      toolStatus.clear();
+      lastLine = changedLine;
+      learn();
+      return undefined;
+    }
+    lastLine = Math.max(lastLine, changedLine);
+    const messages: string[] = [];
+    for (const [facts, before] of changed) {
+      // Prepended history and regrouped rows carry only native lines the reader was already shown.
+      const live = facts.newest > previousLine;
+      if (facts.reply && !before?.reply && live) messages.push(`New reply from ${agent}`);
+      for (const [id, tool] of facts.tools) {
+        const known = toolStatus.get(id);
+        if (finished(tool.status) && (known ? !finished(known) : live))
+          messages.push(`${tool.name} ${tool.status === 'error' ? 'failed' : 'completed'}`);
+      }
+    }
+    learn();
+    if (previousStatus === 'running' && status === 'done') messages.push('Session ended');
+    if (previousStatus === 'running' && status === 'error') messages.push('Session ended with an error');
+    const unique = [...new Set(messages)];
+    if (unique.length === 0) return undefined;
+    return unique.length <= 3
+      ? unique.join('. ')
+      : `${unique.slice(0, 2).join('. ')}, and ${unique.length - 2} more updates`;
+  }) as SessionCompletionAnnouncer;
 }

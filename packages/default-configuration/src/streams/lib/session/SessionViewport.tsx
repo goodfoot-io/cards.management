@@ -19,7 +19,7 @@ import {
   useRef,
   useState
 } from 'react';
-import { completionAnnouncement, completionFacts, type SessionCompletionFacts } from './announcements';
+import { createCompletionAnnouncer } from './announcements';
 import { SessionContent, type SessionContentProps, SessionFrames } from './SessionContent';
 import type { SessionHeaderFacts, SessionIdentity, SessionStableAnchor } from './types';
 
@@ -344,17 +344,17 @@ function ViewportBody<Payloads extends object>({
     document.addEventListener('selectionchange', selectionChanged);
     return () => document.removeEventListener('selectionchange', selectionChanged);
   }, [hold]);
-  const facts = useRef<SessionCompletionFacts | null>(null);
   const [announcement, setAnnouncement] = useState({ text: '', repeat: false });
   const { rows, providerParts, providerRows } = content;
+  const announce = useMemo(
+    () => createCompletionAnnouncer(agentName ?? 'the agent', providerParts, providerRows),
+    [agentName, providerParts, providerRows]
+  );
   useEffect(() => {
-    const next = completionFacts(rows, sessionStatus, providerParts, providerRows);
-    const previous = facts.current;
-    facts.current = next;
-    const text = previous && completionAnnouncement(previous, next, agentName ?? 'the agent');
+    const text = announce(rows, sessionStatus);
     // A repeated message must still change the region's text, or assistive technology stays silent.
     if (text) setAnnouncement((current) => ({ text, repeat: current.text === text && !current.repeat }));
-  }, [rows, sessionStatus, providerParts, providerRows, agentName]);
+  }, [announce, rows, sessionStatus]);
   const combinedLayout = useMemo(
     () => ({
       ...layout,
