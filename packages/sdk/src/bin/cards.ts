@@ -112,6 +112,7 @@ Options:
 Commands:
   <card-id>                      Fetch a card by its identifier
   create                         Create a card from JSON on stdin
+  creation-outcome <uuid>         Look up a prior creation without creating again
   list [options]                 List cards with optional filters
   search [query] [options]       Search cards using #tag @relation text syntax
   variable-group list [options]  List safe variable-group summaries
@@ -474,6 +475,30 @@ export function parseCardCreateInput(raw: string): ParsedCardInput {
   }
 
   return { data, inputKeys };
+}
+
+/**
+ * Prints a prior creation's committed outcome without issuing another mutation.
+ * @param args - Correlation UUID followed by optional workspace-path and jsonpath flags.
+ */
+export async function cardCreationOutcome(args: string[]): Promise<void> {
+  const creationRequestId = args[0];
+  if (
+    !creationRequestId ||
+    !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(creationRequestId)
+  ) {
+    throw new Error('creation-outcome requires the UUID from the original creation diagnostic');
+  }
+  const flags = parseFlags(args.slice(1));
+  const workspacePath = flags['workspace-path']?.[0] ?? getGitRoot() ?? undefined;
+  const client = await connectClient(workspacePath);
+  const outcome = await client.getCardCreationOutcome(workspacePath, creationRequestId);
+  console.log(formatOutput(outcome, flags['jsonpath']?.[0]));
+  if (outcome.card === null) {
+    console.error(
+      'Creation outcome is inconclusive; creation may still be running. Do not retry creation. Re-run this lookup later.'
+    );
+  }
 }
 
 /** Keys always included in the create response regardless of caller input. */
@@ -1717,6 +1742,9 @@ if (process.argv[1]?.match(/cards\.(mjs|ts)$/)) {
   switch (command) {
     case 'html':
       run = htmlCommand(process.argv.slice(3));
+      break;
+    case 'creation-outcome':
+      run = cardCreationOutcome(process.argv.slice(3));
       break;
     case 'create':
       run = createCard(process.argv.slice(3));

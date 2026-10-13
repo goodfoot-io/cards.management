@@ -122,6 +122,25 @@ export class NetworkError extends Error {
   }
 }
 
+/** Creation may have committed; the correlation key can retrieve its durable outcome. */
+export class UnknownCreationOutcomeError extends NetworkError {
+  /**
+   * Retains the key and cause without suggesting another creation attempt.
+   * @param creationRequestId - UUID sent with the original creation.
+   * @param cause - Original failure while sending or reconciling creation.
+   */
+  constructor(
+    public readonly creationRequestId: string,
+    cause?: Error
+  ) {
+    super(
+      `Card creation outcome is unknown (creationRequestId: ${creationRequestId}). Do not retry creation; run cards creation-outcome ${creationRequestId} in the original workspace to reconcile.`,
+      cause
+    );
+    this.name = 'UnknownCreationOutcomeError';
+  }
+}
+
 /**
  * Error thrown when an idempotent request exhausts its retry budget without a
  * successful response — the server stayed unreachable for every attempt.

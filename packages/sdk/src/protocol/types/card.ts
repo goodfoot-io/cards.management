@@ -164,6 +164,9 @@ export interface CardRelation {
  * ```
  */
 export interface CardMetadata {
+  /** Original creation correlation UUID, retained for durable outcome lookup. */
+  creationRequestId?: string;
+
   /**
    * Stable identifier used in URLs, filenames, and API routes.
    * Format: `{branch-prefix}-{counter}` (e.g., `main-0001`).

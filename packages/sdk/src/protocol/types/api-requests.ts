@@ -115,6 +115,8 @@ export interface CardCreateGates {
  * ```
  */
 export interface CreateCardRequest {
+  /** Correlation UUID retained in the initial card metadata for outcome lookup. */
+  creationRequestId?: string;
   /**
    * Human-facing title shown in lists and headers.
    * Subject to {@link MAX_TITLE_LENGTH} validation.

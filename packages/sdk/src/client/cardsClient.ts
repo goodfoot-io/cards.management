@@ -45,7 +45,8 @@ import {
   RetryExhaustedError,
   RootCommandError,
   type RootCommandFailureCause,
-  type RootCommandFailureScope
+  type RootCommandFailureScope,
+  UnknownCreationOutcomeError
 } from './types/errors.js';
 
 /** Input of each root configuration command, keyed by command name. */
@@ -673,15 +674,118 @@ export class CardsClient {
    * @param data - Card creation payload.
    * @returns Promise resolving to the created card.
    * @throws ApiError when the server rejects the payload.
-   * @throws NetworkError when the request fails to reach the server.
+   * @throws UnknownCreationOutcomeError when bounded reconciliation cannot determine the result.
    */
   async createCard(data: CardCreateData): Promise<Card> {
+    if (this._signal?.aborted) throw new RequestCancelledError('Request cancelled');
+    const creationRequestId = data.creationRequestId ?? globalThis.crypto.randomUUID();
     const url = this.buildUrl('/cards');
-    const body = {
-      ...data,
-      workspacePath: this.options.workspacePath
-    };
-    return this.request(() => this.getHttpClient().post<Card>(url, body), false);
+    const body = { ...data, creationRequestId, workspacePath: this.options.workspacePath };
+    let ambiguousHttpResponse = false;
+    try {
+      return await this.request(async () => {
+        try {
+          return await this.postCardCreation(url, body);
+        } catch (error) {
+          if (error !== null && typeof error === 'object' && 'status' in error && typeof error.status === 'number') {
+            ambiguousHttpResponse = error.status >= 500 || error.status === 408 || error.status === 409;
+          }
+          throw error;
+        }
+      }, false);
+    } catch (error) {
+      if (error instanceof ApiError && error.code === 'CARD_CREATION_ADMISSION_TIMEOUT') throw error;
+      if (!(error instanceof NetworkError) && !(error instanceof RequestCancelledError) && !ambiguousHttpResponse) {
+        throw error;
+      }
+      return this.reconcileCardCreation(creationRequestId, error instanceof Error ? error : undefined);
+    }
+  }
+
+  /**
+   * Sends creation once, retaining uncertainty when a successful response cannot be decoded.
+   * @param url - Creation endpoint.
+   * @param body - Creation payload including its correlation key.
+   * @returns The card decoded from the creation response.
+   */
+  private async postCardCreation(url: string, body: unknown): Promise<Card> {
+    if (this._httpClient) return this._httpClient.post<Card>(url, body);
+    const response = await this.fetchWithUrlContext(url, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(body),
+      signal: this.getTimeoutSignal()
+    });
+    if (!response.ok) throw response;
+    try {
+      return (await response.json()) as Card;
+    } catch (error) {
+      throw new NetworkError('Card creation response could not be decoded', error instanceof Error ? error : undefined);
+    }
+  }
+
+  /**
+   * Looks up committed card metadata for a prior creation without mutating state.
+   * A null result is inconclusive: creation may still be running. Do not retry creation.
+   * @param workspacePath - Workspace that received the original POST.
+   * @param creationRequestId - Original creation correlation UUID.
+   * @returns The durable card when found, otherwise an inconclusive null result.
+   */
+  async getCardCreationOutcome(
+    workspacePath: string | undefined,
+    creationRequestId: string
+  ): Promise<{ card: Card | null }> {
+    return this.readCardCreationOutcome(workspacePath, creationRequestId, AbortSignal.timeout(this._initialTimeoutMs));
+  }
+
+  /**
+   * Retrieves one creation outcome with a hard bound, including custom transports.
+   * @param workspacePath - Workspace containing the possible card.
+   * @param creationRequestId - UUID from the original creation request.
+   * @param deadline - Signal bounding the complete lookup.
+   * @returns The durable lookup result.
+   */
+  private async readCardCreationOutcome(
+    workspacePath: string | undefined,
+    creationRequestId: string,
+    deadline: AbortSignal
+  ): Promise<{ card: Card | null }> {
+    const signal = this._signal ? AbortSignal.any([deadline, this._signal]) : deadline;
+    const url = this.buildUrl(`/cards/creation-requests/${encodeURIComponent(creationRequestId)}`, { workspacePath });
+    return new Promise((resolve, reject) => {
+      const abort = () => reject(new RequestCancelledError('Creation outcome lookup cancelled'));
+      if (signal.aborted) {
+        abort();
+        return;
+      }
+      signal.addEventListener('abort', abort, { once: true });
+      void this.request(() => this.getHttpClient().get<{ card: Card | null }>(url, { signal }), false)
+        .then(resolve, reject)
+        .finally(() => signal.removeEventListener('abort', abort));
+    });
+  }
+
+  /**
+   * Polls durable metadata for at most three seconds, never replaying the POST.
+   * @param creationRequestId - UUID sent with the original mutation.
+   * @param cause - Failure that made the mutation's outcome uncertain.
+   * @returns The recovered card or an error retaining the usable correlation key.
+   */
+  private async reconcileCardCreation(creationRequestId: string, cause?: Error): Promise<Card> {
+    const expiresAt = Date.now() + 3_000;
+    const deadline = AbortSignal.timeout(3_000);
+    while (Date.now() < expiresAt && !deadline.aborted && !this._signal?.aborted) {
+      try {
+        const result = await this.readCardCreationOutcome(this.options.workspacePath, creationRequestId, deadline);
+        if (result.card) return result.card;
+      } catch (error) {
+        if (isNonRecoverableError(error)) break;
+      }
+      if (!deadline.aborted && !this._signal?.aborted) {
+        await this.backoffSleep(Math.min(250, Math.max(0, expiresAt - Date.now())));
+      }
+    }
+    throw new UnknownCreationOutcomeError(creationRequestId, cause);
   }
 
   /**
