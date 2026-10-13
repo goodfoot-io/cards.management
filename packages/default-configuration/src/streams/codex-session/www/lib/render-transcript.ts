@@ -73,6 +73,8 @@ export type TranscriptItem =
   | { kind: 'turn_boundary'; turnId?: string; timestamp?: string }
   | { kind: 'compaction'; message: string; timestamp?: string }
   | { kind: 'event_activity'; label: string; detailText?: string; timestamp?: string }
+  /** Model-visible context or thread settings, summarized in `label` and retained as formatted JSON. */
+  | { kind: 'session_context'; label: string; detailText: string; timestamp?: string }
   | { kind: 'error'; message: string; timestamp?: string }
   | { kind: 'task_started'; turnId?: string; timestamp?: string }
   | { kind: 'task_complete'; durationMs?: number; lastAgentMessage?: string; timestamp?: string }
@@ -625,6 +627,24 @@ export function lineToItems(line: CodexRolloutLine, nativeRecord?: string): Tran
     case 'event_msg':
       return eventMsgToItems(line.payload, line.timestamp, nativeRecord);
 
+    case 'world_state': {
+      const ts = line.timestamp === '' ? undefined : line.timestamp;
+      const state = line.payload.state ?? {};
+      return [
+        {
+          kind: 'session_context',
+          label: worldStateLabel(line.payload.full !== false, state),
+          detailText: JSON.stringify(state, null, 2),
+          timestamp: ts
+        }
+      ];
+    }
+
+    case 'token_usage_record':
+      // The paired event_msg token_count carries the same accounting, which the
+      // transcript also leaves to the compact card.
+      return [];
+
     case 'response_item':
       return responseItemToItems(line.payload, line.timestamp, nativeRecord);
 
@@ -670,6 +690,18 @@ function eventMsgToItems(rawPayload: EventMsgPayload, timestamp: string, nativeR
       typeof payload['last_agent_message'] === 'string' ? payload['last_agent_message'] : undefined;
     return [{ kind: 'task_complete', durationMs, lastAgentMessage, timestamp: ts }];
   }
+  if (payload.type === 'thread_settings_applied') {
+    const settings = payload['thread_settings'];
+    const record = settings !== null && typeof settings === 'object' ? (settings as Record<string, unknown>) : {};
+    return [
+      {
+        kind: 'session_context',
+        label: threadSettingsLabel(record),
+        detailText: JSON.stringify(record, null, 2),
+        timestamp: ts
+      }
+    ];
+  }
   // Persisted high-level tool-activity events (mcp/web_search/image/patch/plan)
   // render as event_activity; all other event_msg types (e.g. token_count,
   // folded separately into the compact card) produce no item.
@@ -678,6 +710,43 @@ function eventMsgToItems(rawPayload: EventMsgPayload, timestamp: string, nativeR
     return [{ ...activity, timestamp: ts }];
   }
   return [];
+}
+
+/**
+ * Summarizes which model-visible context a `world_state` snapshot carries.
+ *
+ * @param full - Whether the record is a full baseline rather than a partial update.
+ * @param state - The snapshot's state object.
+ * @returns A one-line label naming the model and present context facets.
+ */
+function worldStateLabel(full: boolean, state: Record<string, unknown>): string {
+  const segments = [full ? 'Session context' : 'Session context update'];
+  if (typeof state['model'] === 'string' && state['model'].length > 0) segments.push(state['model']);
+  if (state['agents_md']) segments.push('AGENTS.md');
+  if (state['environments']) segments.push('environment');
+  if (state['host_skills'] || state['skills']) segments.push('skills');
+  if (state['permissions']) segments.push('permissions');
+  return segments.join(' · ');
+}
+
+/**
+ * Summarizes the settings a `thread_settings_applied` event put into effect.
+ *
+ * @param settings - The event's `thread_settings` object.
+ * @returns A one-line label naming the model, provider, reasoning effort and approval policy.
+ */
+function threadSettingsLabel(settings: Record<string, unknown>): string {
+  const text = (key: string): string | undefined => {
+    const value = settings[key];
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  };
+  const segments = ['Thread settings'];
+  for (const value of [text('model'), text('model_provider_id')]) if (value) segments.push(value);
+  const effort = text('reasoning_effort');
+  if (effort) segments.push(`reasoning ${effort}`);
+  const approval = text('approval_policy');
+  if (approval) segments.push(`approval ${approval}`);
+  return segments.join(' · ');
 }
 
 /**

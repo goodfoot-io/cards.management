@@ -122,6 +122,28 @@ export interface TurnContextPayload {
 }
 
 /**
+ * Context snapshot carried by a root `world_state` line: a `full` baseline of
+ * the instructions, environments, skills and permissions the model sees, or a
+ * partial update of the changed keys. Every state key is optional on the wire.
+ */
+export interface WorldStatePayload {
+  full?: boolean;
+  state?: Record<string, unknown>;
+  [key: string]: unknown;
+}
+
+/**
+ * Per-response token accounting carried by a root `token_usage_record` line. It
+ * repeats the totals that the `event_msg` `token_count` event also reports.
+ */
+export interface TokenUsageRecordPayload {
+  turn_id?: string;
+  response_id?: string;
+  usage?: TokenUsage;
+  [key: string]: unknown;
+}
+
+/**
  * Token usage totals for an `event_msg` `token_count` event (`protocol.rs`
  * L1919-L1939, L2000-L2003).
  */
@@ -186,6 +208,8 @@ export type CodexRolloutLine =
   | { kind: 'compacted'; timestamp: string; payload: CompactedPayload }
   | { kind: 'turn_context'; timestamp: string; payload: TurnContextPayload }
   | { kind: 'event_msg'; timestamp: string; payload: EventMsgPayload }
+  | { kind: 'world_state'; timestamp: string; payload: WorldStatePayload }
+  | { kind: 'token_usage_record'; timestamp: string; payload: TokenUsageRecordPayload }
   | { kind: 'unknown'; timestamp?: string; raw: unknown }
   | { kind: 'malformed'; raw: string };
 
@@ -193,7 +217,15 @@ export type CodexRolloutLine =
  * The set of recognized root `type` discriminators for a rollout line.
  * Any other root type is preserved verbatim as a `kind: 'unknown'` result.
  */
-const KNOWN_ROOT_TYPES = new Set(['session_meta', 'response_item', 'compacted', 'turn_context', 'event_msg']);
+const KNOWN_ROOT_TYPES = new Set([
+  'session_meta',
+  'response_item',
+  'compacted',
+  'turn_context',
+  'event_msg',
+  'world_state',
+  'token_usage_record'
+]);
 
 /**
  * Reads a `string`-typed property from an arbitrary parsed object.
@@ -258,6 +290,10 @@ export function parseCodexLine(raw: string): CodexRolloutLine {
       return { kind: 'turn_context', timestamp: ts, payload: payload as TurnContextPayload };
     case 'event_msg':
       return { kind: 'event_msg', timestamp: ts, payload: payload as EventMsgPayload };
+    case 'world_state':
+      return { kind: 'world_state', timestamp: ts, payload: payload as WorldStatePayload };
+    case 'token_usage_record':
+      return { kind: 'token_usage_record', timestamp: ts, payload: payload as TokenUsageRecordPayload };
     default:
       return { kind: 'unknown', timestamp, raw: parsed };
   }

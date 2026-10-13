@@ -236,6 +236,14 @@ export const CODEX_PRESENTATION: SessionProviderRegistry<CodexPayloads> = {
     disclosureKeys: () => []
   },
   turnTime: { render: ({ data }) => <div className="session-muted">{data.text}</div>, disclosureKeys: () => [] },
+  sessionContext: {
+    render: ({ data, leaf, ...context }) => (
+      <SessionDisclosure id={leaf.id} label={data.label} context={context}>
+        <Body text={data.detailText} leaf={leaf} context={context} />
+      </SessionDisclosure>
+    ),
+    disclosureKeys: (leaf) => [leaf.id]
+  },
   sessionStart: { render: (props) => <SessionStart {...props} />, disclosureKeys: (leaf) => [leaf.id] },
   tool: {
     render: (props) => <Tool {...props} />,

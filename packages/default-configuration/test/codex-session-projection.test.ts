@@ -27,6 +27,12 @@ const duplicateToolFixture = readFileSync(
 )
   .trimEnd()
   .split('\n');
+const currentRolloutFixture = readFileSync(
+  new URL('./fixtures/codex-session/current-rollout-records.jsonl', import.meta.url),
+  'utf8'
+)
+  .trimEnd()
+  .split('\n');
 
 function source(lines: readonly string[], overrides: Partial<NativeTranscriptSource> = {}): NativeTranscriptSource {
   return {
@@ -448,5 +454,28 @@ describe('Codex native session projection', () => {
     expect(html).toContain('Next');
     expect(html).toContain(largeValue.slice(0, 100));
     expect(html.length).toBeLessThan(70_000);
+  });
+
+  it('renders current rollout context records and omits token accounting instead of reporting them unrecognized', () => {
+    const rows = projected(replayTranscript(codexSessionProjector, source(currentRolloutFixture)).rows);
+    const contexts = provider(rows, 'sessionContext').map(({ data }) => data.label);
+    expect(contexts).toEqual([
+      'Session context · gpt-fixture · AGENTS.md · environment · skills · permissions',
+      'Thread settings · gpt-fixture · openai · reasoning medium · approval never'
+    ]);
+    // Token usage records repeat the token_count accounting that the transcript already leaves to the compact card.
+    const lineNumbers = new Set(rows.flatMap((row) => row.provenance.map((origin) => origin.lineNumber)));
+    expect(lineNumbers.has(9)).toBe(false);
+    expect(lineNumbers.has(14)).toBe(false);
+    const contextIds = rows
+      .filter((row) => row.kind === 'provider' && row.providerKind === 'sessionContext')
+      .map((row) => row.id);
+    const html = renderSession(rows, contextIds);
+    expect(html).not.toContain('Unrecognized');
+    expect(html).not.toContain('Unsupported event');
+    expect(html).toContain('Fixture AGENTS.md');
+    expect(html).toContain('pragmatic');
+    expect(html).toContain('The host is still unreachable.');
+    expect(renderSession(rows)).not.toContain('Fixture AGENTS.md');
   });
 });

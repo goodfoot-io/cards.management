@@ -46,6 +46,7 @@ export interface CodexToolData {
 export interface CodexPayloads {
   imageNote: { readonly count: number };
   eventActivity: { readonly label: string; readonly detailText?: string };
+  sessionContext: { readonly label: string; readonly detailText: string };
   turnTime: { readonly text: string };
   sessionStart: {
     readonly summary: string;
@@ -455,6 +456,8 @@ function projectEntry(state: CodexProjectionState, entry: StoredEntry): CodexRow
     }
     case 'event_activity':
       return [providerRowFromEntry(entry, 'eventActivity', { label: item.label, detailText: item.detailText })];
+    case 'session_context':
+      return [providerRowFromEntry(entry, 'sessionContext', { label: item.label, detailText: item.detailText })];
     case 'task_complete': {
       const rows = [
         providerRowFromEntry(entry, 'turnTime', {
@@ -822,7 +825,8 @@ function isUnsupportedEvent(payload: EventMsgPayload): boolean {
       'web_search_end',
       'image_generation_end',
       'patch_apply_end',
-      'item_completed'
+      'item_completed',
+      'thread_settings_applied'
     ]).has(type)
   );
 }
