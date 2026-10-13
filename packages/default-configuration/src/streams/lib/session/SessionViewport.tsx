@@ -42,7 +42,7 @@ export interface SessionViewportHandle {
 /** Expanded-only owner of scrolling; content itself is independently reusable. */
 export interface SessionViewportProps<Payloads extends object = Record<string, unknown>>
   extends SessionContentProps<Payloads> {
-  /** Initial history opens at the newest meaningful turn in hold mode. */
+  /** Initial history follows the live end when the newest turn fits, otherwise holds at that turn's start. */
   readonly viewportRef?: Ref<SessionViewportHandle>;
   readonly onFollowIntentChange?: (intent: SessionFollowIntent) => void;
   readonly ariaLabel?: string;
@@ -51,7 +51,8 @@ export interface SessionViewportProps<Payloads extends object = Record<string, u
 /**
  * Wraps content with MessageScroller, explicit live-end navigation, and anchor restoration.
  * Incoming anchors cannot move a held viewport. Selection, focus, keyboard navigation,
- * and scrolling away enter hold; disclosures preserve the current follow intent.
+ * and scrolling away enter hold; scrolling back to the live end resumes following;
+ * disclosures preserve the current follow intent.
  * @param props - Content plus expanded viewport navigation hooks.
  * @returns Expanded transcript viewport.
  */
@@ -68,7 +69,7 @@ function SessionViewportImplementation<Payloads extends object>(props: SessionVi
     [props.onFollowIntentChange]
   );
   return (
-    <MessageScroller.Provider autoScroll={intent === 'follow'} defaultScrollPosition="start" scrollPreviousItemPeek={0}>
+    <MessageScroller.Provider autoScroll={intent === 'follow'} defaultScrollPosition="end" scrollPreviousItemPeek={0}>
       <ViewportBody {...props} intent={intent} setIntent={updateIntent} />
     </MessageScroller.Provider>
   );
@@ -184,6 +185,16 @@ function ViewportBody<Payloads extends object>({
     settlementElement.current = element ? { id, element } : null;
     return element;
   }, []);
+  const atLiveEnd = useCallback((): boolean => {
+    const root = viewport.current;
+    const last = Array.from(root?.querySelector('.session-content')?.children ?? [])
+      .filter((element) => !element.hasAttribute('data-message-scroller-spacer'))
+      .at(-1);
+    if (!root || !last) return false;
+    // MessageScroller's alignment spacer can extend scrollHeight, so measure the last real row instead.
+    const padding = Number.parseFloat(getComputedStyle(root).paddingBottom) || 0;
+    return last.getBoundingClientRect().bottom + padding - root.getBoundingClientRect().bottom <= 1;
+  }, []);
   const restoreAnchor = useCallback(
     (saved: SessionStableAnchor): boolean => {
       const root = viewport.current;
@@ -266,10 +277,25 @@ function ViewportBody<Payloads extends object>({
       opened.current = true;
       cancelSettlement();
       const turn = [...content.rows].reverse().find((row) => row.anchor === 'turn') ?? content.rows.at(-1);
-      if (turn) scroller.scrollToMessage(turn.id, { align: 'start', behavior: 'instant' });
+      const root = viewport.current;
+      const target = Array.from(root?.querySelectorAll<HTMLElement>('.session-row[data-session-id]') ?? [])
+        .reverse()
+        .find((element) => element.dataset['sessionId'] === turn?.id);
+      // Aligning a short tail to the start would pad it with an empty spacer; the end already shows the whole turn.
+      if (
+        !root ||
+        !turn ||
+        !target ||
+        root.scrollHeight - (target.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop) <=
+          root.clientHeight
+      ) {
+        followLatest();
+        return;
+      }
+      scroller.scrollToMessage(turn.id, { align: 'start', behavior: 'instant' });
       anchor.current = captureAnchor();
     } else settle();
-  }, [content.rows, scroller, captureAnchor, settle, cancelSettlement]);
+  }, [content.rows, scroller, captureAnchor, settle, cancelSettlement, followLatest]);
   useEffect(() => {
     const root = viewport.current;
     const child = root?.querySelector('.session-content');
@@ -321,7 +347,11 @@ function ViewportBody<Payloads extends object>({
           if (!(event.target as HTMLElement).closest('[data-session-disclosure]')) hold();
         }}
         onScroll={() => {
-          if (!settlingLayout.current) anchor.current = captureAnchor();
+          if (settlingLayout.current) return;
+          anchor.current = captureAnchor();
+          const selection = document.getSelection();
+          const selecting = selection && !selection.isCollapsed && viewport.current?.contains(selection.anchorNode);
+          if (latest.current.intent === 'hold' && !selecting && atLiveEnd()) setIntent('follow');
         }}
       >
         <SessionFrames.Provider value={FRAMES}>

@@ -328,7 +328,9 @@ describe('mounted session interaction', () => {
       function ProviderApp() {
         const [sourceKey, setSourceKey] = useState('first');
         const [generation, setGeneration] = useState('one');
-        const [lines, setLines] = useState([JSON.stringify({type:'future_record',value:'initial raw'})]);
+        const [lines, setLines] = useState(() => location.search.endsWith('-history')
+          ? Array.from({length:40}, (_, i) => JSON.stringify({type:'future_record',value:'history raw '+(i+1)}))
+          : [JSON.stringify({type:'future_record',value:'initial raw'})]);
         const [meta, setMeta] = useState(null);
         window.providerHarness = {
           switch: key => setSourceKey(key), reset: value => setGeneration(value),
@@ -336,7 +338,7 @@ describe('mounted session interaction', () => {
           metadata: () => setMeta({lineCount:lines.length,isActive:false}),
           append: () => setLines(previous => [...previous, JSON.stringify({type:'future_record',value:'appended raw'})])
         };
-        const View = location.search === '?codex' ? CodexSourceView : location.search === '?opencode' ? OpencodeSourceView : AntigravitySourceView;
+        const View = location.search.startsWith('?codex') ? CodexSourceView : location.search === '?opencode' ? OpencodeSourceView : AntigravitySourceView;
         return <View source={{sourceKey,generation,filename:'fixture',lines,headLineNumber:1,meta,isLoading:false,error:null}} />;
       }
       function ClaudeApp() {
@@ -410,8 +412,9 @@ describe('mounted session interaction', () => {
             text: 'a'.repeat(4096) + 'b'.repeat(4096) + 'c'.repeat(40960), provenance: [] }] });
       const childRows = [{ ...makeRow(1), id: 'child-row', provenance: [{ sourceKey: 'child', generation: 'one', lineNumber: 1, selector: 'record' }], parts: [{ id: 'child-text', kind: 'text', text: 'Child output', provenance: [] }] }];
       const insertions = [{ placementId: 'child-placement', childSourceKey: 'child', label: 'Child activity', placement: { kind: 'section', position: 'end' } }];
-      function App({large = false}) {
-        const [rows, setRows] = useState(() => Array.from({ length: large ? 1200 : 50 }, (_, i) => makeRow(i + 1)));
+      function App({large = false, longTail = false}) {
+        const [rows, setRows] = useState(() => Array.from({ length: large ? 1200 : 50 }, (_, i) => makeRow(i + 1))
+          .map((row, i, all) => longTail && i === all.length - 1 ? {...row, parts:[{...row.parts[0], text:'Long newest turn. '.repeat(600)}, row.parts[1]]} : row));
         const [open, setOpen] = useState(new Map());
         const handle = useRef(null);
         const onOpenChange = useCallback((id,value) => setOpen(previous => new Map(previous).set(id,value)),[]);
@@ -430,12 +433,13 @@ describe('mounted session interaction', () => {
       }
       window.sessionErrors = [];
       addEventListener('error', event => window.sessionErrors.push(event.message));
-      createRoot(document.getElementById('root')).render(location.search === '?reader-native' ? <ReaderApp /> : location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?viewport-cache' ? <App large /> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
+      createRoot(document.getElementById('root')).render(location.search === '?reader-native' ? <ReaderApp /> : location.search.startsWith('?custom') ? <React.StrictMode><Suspense fallback={<p>Pending</p>}><CustomApp /></Suspense></React.StrictMode> : location.search === '?viewport-cache' ? <App large /> : location.search === '?long-tail' ? <App longTail /> : location.search === '?claude' ? <ClaudeApp /> : location.search ? <ProviderApp /> : <App />);
     `
     );
+    // The harness bundles no Tailwind, so it declares the layout utilities provider views use to bound their viewport.
     await writeFile(
       join(directory, 'index.html'),
-      '<!doctype html><html><head><link rel="icon" href="data:,"><link rel="stylesheet" href="main.css"><style>html,body,#root{height:100%;margin:0}:root{--vscode-font-size:13px;--stream-content-max-width:900px}</style></head><body><div id="root"></div><script>window.__STREAM_INIT__={primary:"fixture",files:{},availableFiles:[],mode:"expanded",themeKind:"dark",cssVariables:{}}</script><script type="module" src="main.js"></script></body></html>'
+      '<!doctype html><html><head><link rel="icon" href="data:,"><link rel="stylesheet" href="main.css"><style>html,body,#root{height:100%;margin:0}.h-full{height:100%}.flex{display:flex}.flex-col{flex-direction:column}.flex-1{flex:1 1 0%}.min-h-0{min-height:0}.overflow-hidden{overflow:hidden}:root{--vscode-font-size:13px;--stream-content-max-width:900px}</style></head><body><div id="root"></div><script>window.__STREAM_INIT__={primary:"fixture",files:{},availableFiles:[],mode:"expanded",themeKind:"dark",cssVariables:{}}</script><script type="module" src="main.js"></script></body></html>'
     );
     await promisify(execFile)(
       'yarn',
@@ -486,7 +490,7 @@ describe('mounted session interaction', () => {
       await browser('open', `${origin}/?reader-native`);
       await browser('wait', '--text', 'Native native-last');
       const result = await evaluate<{
-        opening: { focus: string; intent: string; top: number; settledTop: number };
+        opening: { focus: string; intent: string; top: number; settledTop: number; gap: number };
         before: { top: number; focus: string; selection: string };
         steps: { action: string; top: number; focus: string; selection: string }[];
         followed: boolean;
@@ -500,7 +504,7 @@ describe('mounted session interaction', () => {
         const leaf = id => [...root.querySelectorAll('[data-session-id]')].find(element => element.dataset.sessionId === id);
         const top = element => element.getBoundingClientRect().top - root.getBoundingClientRect().top;
         const status = () => document.querySelector('.session-controls [role=status]').textContent;
-        const opening = {focus:document.activeElement.tagName,intent:status(),top:top(leaf('last'))};
+        const opening = {focus:document.activeElement.tagName,intent:status(),top:top(leaf('last')),gap:root.scrollHeight - root.scrollTop - root.clientHeight};
         await settle(); opening.settledTop = top(leaf('last'));
         readerHarness.navigate('last'); await settle();
         document.querySelector('#focus-last').focus();
@@ -527,9 +531,15 @@ describe('mounted session interaction', () => {
         expect(step.selection, step.action).toBe(result.before.selection);
       }
       expect(result.opening.focus).toBe('BODY');
-      expect(result.opening.intent).toBe('Reading history');
-      expect(result.opening.top).toBeGreaterThan(-1);
-      expect(result.opening.top).toBeLessThan(26);
+      // The newest turn fits a wide viewport, so it opens at the live end; a narrow one holds at the turn's start.
+      if (width === 900) {
+        expect(result.opening.intent).toBe('Following latest');
+        expect(result.opening.gap).toBeLessThan(1);
+      } else {
+        expect(result.opening.intent).toBe('Reading history');
+        expect(result.opening.top).toBeGreaterThan(-1);
+        expect(result.opening.top).toBeLessThan(26);
+      }
       expect(Math.abs(result.opening.settledTop - result.opening.top)).toBeLessThan(1);
       expect(result.followed).toBe(true);
       expect(result.followedAppend).toBe(true);
@@ -1009,5 +1019,49 @@ describe('mounted session interaction', () => {
     await evaluate(`document.querySelector('.session-viewport').focus(); sessionHarness.follow(); true`);
     await browser('press', 'Space');
     expect(await evaluate(`document.querySelector('[role="status"]').textContent`)).toBe('Reading history');
+  });
+
+  it.each([
+    ['', 'Following latest'],
+    ['?long-tail', 'Reading history'],
+    ['?codex-history', 'Following latest'],
+    ['?antigravity-history', 'Following latest']
+  ])('opens %s history without an empty tail and reports whether the reader is at the latest row', async (query, intent) => {
+    if (query) {
+      await browser('open', `${origin}/${query}`);
+      if (query === '?long-tail') await browser('wait', '--text', 'Details 50');
+      else await browser('wait', '.session-viewport .session-row');
+    }
+    const result = await evaluate<{
+      opening: { status: string; gap: number; spacer: number; newestTop: number };
+      held: string;
+      returned: { status: string; gap: number };
+    }>(`(async () => {
+      const settle = async () => { for(let i=0;i<6;i++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+      await settle();
+      const root = document.querySelector('.session-viewport');
+      const status = () => document.querySelector('.session-controls [role=status]').textContent;
+      const rows = [...root.querySelectorAll(':scope > .session-content > .session-batch > .session-row')];
+      const bounds = root.getBoundingClientRect();
+      const opening = {
+        status: status(),
+        gap: root.scrollHeight - root.scrollTop - root.clientHeight,
+        spacer: root.querySelector('[data-message-scroller-spacer]').getBoundingClientRect().height,
+        newestTop: rows.at(-1).getBoundingClientRect().top - bounds.top
+      };
+      root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-1})); root.scrollTop -= 200; await settle();
+      const held = status();
+      root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:1})); root.scrollTop = root.scrollHeight; await settle();
+      return {opening, held, returned:{status:status(),gap:root.scrollHeight - root.scrollTop - root.clientHeight}};
+    })()`);
+    // A start-aligned short tail is padded by MessageScroller's spacer, leaving the viewport empty below it.
+    expect(result.opening.spacer).toBe(0);
+    expect(result.opening.status).toBe(intent);
+    if (query === '?long-tail') {
+      expect(result.opening.newestTop).toBeGreaterThan(-1);
+      expect(result.opening.newestTop).toBeLessThan(26);
+    } else expect(result.opening.gap).toBeLessThan(1);
+    expect(result.held).toBe('Reading history');
+    expect(result.returned).toEqual({ status: 'Following latest', gap: 0 });
   });
 });
