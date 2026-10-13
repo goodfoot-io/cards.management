@@ -16,7 +16,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 // Uses the real Bun HTML build and agent-browser, without replacing React, the SDK store,
 // projection or presentation. The isolated output cannot overwrite a workspace publication.
 describe('Claude production built entry', () => {
-  const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const session = `claude-built-entry-${process.pid}`;
   let directory: string;
   let server: Server;

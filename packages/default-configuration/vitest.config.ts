@@ -8,7 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { devNull } from 'node:os';
 import { dirname, resolve } from 'node:path';
-import { defineConfig } from 'vitest/config';
+import { configDefaults, defineConfig } from 'vitest/config';
 
 // Repo root — the `.md` assets live at `<root>/public/claude/...`, outside this
 // package. Vitest 4 computes its own serve allowlist (`resolveFsAllow`: config
@@ -111,6 +111,7 @@ export default defineConfig({
   plugins: [textAssetPlugin, jsToTsSiblingResolve, publicRootRewrite],
   test: {
     include: ['test/**/*.test.ts'],
+    exclude: [...configDefaults.exclude, 'test/browser/**'],
     globals: false,
     reporters: ['dot'],
     testTimeout: 30000,

@@ -25,7 +25,7 @@ const historyCases = [
 ] as const;
 
 describe('OpenCode composed revision controls', () => {
-  const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+  const packageDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
   const session = `opencode-review-${process.pid}`;
   let directory: string;
   let server: Server;
