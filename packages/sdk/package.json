@@ -52,6 +52,7 @@
     "./bin/adhoc-refs": "./src/bin/adhoc-refs.ts",
     "./process-tree": "./src/process-tree.ts",
     "./session-resolver": "./src/session-resolver.ts",
+    "./store-timing": "./src/store-timing.ts",
     "./cards-parent-branch": "./src/cardsParentBranch.ts",
     "./unbound-worktree-candidates": "./src/unboundWorktreeCandidates.ts",
     "./adhoc-attribution": "./src/adhocAttribution.ts",
