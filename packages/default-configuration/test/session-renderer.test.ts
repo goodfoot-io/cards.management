@@ -1114,4 +1114,59 @@ describe('mounted session interaction', () => {
       await browser('set', 'viewport', '1280', '720');
     }
   });
+
+  it.each([
+    ['scrolling', 'Following latest'],
+    ['End', 'Following latest'],
+    ['selecting then scrolling', 'Reading history']
+  ])('resumes following on reaching the live end by %s only while no text is selected', async (way, status) => {
+    await browser('open', `${origin}/`);
+    await browser('wait', '.session-viewport .session-row');
+    const held = await evaluate<string>(`(async () => {
+      const settle = async () => { for(let i=0;i<6;i++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+      const root = document.querySelector('.session-viewport');
+      sessionHarness.follow(); await settle();
+      root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-1})); root.scrollTop -= 300; await settle();
+      if (${JSON.stringify(way)} === 'selecting then scrolling') {
+        const range = document.createRange(); range.selectNodeContents(root.querySelector('.session-row'));
+        getSelection().removeAllRanges(); getSelection().addRange(range); await settle();
+      }
+      if (${JSON.stringify(way)} === 'End') root.focus();
+      else { root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:1})); root.scrollTop = root.scrollHeight; await settle(); }
+      return document.querySelector('.session-controls [role=status]').textContent;
+    })()`);
+    if (way === 'End') {
+      expect(held).toBe('Reading history');
+      await browser('press', 'End');
+    }
+    const result = await evaluate<{
+      reached: string;
+      status: string;
+      gap: number;
+      moved: number;
+      selection: boolean;
+    }>(`(async () => {
+      const settle = async () => { for(let i=0;i<6;i++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+      const root = document.querySelector('.session-viewport');
+      // Keyboard scrolling animates, so wait for the position to rest rather than a fixed frame count.
+      for (let still = 0, last = -1, frames = 0; still < 10 && frames < 300; frames++) {
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        still = root.scrollTop === last ? still + 1 : 0; last = root.scrollTop;
+      }
+      const status = () => document.querySelector('.session-controls [role=status]').textContent;
+      const reached = status(), before = root.scrollTop;
+      sessionHarness.append(); await settle();
+      return {reached, status:status(), gap:root.scrollHeight - root.scrollTop - root.clientHeight, moved:root.scrollTop - before, selection:!getSelection().isCollapsed};
+    })()`);
+    expect(result.reached).toBe(status);
+    expect(result.status).toBe(status);
+    if (status === 'Following latest') expect(result.gap).toBeLessThan(1);
+    else {
+      // The append lands below a held reader, so the view neither moves nor drops the selection.
+      expect(result.selection).toBe(true);
+      expect(Math.abs(result.moved)).toBeLessThan(1);
+      expect(result.gap).toBeGreaterThan(0);
+    }
+    await evaluate('getSelection().removeAllRanges(); true');
+  });
 });
