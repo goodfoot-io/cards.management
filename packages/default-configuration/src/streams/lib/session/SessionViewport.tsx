@@ -144,11 +144,14 @@ function ViewportBody<Payloads extends object>({
   const settlementFrame = useRef<number | null>(null);
   const settlementElement = useRef<{ id: SessionIdentity; element: HTMLElement } | null>(null);
   const opened = useRef(false);
+  /** The last scrollTop this viewport observed or wrote; any other value came from the reader. */
+  const knownTop = useRef<number | null>(null);
   const latest = useRef({ intent, layout });
   latest.current = { intent, layout };
   const captureAnchor = useCallback((): SessionStableAnchor | null => {
     const root = viewport.current;
     if (!root) return null;
+    knownTop.current = root.scrollTop;
     const bounds = root.getBoundingClientRect();
     const children = Array.from(root.querySelector('.session-content')?.children ?? []).filter(
       (element): element is HTMLElement =>
@@ -202,6 +205,7 @@ function ViewportBody<Payloads extends object>({
       if (!root || !target) return false;
       const delta = target.getBoundingClientRect().top - root.getBoundingClientRect().top - saved.offset;
       if (Math.abs(delta) > 1) root.scrollTop += delta;
+      knownTop.current = root.scrollTop;
       return true;
     },
     [find]
@@ -213,6 +217,20 @@ function ViewportBody<Payloads extends object>({
     settlingLayout.current = false;
   }, []);
   useEffect(() => cancelSettlement, [cancelSettlement]);
+  const readerMoved = useCallback((): boolean => {
+    const root = viewport.current;
+    if (!root || knownTop.current === null || Math.abs(root.scrollTop - knownTop.current) <= 1) return false;
+    // Shrinking content clamps scrollTop to the new maximum; that is layout, not the reader.
+    return !(root.scrollTop < knownTop.current && root.scrollHeight - root.clientHeight - root.scrollTop <= 1);
+  }, []);
+  /** A scrollbar drag, held arrow key or find-in-page scroll fires no wheel, key or pointer event first. */
+  const yieldToReader = useCallback((): void => {
+    cancelSettlement();
+    anchor.current = captureAnchor();
+    const selection = document.getSelection();
+    const selecting = selection && !selection.isCollapsed && viewport.current?.contains(selection.anchorNode);
+    if (latest.current.intent === 'hold' && !selecting && atLiveEnd()) setIntent('follow');
+  }, [cancelSettlement, captureAnchor, atLiveEnd, setIntent]);
   const restoreThroughLayout = useCallback(
     (saved: SessionStableAnchor): void => {
       restoreAnchor(saved);
@@ -220,8 +238,10 @@ function ViewportBody<Payloads extends object>({
       if (settlementFrame.current !== null) cancelAnimationFrame(settlementFrame.current);
       // Deferred row sizing and scroller effects must settle before scroll events can replace this anchor.
       settlementFrame.current = requestAnimationFrame(() => {
+        if (readerMoved()) return yieldToReader();
         restoreAnchor(saved);
         settlementFrame.current = requestAnimationFrame(() => {
+          if (readerMoved()) return yieldToReader();
           restoreAnchor(saved);
           settlementFrame.current = null;
           settlementElement.current = null;
@@ -230,7 +250,7 @@ function ViewportBody<Payloads extends object>({
         });
       });
     },
-    [captureAnchor, restoreAnchor]
+    [captureAnchor, restoreAnchor, readerMoved, yieldToReader]
   );
   const hold = useCallback((): void => {
     cancelSettlement();
@@ -267,11 +287,12 @@ function ViewportBody<Payloads extends object>({
   const settle = useCallback((): void => {
     const saved = anchor.current;
     if (latest.current.intent === 'hold' && saved && find(saved.id)) {
-      restoreThroughLayout(saved);
+      if (readerMoved()) yieldToReader();
+      else restoreThroughLayout(saved);
       return;
     }
     anchor.current = captureAnchor();
-  }, [captureAnchor, find, restoreThroughLayout]);
+  }, [captureAnchor, find, restoreThroughLayout, readerMoved, yieldToReader]);
   useLayoutEffect(() => {
     if (!opened.current && content.rows.length > 0) {
       opened.current = true;
@@ -347,11 +368,8 @@ function ViewportBody<Payloads extends object>({
           if (!(event.target as HTMLElement).closest('[data-session-disclosure]')) hold();
         }}
         onScroll={() => {
-          if (settlingLayout.current) return;
-          anchor.current = captureAnchor();
-          const selection = document.getSelection();
-          const selecting = selection && !selection.isCollapsed && viewport.current?.contains(selection.anchorNode);
-          if (latest.current.intent === 'hold' && !selecting && atLiveEnd()) setIntent('follow');
+          if (settlingLayout.current && !readerMoved()) return;
+          yieldToReader();
         }}
       >
         <SessionFrames.Provider value={FRAMES}>

@@ -1169,4 +1169,38 @@ describe('mounted session interaction', () => {
     }
     await evaluate('getSelection().removeAllRanges(); true');
   });
+
+  it.each([
+    ['moves by script while an append settles', 'append', 'Reading history'],
+    ['moves by script with nothing settling', 'none', 'Reading history'],
+    ['reaches the live end while an append settles', 'end', 'Following latest']
+  ])('keeps a held reader where they scrolled when the reader %s', async (_case, mode, status) => {
+    await browser('open', `${origin}/`);
+    await browser('wait', '.session-viewport .session-row');
+    const result = await evaluate<{ status: string; drift: number; gap: number }>(`(async () => {
+      const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
+      const settle = async () => { for(let i=0;i<8;i++) await frame(); };
+      const root = document.querySelector('.session-viewport');
+      sessionHarness.follow(); await settle();
+      root.dispatchEvent(new WheelEvent('wheel',{bubbles:true,deltaY:-1})); root.scrollTop -= 900; await settle();
+      let target;
+      if (${JSON.stringify(mode)} === 'end') {
+        // The append commits, its resize starts settlement in the next frame, and the reader lands on the
+        // live end in the frame after, before settlement's own restoring callback runs.
+        const content = root.querySelector('.session-content');
+        await new Promise(resolve => { new MutationObserver((_, observer) => { observer.disconnect(); resolve(); }).observe(content, {childList:true, subtree:true}); sessionHarness.append(); });
+        await frame(); await frame();
+        root.scrollTop = root.scrollHeight; target = root.scrollTop;
+      } else {
+        // A scrollbar drag or find-in-page moves scrollTop without wheel, key or pointer events.
+        root.scrollTop += 300; target = root.scrollTop;
+        if (${JSON.stringify(mode)} === 'append') sessionHarness.append();
+      }
+      await settle();
+      return {status:document.querySelector('.session-controls [role=status]').textContent, drift:root.scrollTop - target, gap:root.scrollHeight - root.scrollTop - root.clientHeight};
+    })()`);
+    expect(result.status).toBe(status);
+    if (mode === 'end') expect(result.gap).toBeLessThan(1);
+    else expect(Math.abs(result.drift)).toBeLessThan(1);
+  });
 });
