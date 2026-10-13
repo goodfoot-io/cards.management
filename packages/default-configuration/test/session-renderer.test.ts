@@ -1317,6 +1317,29 @@ describe('mounted session interaction', () => {
       ]
     },
     {
+      provider: 'OpenCode reply whose text precedes its info',
+      query: '?opencode-smoke',
+      harness: 'providerHarness',
+      steps: [
+        [
+          [
+            opencodeLine(30, 'part', {
+              id: 'part-early-text',
+              messageID: 'msg-live-reply',
+              type: 'text',
+              text: 'Early'
+            })
+          ],
+          ''
+        ],
+        [[opencodeLine(31, 'message', opencodeReply({ created: 1780000003000 }))], ''],
+        [
+          [opencodeLine(32, 'message', opencodeReply({ created: 1780000003000, completed: 1780000003900 }))],
+          'New reply from OpenCode'
+        ]
+      ]
+    },
+    {
       provider: 'Antigravity',
       query: '?antigravity-history',
       harness: 'providerHarness',

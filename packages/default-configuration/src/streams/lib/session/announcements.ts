@@ -50,6 +50,10 @@ export function createCompletionAnnouncer<Payloads extends object>(
   providerParts?: SessionProviderRegistry<Payloads>,
   providerRows?: SessionProviderRegistry<Payloads>
 ): SessionCompletionAnnouncer {
+  // A provider that declares streamed completion leaves every reply unfinished until one of its parts says otherwise.
+  const streamed = Object.values(providerParts ?? {}).some(
+    (declaration) => typeof (declaration as { finished?: unknown }).finished === 'function'
+  );
   const entry = (
     registry: SessionProviderRegistry<Payloads> | undefined,
     leaf: SessionRow<Payloads> | SessionPart<Payloads>
@@ -70,7 +74,7 @@ export function createCompletionAnnouncer<Payloads extends object>(
       return part.kind === 'provider' && declares ? [declares(part.data as never)] : [];
     });
     // A streamed reply speaks once its provider marks the message finished, not on its first text.
-    const done = declared.every(Boolean);
+    const done = streamed ? declared.length > 0 && declared.every(Boolean) : true;
     const tools: [string, SessionToolProgress][] = [];
     const own = progress(providerRows, row);
     if (own) tools.push([row.id, own]);

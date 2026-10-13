@@ -62,7 +62,8 @@ export interface SessionProviderPresentation<Payload> {
   readonly disclosureKeys: (leaf: SessionLeaf, data: Payload) => readonly string[] | undefined;
   /** Tool progress this payload reports, for completion announcements. */
   readonly progress?: (data: Payload) => SessionToolProgress | undefined;
-  /** Whether the streamed message this payload describes has finished, for reply announcements. */
+  /** Whether the streamed message this payload describes has finished. Declaring it on any kind makes the
+   * provider streamed: a reply with no declaring part stays unfinished and is not announced. */
   readonly finished?: (data: Payload) => boolean;
 }
 

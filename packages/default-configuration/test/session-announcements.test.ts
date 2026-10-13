@@ -82,9 +82,10 @@ describe('session completion announcements', () => {
     return { announce: createCompletionAnnouncer('OpenCode', registry as never), calls: () => calls };
   };
 
-  it('waits for a streamed reply its provider marks unfinished', () => {
+  it('waits for a streamed reply until a part declares it finished', () => {
     const { announce } = streaming();
     announce(history, 'running');
+    expect(announce([...history, streamed('streamed', 3, undefined)], 'running')).toBeUndefined();
     expect(announce([...history, streamed('streamed', 4, false)], 'running')).toBeUndefined();
     expect(announce([...history, streamed('streamed', 5, true)], 'running')).toBe('New reply from OpenCode');
     expect(announce([...history, streamed('streamed', 5, true)], 'running')).toBeUndefined();
