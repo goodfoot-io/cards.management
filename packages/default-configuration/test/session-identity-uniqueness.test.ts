@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import { antigravitySessionProjector } from '../src/streams/antigravity-session/www/lib/project-session';
 import { claudeSessionProjector } from '../src/streams/claude-code-session/www/lib/project-session';
 import { codexSessionProjector } from '../src/streams/codex-session/www/lib/project-session';
-import { replayTranscript } from '../src/streams/lib/session/projection';
+import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import type { NativeTranscriptSource } from '../src/streams/lib/session/types';
 import { opencodeSessionProjector } from '../src/streams/opencode-session/www/lib/project-session';
 import { nativeFixture as antigravityFixture } from './fixtures/antigravity-projection';
@@ -68,24 +68,44 @@ function leafIds(value: unknown, ids: string[] = []): string[] {
   return ids;
 }
 
+const source = (lines: readonly string[]): NativeTranscriptSource => ({
+  sourceKey: 'card/identity',
+  generation: 'one',
+  filename: 'native.jsonl',
+  lines: lines.slice(),
+  headLineNumber: 1,
+  meta: null,
+  isLoading: false,
+  error: null
+});
+
+const duplicates = (ids: readonly string[]): string[] => ids.filter((id, index) => ids.indexOf(id) !== index);
+
+const CASES = PROVIDERS.flatMap(({ name, projector, transcripts }) =>
+  transcripts.map(([label, lines]) => ({ name, label, projector: projector as typeof claudeSessionProjector, lines }))
+);
+
 describe('session display identity', () => {
-  it.each(
-    PROVIDERS.flatMap(({ name, projector, transcripts }) =>
-      transcripts.map(([label, lines]) => ({ name, label, projector, lines }))
-    )
-  )('keeps every $name row, part and nested leaf ID unique in $label', ({ projector, lines }) => {
-    const source: NativeTranscriptSource = {
-      sourceKey: 'card/identity',
-      generation: 'one',
-      filename: 'native.jsonl',
-      lines,
-      headLineNumber: 1,
-      meta: null,
-      isLoading: false,
-      error: null
-    };
-    const ids = leafIds(replayTranscript(projector as typeof claudeSessionProjector, source).rows);
+  it.each(CASES)('keeps every $name row, part and nested leaf ID unique in $label', ({ projector, lines }) => {
+    const ids = leafIds(replayTranscript(projector, source(lines)).rows);
     expect(ids.length).toBeGreaterThan(0);
-    expect(ids.filter((id, index) => ids.indexOf(id) !== index)).toEqual([]);
+    expect(duplicates(ids)).toEqual([]);
+  });
+
+  it.each(CASES)('keeps $name IDs unique after every single-line append of $label and ends on the full replay', ({
+    projector,
+    lines
+  }) => {
+    const controller = createTranscriptProjection(projector, 'card/identity');
+    try {
+      let ids: string[] = [];
+      for (let count = 1; count <= lines.length; count++) {
+        ids = leafIds(controller.update(source(lines.slice(0, count))).projection.rows);
+        expect({ count, duplicates: duplicates(ids) }).toEqual({ count, duplicates: [] });
+      }
+      expect(ids).toEqual(leafIds(replayTranscript(projector, source(lines)).rows));
+    } finally {
+      controller.dispose();
+    }
   });
 });
