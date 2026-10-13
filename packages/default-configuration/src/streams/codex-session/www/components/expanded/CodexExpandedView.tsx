@@ -103,6 +103,8 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
           disclosures={disclosures}
           emptyContent={emptyContent}
           ariaLabel="Codex session transcript"
+          agentName="Codex"
+          sessionStatus={header?.status}
         />
       </div>
     </div>

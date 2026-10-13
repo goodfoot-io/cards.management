@@ -5,6 +5,7 @@
  * @summary Reusable native session rendering foundation
  * @module streams/lib/session
  */
+export * from './announcements';
 export * from './projection';
 export * from './SessionContent';
 export * from './SessionViewport';

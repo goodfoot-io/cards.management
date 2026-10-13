@@ -247,7 +247,8 @@ export const CODEX_PRESENTATION: SessionProviderRegistry<CodexPayloads> = {
   sessionStart: { render: (props) => <SessionStart {...props} />, disclosureKeys: (leaf) => [leaf.id] },
   tool: {
     render: (props) => <Tool {...props} />,
-    disclosureKeys: (leaf, data) => [leaf.id, ...data.details.map((detail) => detail.id)]
+    disclosureKeys: (leaf, data) => [leaf.id, ...data.details.map((detail) => detail.id)],
+    progress: (data) => ({ name: data.name, status: data.status })
   },
   boundary: {
     render: ({ data }) => (

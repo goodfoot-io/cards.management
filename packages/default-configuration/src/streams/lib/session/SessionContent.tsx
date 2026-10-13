@@ -24,6 +24,7 @@ import {
 } from 'react';
 import { renderMarkdownNodes } from '../markdown';
 import './session.css';
+import type { SessionToolProgress } from './announcements';
 import { InspectionPages, LeafViewState, useLeafViewState, useOwnedLeafViewState } from './leaf-view-state';
 import type {
   NativeRecordProvenance,
@@ -59,6 +60,8 @@ export interface SessionProviderPresentation<Payload> {
   readonly render: (props: ProviderPresentationProps<Payload>) => ReactNode;
   /** Exact keys, or undefined for map-wide iteration, size, or arbitrary child content. */
   readonly disclosureKeys: (leaf: SessionLeaf, data: Payload) => readonly string[] | undefined;
+  /** Tool progress this payload reports, for completion announcements. */
+  readonly progress?: (data: Payload) => SessionToolProgress | undefined;
 }
 
 /** Mapped keys preserve provider payload types across rendering and dependency declarations. */

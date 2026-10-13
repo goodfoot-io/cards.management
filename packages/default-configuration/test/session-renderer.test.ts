@@ -3,6 +3,7 @@
  * @summary Cards session content contract
  */
 import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer, type Server } from 'node:http';
 import { tmpdir } from 'node:os';
@@ -341,7 +342,8 @@ describe('mounted session interaction', () => {
           switch: key => setSourceKey(key), reset: value => setGeneration(value),
           identity: (key, id, provider, cwd) => { setSourceKey(key); setLines([JSON.stringify({type:'session_meta',payload:{id,model_provider:provider,cwd}}),JSON.stringify({type:'future_record',value:'raw'})]); },
           metadata: () => setMeta({lineCount:lines.length,isActive:false}),
-          append: () => setLines(previous => [...previous, JSON.stringify({type:'future_record',value:'appended raw'})])
+          append: () => setLines(previous => [...previous, JSON.stringify({type:'future_record',value:'appended raw'})]),
+          push: added => setLines(previous => [...previous, ...added])
         };
         const View = location.search.startsWith('?codex') ? CodexSourceView : location.search.startsWith('?opencode') ? OpencodeSourceView : AntigravitySourceView;
         return <View source={{sourceKey,generation,filename:'fixture',lines,headLineNumber:1,meta,isLoading:false,error:null}} />;
@@ -359,6 +361,7 @@ describe('mounted session interaction', () => {
             {type:'attachment',uuid:'team-two',attachment:{type:'team_context',agentName:'two',teamName:'test-team'}}
           ].map(value => JSON.stringify(value))),
           appendText: () => setLines(previous => [...previous,JSON.stringify({type:'assistant',uuid:'next',message:{content:'appended'}})]),
+          push: added => setLines(previous => [...previous, ...added]),
           malformed: () => setLines([
             {type:'assistant', message:{content:'start'}},
             ...[{type:'skill_listing',names:'oops'}, {type:'invoked_skills',skills:'oops'}, {type:'command_permissions',allowedTools:'oops'}].map(attachment => ({type:'attachment',attachment}))
@@ -1202,5 +1205,116 @@ describe('mounted session interaction', () => {
     expect(result.status).toBe(status);
     if (mode === 'end') expect(result.gap).toBeLessThan(1);
     else expect(Math.abs(result.drift)).toBeLessThan(1);
+  });
+
+  const codexLine = (payload: object): string =>
+    JSON.stringify({ timestamp: '2026-09-01T10:00:00.000Z', type: 'response_item', payload });
+  const opencodeTool = (seq: number, status: string): string =>
+    JSON.stringify({
+      v: 1,
+      ts: '2026-09-01T10:02:00.000Z',
+      seq,
+      sessionId: 'ses-opencode-1',
+      type: 'part',
+      data: {
+        id: 'part-tool-live',
+        messageID: 'msg-incremental-1',
+        type: 'tool',
+        callID: 'call-grep-live',
+        tool: 'grep',
+        state: { status, input: { pattern: 'smoke' }, ...(status === 'completed' ? { result: 'one match' } : {}) }
+      }
+    });
+  const antigravityReply = (idx: number, content: string): string =>
+    JSON.stringify({
+      v: 1,
+      idx,
+      stepType: 15,
+      status: 3,
+      content,
+      hash: createHash('sha256').update(content, 'utf8').digest('hex'),
+      anomaly: null
+    });
+
+  it.each([
+    {
+      provider: 'Claude',
+      query: '?claude',
+      harness: 'claudeHarness',
+      steps: [
+        [
+          [
+            JSON.stringify({
+              type: 'user',
+              uuid: 'result-event',
+              message: { content: [{ type: 'tool_result', tool_use_id: 'call', content: 'done' }] }
+            })
+          ],
+          'Bash completed'
+        ]
+      ]
+    },
+    {
+      provider: 'Codex',
+      query: '?codex-history',
+      harness: 'providerHarness',
+      steps: [
+        [[codexLine({ type: 'function_call', call_id: 'live-1', name: 'shell', arguments: '{"command":"pwd"}' })], ''],
+        [[codexLine({ type: 'function_call_output', call_id: 'live-1', output: '/workspace' })], 'shell completed']
+      ]
+    },
+    {
+      provider: 'OpenCode',
+      query: '?opencode-smoke',
+      harness: 'providerHarness',
+      steps: [
+        [[opencodeTool(20, 'pending')], ''],
+        [[opencodeTool(21, 'completed')], 'grep completed']
+      ]
+    },
+    {
+      provider: 'Antigravity',
+      query: '?antigravity-history',
+      harness: 'providerHarness',
+      steps: [[[antigravityReply(900, 'Antigravity finished the task.')], 'New reply from Antigravity']]
+    }
+  ] as const)('announces only completed $provider changes in the polite live region', async ({
+    query,
+    harness,
+    steps
+  }) => {
+    await browser('open', `${origin}/${query}`);
+    await browser('wait', '.session-viewport .session-row');
+    const settle = 'for(let i=0;i<8;i++) await new Promise(resolve => requestAnimationFrame(resolve));';
+    const announced = (): Promise<string> =>
+      evaluate<string>(
+        `(async () => { ${settle} return document.querySelector('[data-session-announcer]').textContent; })()`
+      );
+    expect(await announced()).toBe('');
+    for (const [lines, expected] of steps) {
+      await evaluate(`${harness}.push(${JSON.stringify(lines)}); true`);
+      expect(await announced()).toBe(expected);
+    }
+  });
+
+  it('coalesces a large native batch into one announcement and stays silent on the history open', async () => {
+    await browser('open', `${origin}/?codex-history`);
+    await browser('wait', '.session-viewport .session-row');
+    const batch = Array.from({ length: 50 }, (_, index) => [
+      codexLine({ type: 'function_call', call_id: `batch-${index}`, name: 'shell', arguments: '{}' }),
+      codexLine({ type: 'function_call_output', call_id: `batch-${index}`, output: 'ok' })
+    ]).flat();
+    const result = await evaluate<{ opened: string; announcements: string[] }>(`(async () => {
+      const settle = async () => { for(let i=0;i<8;i++) await new Promise(resolve => requestAnimationFrame(resolve)); };
+      await settle();
+      const region = document.querySelector('[data-session-announcer]');
+      const opened = region.textContent, announcements = [];
+      const observer = new MutationObserver(() => { if (region.textContent) announcements.push(region.textContent); });
+      observer.observe(region, { childList: true, characterData: true, subtree: true });
+      providerHarness.push(${JSON.stringify(batch)}); await settle();
+      observer.disconnect();
+      return { opened, announcements };
+    })()`);
+    expect(result).toEqual({ opened: '', announcements: ['shell completed'] });
   });
 });

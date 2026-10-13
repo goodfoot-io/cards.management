@@ -19,8 +19,9 @@ import {
   useRef,
   useState
 } from 'react';
+import { completionAnnouncement, completionFacts, type SessionCompletionFacts } from './announcements';
 import { SessionContent, type SessionContentProps, SessionFrames } from './SessionContent';
-import type { SessionIdentity, SessionStableAnchor } from './types';
+import type { SessionHeaderFacts, SessionIdentity, SessionStableAnchor } from './types';
 
 /** Follow changes express reader intent rather than transcript liveness. */
 export type SessionFollowIntent = 'hold' | 'follow';
@@ -46,6 +47,10 @@ export interface SessionViewportProps<Payloads extends object = Record<string, u
   readonly viewportRef?: Ref<SessionViewportHandle>;
   readonly onFollowIntentChange?: (intent: SessionFollowIntent) => void;
   readonly ariaLabel?: string;
+  /** Names the agent in completion announcements, such as "New reply from Codex". */
+  readonly agentName?: string;
+  /** Provider session status; a running session that ends is announced once. */
+  readonly sessionStatus?: SessionHeaderFacts['status'];
 }
 
 /**
@@ -123,6 +128,8 @@ const FRAMES = { Root: ScrollerContent, Row: ScrollerRow };
  * @param root0.onFollowIntentChange - Consumed by the outer wrapper.
  * @param root0.ariaLabel - Accessible viewport label.
  * @param root0.layout - Optional outer layout bridge.
+ * @param root0.agentName - Agent named in completion announcements.
+ * @param root0.sessionStatus - Provider session status for the ended announcement.
  * @returns Rendered session presentation.
  */
 function ViewportBody<Payloads extends object>({
@@ -132,6 +139,8 @@ function ViewportBody<Payloads extends object>({
   onFollowIntentChange: _onFollowIntentChange,
   ariaLabel,
   layout,
+  agentName,
+  sessionStatus,
   ...content
 }: SessionViewportProps<Payloads> & {
   intent: SessionFollowIntent;
@@ -335,6 +344,17 @@ function ViewportBody<Payloads extends object>({
     document.addEventListener('selectionchange', selectionChanged);
     return () => document.removeEventListener('selectionchange', selectionChanged);
   }, [hold]);
+  const facts = useRef<SessionCompletionFacts | null>(null);
+  const [announcement, setAnnouncement] = useState({ text: '', repeat: false });
+  const { rows, providerParts, providerRows } = content;
+  useEffect(() => {
+    const next = completionFacts(rows, sessionStatus, providerParts, providerRows);
+    const previous = facts.current;
+    facts.current = next;
+    const text = previous && completionAnnouncement(previous, next, agentName ?? 'the agent');
+    // A repeated message must still change the region's text, or assistive technology stays silent.
+    if (text) setAnnouncement((current) => ({ text, repeat: current.text === text && !current.repeat }));
+  }, [rows, sessionStatus, providerParts, providerRows, agentName]);
   const combinedLayout = useMemo(
     () => ({
       ...layout,
@@ -383,6 +403,9 @@ function ViewportBody<Payloads extends object>({
         <button type="button" onClick={intent === 'follow' ? hold : followLatest}>
           {intent === 'follow' ? 'Hold position' : 'Return to latest'}
         </button>
+      </div>
+      <div className="session-announcer" aria-live="polite" aria-atomic="true" data-session-announcer>
+        {announcement.text + (announcement.repeat ? '\u00a0' : '')}
       </div>
     </MessageScroller.Root>
   );

@@ -29,6 +29,7 @@
 .session-part { min-width: 0; margin-block: 6px; }
 .session-label { font-weight: 600; font-size: var(--stream-text-label, var(--vscode-font-size)); }
 .session-muted { color: var(--vscode-descriptionForeground); }
+.session-announcer { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 .session-tone--error { color: var(--vscode-errorForeground); }
 .session-tone--boundary { border-block-start: 1px solid var(--vscode-panel-border, transparent); padding-block-start: 12px; }
 .session-disclosure-button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left; background: transparent; color: inherit; }

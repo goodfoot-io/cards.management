@@ -256,7 +256,8 @@ export const CLAUDE_PARTS: SessionProviderRegistry<ClaudePayloads> = {
   attachment: { render: (props) => <Attachment {...props} />, disclosureKeys: (leaf) => [leaf.id, `${leaf.id}/raw`] },
   tool: {
     render: (props) => <Tool {...props} />,
-    disclosureKeys: (leaf, data) => [leaf.id, ...nestedPartDisclosureIds([...data.hooks, ...data.details])]
+    disclosureKeys: (leaf, data) => [leaf.id, ...nestedPartDisclosureIds([...data.hooks, ...data.details])],
+    progress: (data) => ({ name: data.name, status: data.status })
   },
   prose: {
     render: ({ data, leaf, ...context }) => (

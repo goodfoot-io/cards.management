@@ -102,6 +102,8 @@ export function ClaudeSourceView({ source }: { source: NativeTranscriptSource })
           providerRows={CLAUDE_PARTS}
           disclosures={disclosures}
           emptyContent={emptyContent}
+          agentName="Claude Code"
+          sessionStatus={header?.status}
         />
       </div>
     </div>

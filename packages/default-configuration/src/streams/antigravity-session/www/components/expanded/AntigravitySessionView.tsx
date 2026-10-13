@@ -184,6 +184,8 @@ export function AntigravitySessionView({
           providerRows={ANTIGRAVITY_ROWS}
           disclosures={disclosures}
           emptyContent={emptyContent}
+          agentName="Antigravity"
+          sessionStatus={header?.status}
         />
       </div>
     </div>

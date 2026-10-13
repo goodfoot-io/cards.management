@@ -97,6 +97,8 @@ export function OpencodeSourceView({ source }: { source: NativeTranscriptSource 
           renderTool={renderOpenCodeTool}
           disclosures={disclosures}
           emptyContent={emptyContent}
+          agentName="OpenCode"
+          sessionStatus={header?.status}
         />
       </div>
     </div>
