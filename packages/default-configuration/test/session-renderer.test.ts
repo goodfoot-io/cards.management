@@ -333,7 +333,7 @@ describe('mounted session interaction', () => {
       function ProviderApp() {
         const [sourceKey, setSourceKey] = useState('first');
         const [generation, setGeneration] = useState('one');
-        const [lines, setLines] = useState(() => location.search === '?opencode-smoke' ? ${opencodeSmoke} : location.search.endsWith('-history')
+        const [lines, setLines] = useState(() => location.search.startsWith('?opencode-smoke') ? [...${opencodeSmoke}, ...(location.search === '?opencode-smoke-long' ? [JSON.stringify({v:1,ts:'2026-09-01T10:01:18.020Z',seq:20,sessionId:'ses-opencode-1',type:'part',data:{id:'part-incremental-long',messageID:'msg-incremental-1',type:'text',text:Array.from({length:80},(_, i) => 'Long reply paragraph '+(i+1)).join('\\n\\n')}})] : [])] : location.search.endsWith('-history')
           ? Array.from({length:40}, (_, i) => JSON.stringify({type:'future_record',value:'history raw '+(i+1)}))
           : [JSON.stringify({type:'future_record',value:'initial raw'})]);
         const [meta, setMeta] = useState(null);
@@ -1032,7 +1032,7 @@ describe('mounted session interaction', () => {
     ['?codex-history', 'Following latest'],
     ['?antigravity-history', 'Following latest'],
     ['?opencode-smoke', 'Following latest']
-  ])('opens %s history without an empty tail and reports whether the reader is at the latest row', async (query, intent) => {
+  ])('opens %s history at the live end when the newest turn fits, otherwise at the start of that turn', async (query, intent) => {
     if (query) {
       await browser('open', `${origin}/${query}`);
       if (query === '?long-tail') await browser('wait', '--text', 'Details 50');
@@ -1071,24 +1071,45 @@ describe('mounted session interaction', () => {
     expect(result.returned).toEqual({ status: 'Following latest', gap: 0 });
   });
 
-  it('opens the OpenCode smoke session at the live end with its final disclosure in view', async () => {
+  it.each([
+    ['?opencode-smoke', 'fits', 'Following latest'],
+    ['?opencode-smoke-long', 'outgrows', 'Reading history']
+  ])('opens the real OpenCode %s view whose newest turn %s the viewport as %s', async (query, _fit, status) => {
     await browser('set', 'viewport', '1280', '1000');
     try {
-      await browser('open', `${origin}/?opencode-smoke`);
+      await browser('open', `${origin}/${query}`);
       await browser('wait', '--text', 'Incremental smoke event');
-      const result = await evaluate<{ status: string; gap: number; disclosureBelow: number }>(`(async () => {
+      const result = await evaluate<{
+        status: string;
+        gap: number;
+        scrollTop: number;
+        turn: string;
+        turnTop: number;
+        disclosureBelow: number;
+      }>(`(async () => {
         for(let i=0;i<10;i++) await new Promise(resolve => requestAnimationFrame(resolve));
         const root = document.querySelector('.session-viewport');
+        const turn = [...root.querySelectorAll('[data-session-turn="true"]')].at(-1);
         const disclosure = [...root.querySelectorAll('.session-row[data-session-id]')].at(-1).querySelector('button');
         return {
           status: document.querySelector('.session-controls [role=status]').textContent,
           gap: root.scrollHeight - root.scrollTop - root.clientHeight,
+          scrollTop: root.scrollTop,
+          turn: turn.textContent,
+          turnTop: turn.getBoundingClientRect().top - root.getBoundingClientRect().top + root.scrollTop,
           disclosureBelow: disclosure.getBoundingClientRect().bottom - root.getBoundingClientRect().bottom
         };
       })()`);
-      // Only the opening prompt used to be a turn, so its session-long tail held the reader short of the reply.
-      expect(result).toMatchObject({ status: 'Following latest', gap: 0 });
-      expect(result.disclosureBelow).toBeLessThan(0);
+      // The final assistant reply is the newest turn; the opening prompt is not, however long the session grows.
+      expect(result.turn).toContain('Incremental smoke event');
+      expect(result.status).toBe(status);
+      if (status === 'Following latest') {
+        expect(result.gap).toBe(0);
+        expect(result.disclosureBelow).toBeLessThan(0);
+      } else {
+        expect(result.gap).toBeGreaterThan(0);
+        expect(Math.abs(result.scrollTop - result.turnTop)).toBeLessThan(1);
+      }
     } finally {
       await browser('set', 'viewport', '1280', '720');
     }
