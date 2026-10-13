@@ -688,7 +688,7 @@ export class CardsClient {
           return await this.postCardCreation(url, body);
         } catch (error) {
           if (error !== null && typeof error === 'object' && 'status' in error && typeof error.status === 'number') {
-            ambiguousHttpResponse = error.status >= 500 || error.status === 408 || error.status === 409;
+            ambiguousHttpResponse = error.status >= 500 || error.status === 408;
           }
           throw error;
         }

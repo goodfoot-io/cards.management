@@ -127,4 +127,16 @@ describe('card creation reconciliation', () => {
     expect(error).toMatchObject({ creationRequestId: body['creationRequestId'] });
     expect(fetch.mock.calls.filter((call) => (call[1] as RequestInit).method === 'POST')).toHaveLength(1);
   });
+  it('preserves an explicit duplicate-key refusal instead of treating another card as a new success', async () => {
+    const http = transport(vi.fn().mockResolvedValue({ card: { id: 'main-6', title: 'Original' } }));
+    http.post = vi.fn(() =>
+      Promise.reject(new Response(JSON.stringify({ code: 'CARD_CREATION_REQUEST_EXISTS' }), { status: 409 }))
+    );
+    const client = new CardsClient({ baseUrl: 'http://localhost:0' }, http);
+    await expect(
+      client.createCard({ title: 'Changed', creationRequestId: '70eeb270-4a83-4b2d-8be4-c997252e18a7' })
+    ).rejects.toMatchObject({ name: 'ApiError', code: 'CARD_CREATION_REQUEST_EXISTS' });
+    expect(http.post).toHaveBeenCalledTimes(1);
+    expect(http.get).not.toHaveBeenCalled();
+  });
 });
