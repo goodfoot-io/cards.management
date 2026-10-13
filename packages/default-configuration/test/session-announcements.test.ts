@@ -46,6 +46,28 @@ describe('session completion announcements', () => {
     expect(announce(history, [...history, tool('later', 3, 'running')])).toBeUndefined();
   });
 
+  it('waits for a streamed reply its provider marks unfinished', () => {
+    const streamed = (line: number, done: boolean): SessionRow => ({
+      ...reply('streamed', line),
+      parts: [
+        { id: 'streamed/details', kind: 'provider', providerKind: 'details', data: { done }, provenance: at(line) },
+        ...reply('streamed', line).parts
+      ]
+    });
+    const registry = {
+      details: { render: () => null, disclosureKeys: () => [], finished: (data: { done: boolean }) => data.done }
+    };
+    const facts = (rows: readonly SessionRow[]) => completionFacts(rows as never, 'running', registry as never);
+    expect(completionAnnouncement(facts(history), facts([...history, streamed(3, false)]), 'OpenCode')).toBeUndefined();
+    expect(
+      completionAnnouncement(
+        facts([...history, streamed(3, false)]),
+        facts([...history, streamed(4, true)]),
+        'OpenCode'
+      )
+    ).toBe('New reply from OpenCode');
+  });
+
   it('announces a running session that ends, with or without an error', () => {
     expect(announce(history, history, ['running', 'done'])).toBe('Session ended');
     expect(announce(history, history, ['running', 'error'])).toBe('Session ended with an error');

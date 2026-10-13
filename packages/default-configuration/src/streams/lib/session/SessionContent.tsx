@@ -62,6 +62,8 @@ export interface SessionProviderPresentation<Payload> {
   readonly disclosureKeys: (leaf: SessionLeaf, data: Payload) => readonly string[] | undefined;
   /** Tool progress this payload reports, for completion announcements. */
   readonly progress?: (data: Payload) => SessionToolProgress | undefined;
+  /** Whether the streamed message this payload describes has finished, for reply announcements. */
+  readonly finished?: (data: Payload) => boolean;
 }
 
 /** Mapped keys preserve provider payload types across rendering and dependency declarations. */

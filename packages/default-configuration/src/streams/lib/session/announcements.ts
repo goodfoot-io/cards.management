@@ -45,14 +45,16 @@ export function completionFacts<Payloads extends object>(
   let lastLine = 0;
   const replies = new Set<string>();
   const tools = new Map<string, SessionToolProgress & { row: string }>();
+  const entry = (
+    registry: SessionProviderRegistry<Payloads> | undefined,
+    leaf: SessionRow<Payloads> | SessionPart<Payloads>
+  ) => (leaf.kind === 'provider' ? registry?.[leaf.providerKind as keyof Payloads & string] : undefined);
   const progress = (
     registry: SessionProviderRegistry<Payloads> | undefined,
     leaf: SessionRow<Payloads> | SessionPart<Payloads>
   ): SessionToolProgress | undefined => {
     if (leaf.kind === 'tool') return { name: leaf.name, status: leaf.status };
-    if (leaf.kind !== 'provider') return undefined;
-    const entry = registry?.[leaf.providerKind as keyof Payloads & string];
-    return entry?.progress?.(leaf.data as never);
+    return leaf.kind === 'provider' ? entry(registry, leaf)?.progress?.(leaf.data as never) : undefined;
   };
   for (const row of rows) {
     let newest = 0;
@@ -60,7 +62,16 @@ export function completionFacts<Payloads extends object>(
       for (const origin of leaf.provenance) newest = Math.max(newest, origin.lineNumber);
     lines.set(row.id, newest);
     lastLine = Math.max(lastLine, newest);
-    if (row.kind === 'message' && row.role === 'assistant' && row.parts.some((part) => part.kind === 'text'))
+    // A streamed reply speaks once its provider marks the message finished, not on its first text.
+    const finished = row.parts.every(
+      (part) => part.kind !== 'provider' || (entry(providerParts, part)?.finished?.(part.data as never) ?? true)
+    );
+    if (
+      row.kind === 'message' &&
+      row.role === 'assistant' &&
+      finished &&
+      row.parts.some((part) => part.kind === 'text')
+    )
       replies.add(row.id);
     const own = progress(providerRows, row);
     if (own) tools.set(row.id, { ...own, row: row.id });

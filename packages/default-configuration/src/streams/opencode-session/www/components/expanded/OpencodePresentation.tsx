@@ -313,7 +313,11 @@ function NativeDetails({ data, leaf, ...context }: ProviderPresentationProps<Ope
 /** Shared typed renderers work for native rows or parts; absent kinds are never guessed. */
 export const OPENCODE_PRESENTATION: SessionProviderRegistry<OpencodePayloads> = {
   session: { render: (props) => <SessionDetails {...props} />, disclosureKeys: (leaf) => [leaf.id] },
-  messageDetails: { render: (props) => <MessageDetails {...props} />, disclosureKeys: (leaf) => [leaf.id] },
+  messageDetails: {
+    render: (props) => <MessageDetails {...props} />,
+    disclosureKeys: (leaf) => [leaf.id],
+    finished: (data) => data.completed !== undefined
+  },
   attachment: { render: (props) => <Attachment {...props} />, disclosureKeys: (leaf) => [leaf.id] },
   editedFiles: { render: (props) => <EditedFiles {...props} />, disclosureKeys: (leaf) => [leaf.id] },
   step: { render: (props) => <Step {...props} />, disclosureKeys: (leaf) => [leaf.id] },

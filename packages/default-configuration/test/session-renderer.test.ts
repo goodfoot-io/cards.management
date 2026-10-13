@@ -1225,6 +1225,16 @@ describe('mounted session interaction', () => {
         state: { status, input: { pattern: 'smoke' }, ...(status === 'completed' ? { result: 'one match' } : {}) }
       }
     });
+  const opencodeLine = (seq: number, type: string, data: object): string =>
+    JSON.stringify({ v: 1, ts: '2026-09-01T10:03:00.000Z', seq, sessionId: 'ses-opencode-1', type, data });
+  const opencodeReply = (time: object): object => ({
+    id: 'msg-live-reply',
+    role: 'assistant',
+    modelID: 'gpt-5',
+    providerID: 'openai',
+    path: { cwd: '/workspace/opencode' },
+    time
+  });
   const antigravityReply = (idx: number, content: string): string =>
     JSON.stringify({
       v: 1,
@@ -1270,6 +1280,40 @@ describe('mounted session interaction', () => {
       steps: [
         [[opencodeTool(20, 'pending')], ''],
         [[opencodeTool(21, 'completed')], 'grep completed']
+      ]
+    },
+    {
+      provider: 'OpenCode reply',
+      query: '?opencode-smoke',
+      harness: 'providerHarness',
+      steps: [
+        [
+          [
+            opencodeLine(30, 'message', opencodeReply({ created: 1780000003000 })),
+            opencodeLine(31, 'part', {
+              id: 'part-live-reply',
+              messageID: 'msg-live-reply',
+              type: 'text',
+              text: 'Streaming'
+            })
+          ],
+          ''
+        ],
+        [
+          [
+            opencodeLine(32, 'part', {
+              id: 'part-live-reply',
+              messageID: 'msg-live-reply',
+              type: 'text',
+              text: 'Streaming done.'
+            })
+          ],
+          ''
+        ],
+        [
+          [opencodeLine(33, 'message', opencodeReply({ created: 1780000003000, completed: 1780000003900 }))],
+          'New reply from OpenCode'
+        ]
       ]
     },
     {
