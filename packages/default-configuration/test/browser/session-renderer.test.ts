@@ -131,11 +131,13 @@ describe('mounted session interaction', () => {
         return <View source={{sourceKey,generation,filename:'fixture',lines,headLineNumber:1,meta,isLoading:false,error:null}} />;
       }
       function ClaudeApp() {
+        const [meta, setMeta] = useState(null);
         const [lines, setLines] = useState(() => [
           {type:'assistant',uuid:'call-event',message:{content:[{type:'tool_use',id:'call',name:'Bash',input:{command:'pwd'}}]}},
           {type:'attachment',uuid:'hook-event',attachment:{type:'hook_success',hookName:'Check',toolUseID:'call',hookEvent:'PostToolUse',stdout:'a'.repeat(4096)+'b'.repeat(95904),stderr:'',content:'',exitCode:0}}
         ].map(value => JSON.stringify(value)));
         window.claudeHarness = {
+          metadata: isActive => setMeta({lineCount:lines.length,isActive}),
           append: () => setLines(previous => [...previous, JSON.stringify({type:'user',uuid:'result-event',message:{content:[{type:'tool_result',tool_use_id:'call',content:'done'}]}})]),
           group: () => setLines([
             {type:'assistant',uuid:'start',message:{content:'start'}},
@@ -149,7 +151,7 @@ describe('mounted session interaction', () => {
             ...[{type:'skill_listing',names:'oops'}, {type:'invoked_skills',skills:'oops'}, {type:'command_permissions',allowedTools:'oops'}].map(attachment => ({type:'attachment',attachment}))
           ].map(value => JSON.stringify(value)))
         };
-        return <ClaudeSourceView source={{sourceKey:'test/claude',generation:'one',filename:'fixture',lines,headLineNumber:1,meta:null,isLoading:false,error:null}} />;
+        return <ClaudeSourceView source={{sourceKey:'test/claude',generation:'one',filename:'fixture',lines,headLineNumber:1,meta,isLoading:false,error:null}} />;
       }
       const readerChildRows = [{id:'child',kind:'message',role:'user',provenance:[],
         parts:[{id:'child-text',kind:'text',text:'nested content',provenance:[]}]}];
@@ -545,6 +547,41 @@ describe('mounted session interaction', () => {
     expect(result.expanded).toBe('true');
     expect(result.child).toBe('true');
     expect(result.after).toBe(result.before);
+  });
+
+  it('shows and announces Claude completion from metadata without a result record', async () => {
+    await browser('open', `${origin}/?claude`);
+    await browser('wait', '--text', 'Check');
+    const result = await evaluate<{
+      live: string;
+      ended: string;
+      repeated: string[];
+      resumed: string;
+      errors: string[];
+    }>(`(async () => {
+      const frame = () => new Promise(resolve => setTimeout(resolve, 250));
+      const region = document.querySelector('[data-session-announcer]');
+      claudeHarness.push([JSON.stringify({type:'system',subtype:'init',model:'Claude',cwd:'/repo'})]);
+      claudeHarness.metadata(true); await frame();
+      const dot = () => document.querySelector('span[style*="background"]');
+      const live = dot().style.background;
+      const repeated = [];
+      const observer = new MutationObserver(() => { if (region.textContent) repeated.push(region.textContent.trim()); });
+      observer.observe(region, {childList:true,subtree:true,characterData:true});
+      claudeHarness.metadata(false); await frame();
+      const ended = dot().style.background;
+      claudeHarness.metadata(false); await frame();
+      observer.disconnect();
+      claudeHarness.metadata(true); await frame();
+      return {live,ended,repeated,resumed:dot().style.background,errors:sessionErrors};
+    })()`);
+    expect(result).toEqual({
+      live: 'var(--stream-severity-warning-fg)',
+      ended: 'var(--stream-severity-success-fg)',
+      repeated: ['Session ended'],
+      resumed: 'var(--stream-severity-warning-fg)',
+      errors: []
+    });
   });
 
   it('updates nested Claude group attachment details and retains them through collapse and append', async () => {
