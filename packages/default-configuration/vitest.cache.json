@@ -1,44 +1,82 @@
 {
   "files": {
+    "public/packages/default-configuration/test/actions.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-branches.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-live-chain.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-real-transcript.test.ts": [
+      "public/packages/default-configuration/test/fixtures/antigravity/*"
+    ],
     "public/packages/default-configuration/test/antigravity-renderer.test.ts": [],
     "public/packages/default-configuration/test/antigravity-session-projection.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-session.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-stream-settings.test.ts": [
+      "public/packages/default-configuration/package.json",
+      "public/packages/default-configuration/scripts/build.mjs",
+      "public/packages/default-configuration/src/streams/antigravity-session/www/app.tsx",
+      "public/packages/default-configuration/src/streams/antigravity-session/www/build.ts",
+      "public/packages/default-configuration/src/streams/antigravity-session/www/index.html",
+      "public/packages/default-configuration/src/streams/antigravity-session/www/index.meta.json",
+      "public/packages/default-configuration/src/streams/antigravity-session/www/theme.css",
+      "public/packages/default-configuration/src/streams/antigravity-session/www/tsconfig.json"
+    ],
+    "public/packages/default-configuration/test/antigravity-termination.test.ts": [],
     "public/packages/default-configuration/test/antigravity-tool-arguments.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-workspace-trust.test.ts": [],
     "public/packages/default-configuration/test/applyCodexConfig.invariance.test.ts": [],
     "public/packages/default-configuration/test/attachment-classify.test.ts": [],
     "public/packages/default-configuration/test/boundary.test.ts": [],
+    "public/packages/default-configuration/test/cards-assistant.test.ts": [],
+    "public/packages/default-configuration/test/cc-thread-converter.golden.test.ts": [
+      "public/packages/default-configuration/test/fixtures/cc-thread-converter/*.jsonl",
+      "public/packages/default-configuration/test/fixtures/cc-thread-converter/.goldens/*"
+    ],
     "public/packages/default-configuration/test/cc-thread-converter.test.ts": [],
     "public/packages/default-configuration/test/classify-coordination.test.ts": [],
     "public/packages/default-configuration/test/claude-compact-adapter.test.ts": [],
     "public/packages/default-configuration/test/claude-session-end.test.ts": [],
     "public/packages/default-configuration/test/claude-session-projection.test.ts": [],
+    "public/packages/default-configuration/test/claude-session.test.ts": [],
+    "public/packages/default-configuration/test/claude-shutdown.test.ts": [],
+    "public/packages/default-configuration/test/codex-branches.test.ts": [],
     "public/packages/default-configuration/test/codex-compact-adapter.test.ts": [],
     "public/packages/default-configuration/test/codex-compact-fold.test.ts": [],
     "public/packages/default-configuration/test/codex-compact-state.test.ts": [],
+    "public/packages/default-configuration/test/codex-compact-view-live-empty-close.test.ts": [],
     "public/packages/default-configuration/test/codex-dedup.test.ts": [],
     "public/packages/default-configuration/test/codex-expanded.test.ts": [],
+    "public/packages/default-configuration/test/codex-home-collision.test.ts": [],
+    "public/packages/default-configuration/test/codex-hook-trust.test.ts": [
+      "public/codex/runtime/hooks/hooks.json",
+      "public/codex/cards-assistant/hooks/hooks.json"
+    ],
     "public/packages/default-configuration/test/codex-parser.test.ts": [],
+    "public/packages/default-configuration/test/codex-plugin-restage.test.ts": [],
+    "public/packages/default-configuration/test/codex-session-projection.test.ts": [
+      "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl"
+    ],
+    "public/packages/default-configuration/test/codex-session.test.ts": [],
+    "public/packages/default-configuration/test/codex-shutdown.test.ts": [],
     "public/packages/default-configuration/test/codex-thread-converter.test.ts": [],
     "public/packages/default-configuration/test/codex-tool-summary.test.ts": [],
+    "public/packages/default-configuration/test/codex-vendor-imports-eacces.test.ts": [],
     "public/packages/default-configuration/test/compact-facts.test.ts": [],
     "public/packages/default-configuration/test/compact-state-metrics.test.ts": [],
     "public/packages/default-configuration/test/compact-view-away-summary.test.ts": [],
+    "public/packages/default-configuration/test/compact-view-live-empty-close.test.ts": [],
     "public/packages/default-configuration/test/compact-view-reconcile.test.ts": [],
+    "public/packages/default-configuration/test/create-worktree.test.ts": [],
+    "public/packages/default-configuration/test/expanded-view-bootstrap-race.test.ts": [],
     "public/packages/default-configuration/test/expanded-view-dedup.test.ts": [],
+    "public/packages/default-configuration/test/expanded-view-uncaught-exceptions.test.ts": [],
     "public/packages/default-configuration/test/hook-row.test.ts": [],
+    "public/packages/default-configuration/test/interview.test.ts": [],
     "public/packages/default-configuration/test/json-block.test.ts": [],
     "public/packages/default-configuration/test/markdown.test.ts": [],
     "public/packages/default-configuration/test/merge-consecutive-messages.test.ts": [],
     "public/packages/default-configuration/test/opencode-compact-fold.test.ts": [],
     "public/packages/default-configuration/test/opencode-parser.test.ts": [],
-    "public/packages/default-configuration/test/opencode-session-review.test.ts": [],
-    "public/packages/default-configuration/test/raw-fallback.test.ts": [],
-    "public/packages/default-configuration/test/session-announcements.test.ts": [],
-    "public/packages/default-configuration/test/session-header.test.ts": [],
-    "public/packages/default-configuration/test/session-projection.test.ts": [],
-    "public/packages/default-configuration/test/session-renderer.test.ts": [],
-    "public/packages/default-configuration/test/session-source.test.ts": [],
-    "public/packages/default-configuration/test/codex-session-projection.test.ts": [
-      "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl"
+    "public/packages/default-configuration/test/opencode-session-large-details.test.ts": [
+      "public/packages/default-configuration/test/fixtures/opencode/large-tool-lifecycle.template.jsonl"
     ],
     "public/packages/default-configuration/test/opencode-session-projection.test.ts": [
       "public/packages/default-configuration/test/fixtures/opencode/full-lifecycle.jsonl"
@@ -46,21 +84,115 @@
     "public/packages/default-configuration/test/opencode-session-render-integration.test.ts": [
       "public/packages/default-configuration/test/fixtures/opencode/full-lifecycle.jsonl"
     ],
-    "public/packages/default-configuration/test/opencode-session-large-details.test.ts": [
-      "public/packages/default-configuration/test/fixtures/opencode/large-tool-lifecycle.template.jsonl"
+    "public/packages/default-configuration/test/opencode-session-review.test.ts": [],
+    "public/packages/default-configuration/test/opencode-session.binary-gate.test.ts": [
+      "public/opencode/**"
     ],
-    "public/packages/default-configuration/test/cc-thread-converter.golden.test.ts": [
-      "public/packages/default-configuration/test/fixtures/cc-thread-converter/*.jsonl",
-      "public/packages/default-configuration/test/fixtures/cc-thread-converter/.goldens/*"
+    "public/packages/default-configuration/test/opencode-session.hook-registration.test.ts": [],
+    "public/packages/default-configuration/test/opencode-session.test.ts": [],
+    "public/packages/default-configuration/test/process-tree-termination.test.ts": [],
+    "public/packages/default-configuration/test/production-renderer-artifacts.test.ts": [
+      "public/packages/default-configuration/scripts/generate-antigravity-entry.mjs",
+      "public/packages/default-configuration/scripts/generate-opencode-entry.mjs",
+      "public/packages/default-configuration/src/lib/**",
+      "public/packages/default-configuration/src/streams/*/www/**",
+      "packages/cards/web/src/styles/**"
     ],
+    "public/packages/default-configuration/test/publish-bundle-atomic.test.ts": [],
+    "public/packages/default-configuration/test/raw-fallback.test.ts": [],
+    "public/packages/default-configuration/test/session-announcements.test.ts": [],
+    "public/packages/default-configuration/test/session-header.test.ts": [],
     "public/packages/default-configuration/test/session-identity-uniqueness.test.ts": [
       "public/packages/default-configuration/test/fixtures/cc-thread-converter/*.jsonl",
       "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl",
       "public/packages/default-configuration/test/fixtures/opencode/*.jsonl"
     ],
-    "public/packages/default-configuration/test/codex-hook-trust.test.ts": [
-      "public/codex/runtime/hooks/hooks.json",
-      "public/codex/cards-assistant/hooks/hooks.json"
+    "public/packages/default-configuration/test/session-projection.test.ts": [],
+    "public/packages/default-configuration/test/session-renderer.test.ts": [],
+    "public/packages/default-configuration/test/session-source.test.ts": [],
+    "public/packages/default-configuration/test/slot-acquire.test.ts": [],
+    "public/packages/default-configuration/test/slot-cleanup.test.ts": [],
+    "public/packages/default-configuration/test/slot-handler-process.test.ts": [],
+    "public/packages/default-configuration/test/slot-intent.test.ts": [],
+    "public/packages/default-configuration/test/slot-session.test.ts": [],
+    "public/packages/default-configuration/test/slot-submodules.test.ts": [],
+    "public/packages/default-configuration/test/spawn-cli.test.ts": [],
+    "public/packages/default-configuration/test/stale-worktree-repair.test.ts": [],
+    "public/packages/default-configuration/test/worktree-maintenance.test.ts": [
+      "public/packages/default-configuration/src/streams/claude-code-session/www/**",
+      "public/packages/default-configuration/src/streams/codex-session/www/**",
+      "public/packages/default-configuration/dist/www-entry/**"
     ]
+  },
+  "executables": {
+    "files": {
+      "public/packages/default-configuration/test/antigravity-workspace-trust.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/create-worktree.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/opencode-session.binary-gate.test.ts": [
+        "git",
+        "opencode"
+      ],
+      "public/packages/default-configuration/test/production-renderer-artifacts.test.ts": [
+        "yarn"
+      ],
+      "public/packages/default-configuration/test/slot-acquire.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/slot-cleanup.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/slot-handler-process.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/slot-intent.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/slot-session.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/slot-submodules.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/stale-worktree-repair.test.ts": [
+        "git"
+      ],
+      "public/packages/default-configuration/test/worktree-maintenance.test.ts": [
+        "git"
+      ]
+    }
+  },
+  "toolchain": {
+    "files": {
+      "public/packages/default-configuration/test/production-renderer-artifacts.test.ts": [
+        "@cards.management/sdk",
+        "@vscode/codicons",
+        "bun",
+        "bun-plugin-tailwind",
+        "react",
+        "react-dom",
+        "tailwindcss",
+        "zustand"
+      ],
+      "public/packages/default-configuration/test/slot-handler-process.test.ts": [
+        "tsx"
+      ],
+      "public/packages/default-configuration/test/worktree-maintenance.test.ts": [
+        "esbuild"
+      ]
+    }
+  },
+  "roots": {
+    "files": {
+      "public/packages/default-configuration/test/slot-handler-process.test.ts": [
+        "public/packages/default-configuration/test/helpers/slot-handler.ts"
+      ]
+    }
+  },
+  "dynamicImports": {
+    "public/packages/sdk/src/config/cli/config-loader.ts": []
   }
 }

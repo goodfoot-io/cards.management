@@ -5,12 +5,13 @@
  * @module
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { processWwwRoot } from '../../../src/config/cli/www-bundler.js';
 
-const FIXTURES_DIR = '/tmp/cards-sdk-www-bundler-test-fixtures';
+const FIXTURES_DIR = mkdtempSync(join(tmpdir(), 'cards-sdk-www-bundler-test-fixtures-'));
 
 beforeAll(() => {
   mkdirSync(FIXTURES_DIR, { recursive: true });

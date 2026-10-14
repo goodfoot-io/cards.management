@@ -33,6 +33,7 @@ export default withTestOutput(
       include: ['test/**/*.test.ts'],
       globals: false,
       globalSetup: ['./test/setup/build-once.ts'],
+      setupFiles: ['./test/setup/isolate-home.ts'],
       // Several suites spin up real git workspaces (TestGitWorkspace). git
       // subprocess overhead on Windows pushes setup past the 5s/10s defaults;
       // these allowances are ample on Linux/macOS where the work finishes fast.

@@ -31,11 +31,19 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 const buildScript = resolve(packageRoot, 'scripts', 'build.mjs');
 
 /**
- * Test files declared in `vitest.cache.json` never read the compiled bundles, so
- * the build is only needed when some other file is pending execution.
+ * Test files declared in `vitest.cache.json` that name no emitted bundle among
+ * their extra inputs never read the compiled bundles, so the build is only
+ * needed when some other file is pending execution. Emitted bundles live in the
+ * plugin trees directly under `public/` (outside `public/packages/`); a file
+ * that declares one of them as an input needs the build to have run first.
  */
+const contract = JSON.parse(readFileSync(resolve(packageRoot, 'vitest.cache.json'), 'utf8')) as {
+  files: Record<string, string[]>;
+};
 const buildFreeFiles = new Set(
-  Object.keys((JSON.parse(readFileSync(resolve(packageRoot, 'vitest.cache.json'), 'utf8')) as { files: object }).files)
+  Object.entries(contract.files)
+    .filter(([, inputs]) => !inputs.some((glob) => glob.startsWith('public/') && !glob.startsWith('public/packages/')))
+    .map(([file]) => file)
 );
 const repoRelativePrefix = relative(resolve(packageRoot, '..', '..', '..'), packageRoot);
 

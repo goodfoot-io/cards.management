@@ -6,7 +6,7 @@
  * @module
  */
 
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,7 +14,7 @@ import { build, main } from '../../../src/config/cli/index.js';
 
 // Test fixtures directory - built with path.join so it is separator-correct on
 // every platform (build() resolves outdir to a native absolute path).
-const FIXTURES_DIR = join(tmpdir(), 'cards-sdk-cli-index-test-fixtures');
+const FIXTURES_DIR = mkdtempSync(join(tmpdir(), 'cards-sdk-cli-index-test-fixtures-'));
 
 // Module-level setup/teardown so fixtures are available to all describe blocks
 beforeAll(() => {

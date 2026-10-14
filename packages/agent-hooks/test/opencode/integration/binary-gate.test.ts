@@ -37,16 +37,14 @@ import { spawn, spawnSync } from 'node:child_process';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { homedir, tmpdir } from 'node:os';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-/** Where the installed CLI lives in the pinned environment. */
-const FALLBACK_BINARY = path.join(homedir(), '.opencode', 'bin', 'opencode');
-
 /**
- * Resolves the opencode CLI: explicit override → PATH → pinned install path.
+ * Resolves the opencode CLI: explicit override → PATH. There is no home-directory fallback: HOME is
+ * owned by the per-file test setup, and the cache contract hashes the PATH `opencode` by content.
  *
  * @returns Absolute binary path, or `null` when unavailable (tier skips).
  */
@@ -62,7 +60,7 @@ function resolveOpencodeBinary(): string | null {
       return candidate;
     }
   }
-  return existsSync(FALLBACK_BINARY) ? FALLBACK_BINARY : null;
+  return null;
 }
 
 const binary = resolveOpencodeBinary();

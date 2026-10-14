@@ -6,7 +6,7 @@
  * @module
  */
 
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -17,7 +17,7 @@ import { loadConfig } from '../../../src/config/cli/config-loader.js';
 // /var symlink that resolves to /private/var; Windows 8.3 short names and a
 // symlinked $TMPDIR on Linux differ likewise). Built with path.join so it is
 // separator-correct on every platform.
-const FIXTURES_DIR = join(realpathSync(tmpdir()), 'cards-sdk-config-loader-fixtures');
+const FIXTURES_DIR = realpathSync(mkdtempSync(join(tmpdir(), 'cards-sdk-config-loader-fixtures-')));
 
 describe('loadConfig', () => {
   beforeAll(() => {

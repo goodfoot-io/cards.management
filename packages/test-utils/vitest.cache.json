@@ -5,16 +5,30 @@
     "public/packages/test-utils/test/http/TestHttpClient.test.ts": [],
     "public/packages/test-utils/test/ws/TestWebSocketServer.test.ts": [],
     "public/packages/test-utils/test/ws/TestWebSocketServer.awaitMessage-leak.test.ts": [],
-    "public/packages/test-utils/test/build-unchanged.test.ts": []
+    "public/packages/test-utils/test/build-unchanged.test.ts": [],
+    "public/packages/test-utils/test/git/TestIssueRepository.test.ts": [],
+    "public/packages/test-utils/test/git/abortTeardown.test.ts": [],
+    "public/packages/test-utils/test/vitest/gitHomeIsolation.test.ts": []
   },
   "roots": {
     "files": {
-      "public/packages/test-utils/test/build-unchanged.test.ts": ["public/packages/test-utils/src/bin/build-unchanged.ts"]
+      "public/packages/test-utils/test/build-unchanged.test.ts": ["public/packages/test-utils/src/bin/build-unchanged.ts"],
+      "public/packages/test-utils/test/git/abortTeardown.test.ts": ["public/packages/test-utils/test/git/abortUnhandledRejectionChild.ts"],
+      "public/packages/test-utils/test/vitest/gitHomeIsolation.test.ts": ["public/packages/test-utils/test/vitest/gitHomeIsolationChild.ts"]
+    }
+  },
+  "toolchain": {
+    "files": {
+      "public/packages/test-utils/test/git/abortTeardown.test.ts": ["tsx"],
+      "public/packages/test-utils/test/vitest/gitHomeIsolation.test.ts": ["tsx"]
     }
   },
   "executables": {
     "files": {
-      "public/packages/test-utils/test/build-unchanged.test.ts": ["node", "sh"]
+      "public/packages/test-utils/test/build-unchanged.test.ts": ["node", "sh"],
+      "public/packages/test-utils/test/git/TestIssueRepository.test.ts": ["git"],
+      "public/packages/test-utils/test/git/abortTeardown.test.ts": ["git"],
+      "public/packages/test-utils/test/vitest/gitHomeIsolation.test.ts": ["git"]
     }
   }
 }

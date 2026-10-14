@@ -16,6 +16,7 @@
 import { exec as execCallback } from 'node:child_process';
 import * as crypto from 'node:crypto';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -39,11 +40,7 @@ const FACTORIES_PATH = path.resolve(__dirname, '../../src/config/factories/index
 /**
  * Temporary directory for test fixtures.
  */
-const FIXTURES_BASE = path.join(
-  '/tmp/claude-1000/-workspace--worktrees-settings-updates',
-  crypto.randomUUID(),
-  'builder-cli-fixtures'
-);
+const FIXTURES_BASE = path.join(os.tmpdir(), `sdk-builder-cli-${crypto.randomUUID()}`);
 
 // ============================================================================
 // Test Helpers

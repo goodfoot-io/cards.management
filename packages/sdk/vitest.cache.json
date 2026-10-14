@@ -1,21 +1,137 @@
 {
   "files": {
+    "public/packages/sdk/test/adhoc-cleanup.test.ts": [],
+    "public/packages/sdk/test/bin/card-cross-workspace.test.ts": [],
+    "public/packages/sdk/test/bin/card.attach-activation-outcome.test.ts": [],
+    "public/packages/sdk/test/bin/card.attach-agent-pid.test.ts": [],
+    "public/packages/sdk/test/bin/card.attach-bound-without-marker.test.ts": [],
+    "public/packages/sdk/test/bin/card.create-activation-outcome.test.ts": [],
+    "public/packages/sdk/test/bin/card.create-agent-pid.test.ts": [],
+    "public/packages/sdk/test/bin/card.creation-outcome.test.ts": [],
+    "public/packages/sdk/test/bin/card.test.ts": [],
+    "public/packages/sdk/test/bin/cards-dev.test.ts": [],
+    "public/packages/sdk/test/bin/cards-extension-vscode.test.ts": [],
+    "public/packages/sdk/test/bin/cards-extension.test.ts": [],
+    "public/packages/sdk/test/bin/cards-shutdown.test.ts": [
+      "public/packages/sdk/tsconfig.json"
+    ],
+    "public/packages/sdk/test/bin/childProcess.test.ts": [],
+    "public/packages/sdk/test/bin/createWorktreeCli.test.ts": [],
+    "public/packages/sdk/test/bin/removeWorktreeCli.test.ts": [
+      "public/packages/sdk/tsconfig.json"
+    ],
+    "public/packages/sdk/test/bin/shim-electron-run-as-node.test.ts": [
+      "public/packages/sdk/src/bin/cards-dev.cmd",
+      "public/packages/sdk/src/bin/cards-dev.sh",
+      "public/packages/sdk/src/bin/cards-extension-cli.cmd",
+      "public/packages/sdk/src/bin/cards-extension-cli.sh",
+      "public/packages/sdk/src/bin/cards.cmd",
+      "public/packages/sdk/src/bin/cards.sh",
+      "public/packages/sdk/src/bin/create-worktree.cmd",
+      "public/packages/sdk/src/bin/create-worktree.sh",
+      "public/packages/sdk/src/bin/remove-worktree.cmd",
+      "public/packages/sdk/src/bin/remove-worktree.sh",
+      "public/packages/sdk/src/bin/stream-sync-watcher.cmd",
+      "public/packages/sdk/src/bin/stream-sync-watcher.sh"
+    ],
+    "public/packages/sdk/test/bin/spawn-stream-sync-watcher.test.ts": [],
+    "public/packages/sdk/test/bin/spawnAdhocAttribution.outcome.test.ts": [],
+    "public/packages/sdk/test/bin/spawnAdhocAttribution.secondCardActivation.test.ts": [],
+    "public/packages/sdk/test/bin/spawnAdhocAttribution.test.ts": [],
+    "public/packages/sdk/test/bin/stream-sync-watcher.integration.test.ts": [
+      "public/packages/sdk/tsconfig.json"
+    ],
+    "public/packages/sdk/test/bin/stream-sync-watcher.test.ts": [],
+    "public/packages/sdk/test/bounded-git.test.ts": [
+      "public/packages/sdk/tsconfig.json"
+    ],
+    "public/packages/sdk/test/cardRepo.test.ts": [],
     "public/packages/sdk/test/cardSummary.test.ts": [],
+    "public/packages/sdk/test/cards-config.test.ts": [],
+    "public/packages/sdk/test/cardsClient.createIdempotency.test.ts": [],
+    "public/packages/sdk/test/cardsClient.creationReconciliation.test.ts": [],
+    "public/packages/sdk/test/cardsClient.retry.test.ts": [],
+    "public/packages/sdk/test/cardsClient.retryBounds.test.ts": [],
+    "public/packages/sdk/test/cardsClient.timeoutBackoff.test.ts": [],
+    "public/packages/sdk/test/cardsParentBranch.test.ts": [],
+    "public/packages/sdk/test/cardsParentConfigCardBound.test.ts": [],
+    "public/packages/sdk/test/checkout-removal.test.ts": [],
+    "public/packages/sdk/test/client/CardsClient.proxy.test.ts": [],
+    "public/packages/sdk/test/client/CardsClient.rootCommand.test.ts": [],
+    "public/packages/sdk/test/client/CardsClient.stale-token.test.ts": [],
+    "public/packages/sdk/test/client/CardsClient.test.ts": [],
+    "public/packages/sdk/test/client/EventSubscriber.handoff.test.ts": [],
+    "public/packages/sdk/test/client/EventSubscriber.journal.test.ts": [],
+    "public/packages/sdk/test/client/EventSubscriber.test.ts": [],
+    "public/packages/sdk/test/client/api-discovery.test.ts": [],
     "public/packages/sdk/test/client/cardRepoFilters.test.ts": [],
+    "public/packages/sdk/test/client/runtime/actions.test.ts": [],
+    "public/packages/sdk/test/client/runtime/backoff.test.ts": [],
+    "public/packages/sdk/test/client/runtime/client.test.ts": [],
+    "public/packages/sdk/test/client/runtime/credential-file.test.ts": [],
+    "public/packages/sdk/test/client/runtime/durable-results/read.test.ts": [],
+    "public/packages/sdk/test/client/runtime/durable-results/store.test.ts": [],
+    "public/packages/sdk/test/client/runtime/durable-results/types.test.ts": [],
+    "public/packages/sdk/test/client/runtime/handshake.test.ts": [],
+    "public/packages/sdk/test/client/runtime/heartbeat.test.ts": [],
+    "public/packages/sdk/test/client/runtime/outbox/drain.test.ts": [],
+    "public/packages/sdk/test/client/runtime/outbox/reconcile.test.ts": [],
+    "public/packages/sdk/test/client/runtime/outbox/store.test.ts": [],
+    "public/packages/sdk/test/client/runtime/synchronization.test.ts": [],
     "public/packages/sdk/test/client/types/client.test.ts": [],
     "public/packages/sdk/test/client/types/errors.test.ts": [],
     "public/packages/sdk/test/client/types/events.test.ts": [],
+    "public/packages/sdk/test/config/completion-handoff.test.ts": [],
+    "public/packages/sdk/test/config/runtime-shutdown.test.ts": [],
+    "public/packages/sdk/test/config/shutdown-lifecycle.test.ts": [],
+    "public/packages/sdk/test/config/watcher/reconnectingWatcher.test.ts": [],
     "public/packages/sdk/test/configuration/cli/args.test.ts": [],
+    "public/packages/sdk/test/configuration/cli/compiler-log-preamble-order.test.ts": [],
+    "public/packages/sdk/test/configuration/cli/compiler.test.ts": [],
+    "public/packages/sdk/test/configuration/cli/config-loader.test.ts": [],
+    "public/packages/sdk/test/configuration/cli/index.test.ts": [],
+    "public/packages/sdk/test/configuration/cli/www-bundler.test.ts": [],
+    "public/packages/sdk/test/configuration/command-types.test.ts": [],
+    "public/packages/sdk/test/configuration/config.test.ts": [],
+    "public/packages/sdk/test/configuration/define-config.test.ts": [],
+    "public/packages/sdk/test/configuration/detached-child-output.test.ts": [],
+    "public/packages/sdk/test/configuration/env.test.ts": [],
+    "public/packages/sdk/test/configuration/exit-codes.test.ts": [],
+    "public/packages/sdk/test/configuration/factories/action.test.ts": [],
+    "public/packages/sdk/test/configuration/factories/cards-assistant.test.ts": [],
+    "public/packages/sdk/test/configuration/inputs.test.ts": [],
+    "public/packages/sdk/test/configuration/logger.test.ts": [],
+    "public/packages/sdk/test/configuration/main-repo-root.test.ts": [],
+    "public/packages/sdk/test/configuration/root-command.test.ts": [],
+    "public/packages/sdk/test/configuration/runtime-sighup-survival.test.ts": [],
+    "public/packages/sdk/test/configuration/runtime.test.ts": [],
     "public/packages/sdk/test/configuration/schema.test.ts": [],
     "public/packages/sdk/test/configuration/type-utils.test.ts": [],
+    "public/packages/sdk/test/context.test.ts": [],
+    "public/packages/sdk/test/e2e/build-output.test.ts": [
+      "public/packages/default-configuration/dist/bin/**",
+      "public/packages/default-configuration/dist/settings.json"
+    ],
+    "public/packages/sdk/test/e2e/builder-cli.test.ts": [],
     "public/packages/sdk/test/getDerivedTags.test.ts": [],
     "public/packages/sdk/test/getRelationPseudotags.test.ts": [],
+    "public/packages/sdk/test/git-config-retry.test.ts": [],
+    "public/packages/sdk/test/gitConfigWithRetry.test.ts": [],
+    "public/packages/sdk/test/process-identity-session.test.ts": [],
+    "public/packages/sdk/test/process-identity.test.ts": [],
+    "public/packages/sdk/test/process-tree.test.ts": [],
+    "public/packages/sdk/test/process-utils.mocked.test.ts": [],
     "public/packages/sdk/test/protocol/apiHandoff.test.ts": [],
     "public/packages/sdk/test/protocol/index.test.ts": [],
     "public/packages/sdk/test/protocol/types/csp-agreement.test.ts": [],
+    "public/packages/sdk/test/protocol/types/html-asset-references.test.ts": [],
     "public/packages/sdk/test/protocol/types/html-script-attrs.test.ts": [],
     "public/packages/sdk/test/protocol/types/html.test.ts": [],
+    "public/packages/sdk/test/protocol/types/root-command.test.ts": [],
+    "public/packages/sdk/test/protocol/types/runtime-authorization.test.ts": [],
+    "public/packages/sdk/test/protocol/types/runtime-cleanup.test.ts": [],
     "public/packages/sdk/test/protocol/types/runtime-delivery.test.ts": [],
+    "public/packages/sdk/test/protocol/types/runtime-envelope.test.ts": [],
     "public/packages/sdk/test/protocol/types/runtime-identity.test.ts": [],
     "public/packages/sdk/test/protocol/types/runtime-transitions.test.ts": [],
     "public/packages/sdk/test/protocol/types/runtime-transport.test.ts": [],
@@ -24,15 +140,298 @@
     "public/packages/sdk/test/protocol/types/url-space-agreement.test.ts": [],
     "public/packages/sdk/test/protocol/types/vars-parity.test.ts": [],
     "public/packages/sdk/test/protocol/types/webview.test.ts": [],
+    "public/packages/sdk/test/protocol/types/worktree-slots.test.ts": [],
+    "public/packages/sdk/test/session-resolver.test.ts": [],
+    "public/packages/sdk/test/slot-checkout.test.ts": [],
+    "public/packages/sdk/test/slot-lock.stress.test.ts": [
+      "public/packages/sdk/tsconfig.json"
+    ],
+    "public/packages/sdk/test/slot-lock.test.ts": [],
     "public/packages/sdk/test/stream-store/actions.test.ts": [],
+    "public/packages/sdk/test/stream-store/store-auto-subscribe.test.ts": [],
+    "public/packages/sdk/test/stream-store/store.test.ts": [],
+    "public/packages/sdk/test/symlink-capability.test.ts": [],
+    "public/packages/sdk/test/timer.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/adapters/antigravity.test.ts": [],
     "public/packages/sdk/test/transcript-sync/adapters/claude-code.test.ts": [],
     "public/packages/sdk/test/transcript-sync/adapters/codex.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/adapters/dispatch.test.ts": [],
     "public/packages/sdk/test/transcript-sync/adapters/opencode.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/composition-antigravity.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/commit.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/execution-finalization.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/finalization-lock.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/gitignore.test.ts": [],
     "public/packages/sdk/test/transcript-sync/engine/lifecycle.test.ts": [],
     "public/packages/sdk/test/transcript-sync/engine/matcher.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/reconciler.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/recovery.test.ts": [],
     "public/packages/sdk/test/transcript-sync/engine/session-artifacts.test.ts": [],
-    "public/packages/sdk/test/transcript-sync/manifest.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/session-status.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/sqlite-poll.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/status.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/sync-chain.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/tailer.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/termination-flush.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/engine/watch-installer.test.ts": [],
     "public/packages/sdk/test/transcript-sync/manifest-v2.test.ts": [],
-    "public/packages/sdk/test/transcript-sync/sqlite-poll-records.test.ts": []
+    "public/packages/sdk/test/transcript-sync/manifest.test.ts": [],
+    "public/packages/sdk/test/transcript-sync/sqlite-poll-records.test.ts": [],
+    "public/packages/sdk/test/unboundWorktreeCandidates.test.ts": [],
+    "public/packages/sdk/test/worktree-hooks.test.ts": [],
+    "public/packages/sdk/test/worktree-purge.test.ts": [],
+    "public/packages/sdk/test/worktree-removal.test.ts": [],
+    "public/packages/sdk/test/worktree-slot-boundary.test.ts": [],
+    "public/packages/sdk/test/worktree-stale-symlink-registration.outcome.test.ts": [],
+    "public/packages/sdk/test/worktree-symlink-root.test.ts": [],
+    "public/packages/sdk/test/worktree.test.ts": [],
+    "public/packages/sdk/test/worktreeCardBoundFile.test.ts": [],
+    "public/packages/sdk/test/worktreeForCard.attribution-outcome.test.ts": [],
+    "public/packages/sdk/test/worktreeForCard.test.ts": [],
+    "public/packages/sdk/test/worktreeInclude.test.ts": [],
+    "public/packages/sdk/test/worktreePathPolicy.test.ts": [],
+    "public/packages/sdk/test/worktreePerf.test.ts": [],
+    "public/packages/sdk/test/worktreeReroute.test.ts": []
+  },
+  "executables": {
+    "files": {
+      "public/packages/sdk/test/adhoc-cleanup.test.ts": [
+        "cat",
+        "git",
+        "ps"
+      ],
+      "public/packages/sdk/test/bin/card-cross-workspace.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/bin/card.attach-activation-outcome.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/bin/card.attach-agent-pid.test.ts": [
+        "cat",
+        "git",
+        "ps"
+      ],
+      "public/packages/sdk/test/bin/card.attach-bound-without-marker.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/bin/card.create-activation-outcome.test.ts": [
+        "cat",
+        "git",
+        "ps"
+      ],
+      "public/packages/sdk/test/bin/card.create-agent-pid.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/bin/card.test.ts": [
+        "cat",
+        "git",
+        "ps"
+      ],
+      "public/packages/sdk/test/bin/cards-shutdown.test.ts": [
+        "node"
+      ],
+      "public/packages/sdk/test/bin/childProcess.test.ts": [
+        "node"
+      ],
+      "public/packages/sdk/test/bin/createWorktreeCli.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/bin/removeWorktreeCli.test.ts": [
+        "git",
+        "node"
+      ],
+      "public/packages/sdk/test/bin/stream-sync-watcher.integration.test.ts": [
+        "git",
+        "node"
+      ],
+      "public/packages/sdk/test/bin/stream-sync-watcher.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/bounded-git.test.ts": [
+        "git",
+        "node"
+      ],
+      "public/packages/sdk/test/cardsParentBranch.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/cardsParentConfigCardBound.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/checkout-removal.test.ts": [
+        "mkfifo"
+      ],
+      "public/packages/sdk/test/configuration/main-repo-root.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/configuration/runtime-sighup-survival.test.ts": [
+        "node"
+      ],
+      "public/packages/sdk/test/context.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/e2e/build-output.test.ts": [
+        "yarn"
+      ],
+      "public/packages/sdk/test/e2e/builder-cli.test.ts": [
+        "node"
+      ],
+      "public/packages/sdk/test/git-config-retry.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/gitConfigWithRetry.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/process-identity-session.test.ts": [
+        "node"
+      ],
+      "public/packages/sdk/test/process-identity.test.ts": [
+        "ps"
+      ],
+      "public/packages/sdk/test/slot-checkout.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/slot-lock.stress.test.ts": [
+        "bash",
+        "dash",
+        "node",
+        "sh",
+        "zsh"
+      ],
+      "public/packages/sdk/test/slot-lock.test.ts": [
+        "ps",
+        "sh"
+      ],
+      "public/packages/sdk/test/transcript-sync/engine/commit.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/transcript-sync/engine/finalization-lock.test.ts": [
+        "cat",
+        "ps"
+      ],
+      "public/packages/sdk/test/worktree-hooks.test.ts": [
+        "bash",
+        "git",
+        "node"
+      ],
+      "public/packages/sdk/test/worktree-purge.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/worktree-removal.test.ts": [
+        "git",
+        "ps"
+      ],
+      "public/packages/sdk/test/worktree-slot-boundary.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/worktree-stale-symlink-registration.outcome.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/worktree-symlink-root.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/worktree.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/worktreePathPolicy.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/worktreeReroute.test.ts": [
+        "git"
+      ]
+    }
+  },
+  "toolchain": {
+    "files": {
+      "public/packages/sdk/test/bin/card.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/bin/cards-shutdown.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/bin/createWorktreeCli.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/bin/removeWorktreeCli.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/bin/stream-sync-watcher.integration.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/bounded-git.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/config/runtime-shutdown.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/configuration/cli/compiler.test.ts": [
+        "esbuild"
+      ],
+      "public/packages/sdk/test/configuration/cli/index.test.ts": [
+        "esbuild"
+      ],
+      "public/packages/sdk/test/configuration/root-command.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/e2e/builder-cli.test.ts": [
+        "esbuild"
+      ],
+      "public/packages/sdk/test/slot-lock.stress.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/slot-lock.test.ts": [
+        "tsx"
+      ],
+      "public/packages/sdk/test/worktree-slot-boundary.test.ts": [
+        "tsx"
+      ]
+    }
+  },
+  "roots": {
+    "files": {
+      "public/packages/sdk/test/bin/cards-shutdown.test.ts": [
+        "public/packages/sdk/src/bin/cards.ts"
+      ],
+      "public/packages/sdk/test/bin/createWorktreeCli.test.ts": [
+        "public/packages/sdk/src/bin/create-worktree.ts"
+      ],
+      "public/packages/sdk/test/bin/removeWorktreeCli.test.ts": [
+        "public/packages/sdk/src/bin/create-worktree.ts",
+        "public/packages/sdk/src/bin/remove-worktree.ts"
+      ],
+      "public/packages/sdk/test/bin/stream-sync-watcher.integration.test.ts": [
+        "public/packages/sdk/src/bin/stream-sync-watcher.ts"
+      ],
+      "public/packages/sdk/test/bounded-git.test.ts": [
+        "public/packages/sdk/src/config/runtime-shutdown.ts",
+        "public/packages/sdk/src/slot-lock.ts"
+      ],
+      "public/packages/sdk/test/config/runtime-shutdown.test.ts": [
+        "public/packages/sdk/src/config/runtime.ts"
+      ],
+      "public/packages/sdk/test/configuration/cli/compiler-log-preamble-order.test.ts": [
+        "public/packages/sdk/src/config/factories/index.ts",
+        "public/packages/sdk/src/config/runtime.ts"
+      ],
+      "public/packages/sdk/test/configuration/cli/compiler.test.ts": [
+        "public/packages/sdk/src/config/factories/index.ts"
+      ],
+      "public/packages/sdk/test/configuration/cli/index.test.ts": [
+        "public/packages/sdk/src/config/factories/index.ts"
+      ],
+      "public/packages/sdk/test/configuration/root-command.test.ts": [
+        "public/packages/sdk/src/config/factories/worktree-maintenance.ts",
+        "public/packages/sdk/src/config/runtime.ts"
+      ],
+      "public/packages/sdk/test/e2e/builder-cli.test.ts": [
+        "public/packages/sdk/src/config/factories/index.ts"
+      ],
+      "public/packages/sdk/test/worktree-slot-boundary.test.ts": [
+        "public/packages/sdk/src/bin/create-worktree.ts",
+        "public/packages/sdk/src/bin/remove-worktree.ts"
+      ]
+    }
+  },
+  "dynamicImports": {
+    "public/packages/sdk/src/config/cli/config-loader.ts": []
   }
 }

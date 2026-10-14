@@ -5,6 +5,9 @@
  * @summary Tests for the OpenCode core handlers
  */
 
+import { mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createUserPromptSubmitPlugin } from '../../../src/opencode/internal/core-handlers.js';
 import {
@@ -153,7 +156,8 @@ describe('CardsUserPromptSubmit (core)', () => {
   it('suppresses the nudge when CARD_ID already matches a confirmed card', async () => {
     process.env['CARD_ID'] = 'main-453';
     try {
-      // main-453's repo exists via makeCardRepo in beforeEach.
+      // Card IDs are confirmed against `~/.cards/cards-repos/`; HOME is owned by the per-file test setup.
+      mkdirSync(join(homedir(), '.cards', 'cards-repos', 'main-453'), { recursive: true });
       const parts = await runNudge('continue with main-453 card');
       expect(parts).toHaveLength(1);
     } finally {

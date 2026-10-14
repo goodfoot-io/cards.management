@@ -28,15 +28,7 @@ const FACTORIES_PATH = path.resolve(__dirname, '../../../src/config/factories/in
  * @returns Absolute path to a newly created temporary directory.
  */
 function createTestDir(): string {
-  const scratchpad = path.join(
-    os.tmpdir(),
-    'claude-1000/-workspace--worktrees-settings-updates',
-    '14bd0ed8-2e93-4c1d-bbc6-ce5ed92e3214',
-    'scratchpad',
-    `test-${Date.now()}-${Math.random().toString(36).substring(7)}`
-  );
-  fs.mkdirSync(scratchpad, { recursive: true });
-  return scratchpad;
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'sdk-compiler-test-'));
 }
 
 /**

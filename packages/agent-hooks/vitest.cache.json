@@ -1,18 +1,183 @@
 {
   "files": {
+    "public/packages/agent-hooks/test/antigravity/compiled-output.test.ts": [
+      "public/antigravity/runtime/hooks.json",
+      "public/antigravity/runtime/bin/*.mjs"
+    ],
+    "public/packages/agent-hooks/test/antigravity/internal/inputs.test.ts": [],
+    "public/packages/agent-hooks/test/antigravity/internal/markers.test.ts": [],
     "public/packages/agent-hooks/test/antigravity/internal/outputs.test.ts": [],
+    "public/packages/agent-hooks/test/antigravity/internal/transport.test.ts": [],
+    "public/packages/agent-hooks/test/antigravity/runtime-bundle-exit.test.ts": [
+      "public/antigravity/runtime/bin/*.mjs"
+    ],
+    "public/packages/agent-hooks/test/antigravity/runtime/post-invocation.test.ts": [],
+    "public/packages/agent-hooks/test/antigravity/runtime/pre-invocation.test.ts": [],
+    "public/packages/agent-hooks/test/antigravity/runtime/stop.test.ts": [],
     "public/packages/agent-hooks/test/claude/assistant/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/default-log-file.test.ts": [
+      "packages/extension/src/services/ClaudeSettingsService.ts"
+    ],
+    "public/packages/agent-hooks/test/claude/core/enter-worktree.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/subagent-start.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/user-prompt-submit.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/vscode-node-quoting.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/worktree-create-linked-worktree-parent.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/worktree-create.test.ts": [],
+    "public/packages/agent-hooks/test/claude/core/worktree-remove.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/notification-idle-nudge.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/post-tool-use.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/sentinel-coordination.integration.test.ts": [],
     "public/packages/agent-hooks/test/claude/runtime/session-end.test.ts": [],
     "public/packages/agent-hooks/test/claude/runtime/session-start-after-compaction.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/stop.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/subagent-start.test.ts": [],
     "public/packages/agent-hooks/test/claude/runtime/subagent-stop.test.ts": [],
     "public/packages/agent-hooks/test/codex/assistant/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/codex/core/user-prompt-submit.test.ts": [],
     "public/packages/agent-hooks/test/codex/runtime/session-start-after-compaction.test.ts": [],
+    "public/packages/agent-hooks/test/codex/runtime/session-start.test.ts": [],
     "public/packages/agent-hooks/test/codex/runtime/stop-exit-when-done.test.ts": [],
+    "public/packages/agent-hooks/test/codex/runtime/stop-route-nudge.test.ts": [],
+    "public/packages/agent-hooks/test/codex/runtime/subagent-start.test.ts": [],
     "public/packages/agent-hooks/test/codex/runtime/subagent-stop.test.ts": [],
     "public/packages/agent-hooks/test/compiled-bundles/esm-require-bridge.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/assistant/session-start.test.ts": [],
     "public/packages/agent-hooks/test/opencode/card-mention.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/core/post-tool-use-skill.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/core/user-prompt-submit.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/deps.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/integration/binary-gate.test.ts": [
+      "public/opencode/**"
+    ],
+    "public/packages/agent-hooks/test/opencode/internal/deps.test.ts": [
+      "public/opencode/runtime/plugin/session-start.mjs",
+      "public/opencode/runtime/skills/card/references/merge.md",
+      "public/opencode/runtime/skills/card/references/shutdown.md"
+    ],
     "public/packages/agent-hooks/test/opencode/module-shape.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/opencode-state.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/runtime/session-start-after-compaction.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/runtime/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/runtime/stop-exit-when-done.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/runtime/stop-route-nudge.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/runtime/subagent-start.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/runtime/subagent-stop.test.ts": [],
+    "public/packages/agent-hooks/test/shared/context.test.ts": [],
     "public/packages/agent-hooks/test/shared/file-tree.test.ts": [],
-    "public/packages/agent-hooks/test/shared/resolve-head.test.ts": []
+    "public/packages/agent-hooks/test/shared/resolve-head.test.ts": [],
+    "public/packages/agent-hooks/test/shared/session-idle.test.ts": []
+  },
+  "executables": {
+    "files": {
+      "public/packages/agent-hooks/test/antigravity/runtime-bundle-exit.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/antigravity/runtime/pre-invocation.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/core/default-log-file.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/core/enter-worktree.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/core/subagent-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/core/worktree-create-linked-worktree-parent.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/core/worktree-remove.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/runtime/notification-idle-nudge.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/runtime/session-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/claude/runtime/subagent-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/codex/runtime/session-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/codex/runtime/subagent-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/assistant/session-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/core/post-tool-use-skill.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/core/user-prompt-submit.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/integration/binary-gate.test.ts": [
+        "git",
+        "opencode"
+      ],
+      "public/packages/agent-hooks/test/opencode/runtime/session-start-after-compaction.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/runtime/session-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/runtime/stop-exit-when-done.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/runtime/stop-route-nudge.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/runtime/subagent-start.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/opencode/runtime/subagent-stop.test.ts": [
+        "git"
+      ],
+      "public/packages/agent-hooks/test/shared/context.test.ts": [
+        "git"
+      ]
+    }
+  },
+  "hostRoots": {
+    "files": {
+      "public/packages/agent-hooks/test/claude/core/vscode-node-quoting.test.ts": [
+        "public/packages/agent-hooks/src/claude/core/enter-worktree.ts",
+        "public/packages/agent-hooks/src/claude/core/post-tool-use-skill.ts",
+        "public/packages/agent-hooks/src/claude/core/session-start.ts",
+        "public/packages/agent-hooks/src/claude/core/subagent-start.ts",
+        "public/packages/agent-hooks/src/claude/core/user-prompt-submit.ts",
+        "public/packages/agent-hooks/src/claude/core/worktree-create.ts",
+        "public/packages/agent-hooks/src/claude/core/worktree-remove.ts"
+      ]
+    }
+  },
+  "toolchain": {
+    "files": {
+      "public/packages/agent-hooks/test/claude/core/vscode-node-quoting.test.ts": [
+        "@goodfoot/agent-hooks"
+      ],
+      "public/packages/agent-hooks/test/antigravity/runtime-bundle-exit.test.ts": [
+        "ws"
+      ],
+      "public/packages/agent-hooks/test/opencode/internal/deps.test.ts": [
+        "esbuild"
+      ]
+    }
+  },
+  "roots": {
+    "files": {
+      "public/packages/agent-hooks/test/antigravity/runtime-bundle-exit.test.ts": [
+        "public/packages/agent-hooks/test/antigravity/fixtures/runtime-server.mjs"
+      ],
+      "public/packages/agent-hooks/test/opencode/internal/deps.test.ts": [
+        "public/packages/agent-hooks/test/opencode/fixtures/runbook-probe-entry.ts"
+      ]
+    }
   }
 }
