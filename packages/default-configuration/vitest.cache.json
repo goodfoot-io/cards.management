@@ -1,0 +1,66 @@
+{
+  "files": {
+    "public/packages/default-configuration/test/antigravity-renderer.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-session-projection.test.ts": [],
+    "public/packages/default-configuration/test/antigravity-tool-arguments.test.ts": [],
+    "public/packages/default-configuration/test/applyCodexConfig.invariance.test.ts": [],
+    "public/packages/default-configuration/test/attachment-classify.test.ts": [],
+    "public/packages/default-configuration/test/boundary.test.ts": [],
+    "public/packages/default-configuration/test/cc-thread-converter.test.ts": [],
+    "public/packages/default-configuration/test/classify-coordination.test.ts": [],
+    "public/packages/default-configuration/test/claude-compact-adapter.test.ts": [],
+    "public/packages/default-configuration/test/claude-session-end.test.ts": [],
+    "public/packages/default-configuration/test/claude-session-projection.test.ts": [],
+    "public/packages/default-configuration/test/codex-compact-adapter.test.ts": [],
+    "public/packages/default-configuration/test/codex-compact-fold.test.ts": [],
+    "public/packages/default-configuration/test/codex-compact-state.test.ts": [],
+    "public/packages/default-configuration/test/codex-dedup.test.ts": [],
+    "public/packages/default-configuration/test/codex-expanded.test.ts": [],
+    "public/packages/default-configuration/test/codex-parser.test.ts": [],
+    "public/packages/default-configuration/test/codex-thread-converter.test.ts": [],
+    "public/packages/default-configuration/test/codex-tool-summary.test.ts": [],
+    "public/packages/default-configuration/test/compact-facts.test.ts": [],
+    "public/packages/default-configuration/test/compact-state-metrics.test.ts": [],
+    "public/packages/default-configuration/test/compact-view-away-summary.test.ts": [],
+    "public/packages/default-configuration/test/compact-view-reconcile.test.ts": [],
+    "public/packages/default-configuration/test/expanded-view-dedup.test.ts": [],
+    "public/packages/default-configuration/test/hook-row.test.ts": [],
+    "public/packages/default-configuration/test/json-block.test.ts": [],
+    "public/packages/default-configuration/test/markdown.test.ts": [],
+    "public/packages/default-configuration/test/merge-consecutive-messages.test.ts": [],
+    "public/packages/default-configuration/test/opencode-compact-fold.test.ts": [],
+    "public/packages/default-configuration/test/opencode-parser.test.ts": [],
+    "public/packages/default-configuration/test/opencode-session-review.test.ts": [],
+    "public/packages/default-configuration/test/raw-fallback.test.ts": [],
+    "public/packages/default-configuration/test/session-announcements.test.ts": [],
+    "public/packages/default-configuration/test/session-header.test.ts": [],
+    "public/packages/default-configuration/test/session-projection.test.ts": [],
+    "public/packages/default-configuration/test/session-renderer.test.ts": [],
+    "public/packages/default-configuration/test/session-source.test.ts": [],
+    "public/packages/default-configuration/test/codex-session-projection.test.ts": [
+      "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl"
+    ],
+    "public/packages/default-configuration/test/opencode-session-projection.test.ts": [
+      "public/packages/default-configuration/test/fixtures/opencode/full-lifecycle.jsonl"
+    ],
+    "public/packages/default-configuration/test/opencode-session-render-integration.test.ts": [
+      "public/packages/default-configuration/test/fixtures/opencode/full-lifecycle.jsonl"
+    ],
+    "public/packages/default-configuration/test/opencode-session-large-details.test.ts": [
+      "public/packages/default-configuration/test/fixtures/opencode/large-tool-lifecycle.template.jsonl"
+    ],
+    "public/packages/default-configuration/test/cc-thread-converter.golden.test.ts": [
+      "public/packages/default-configuration/test/fixtures/cc-thread-converter/*.jsonl",
+      "public/packages/default-configuration/test/fixtures/cc-thread-converter/.goldens/*"
+    ],
+    "public/packages/default-configuration/test/session-identity-uniqueness.test.ts": [
+      "public/packages/default-configuration/test/fixtures/cc-thread-converter/*.jsonl",
+      "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl",
+      "public/packages/default-configuration/test/fixtures/opencode/*.jsonl"
+    ],
+    "public/packages/default-configuration/test/codex-hook-trust.test.ts": [
+      "public/codex/runtime/hooks/hooks.json",
+      "public/codex/cards-assistant/hooks/hooks.json"
+    ]
+  }
+}

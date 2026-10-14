@@ -128,6 +128,12 @@ describe.skipIf(process.platform === 'win32')('production process-tree authority
     await expect(terminate()).resolves.toBe('graceful');
 
     await exited;
-    expect(() => process.kill(grandchild, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }));
+    // The orphaned grandchild stays a zombie, still signalable, until init reaps it; reaping is asynchronous.
+    await vi.waitFor(
+      () => expect(() => process.kill(grandchild, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' })),
+      {
+        timeout: 5_000
+      }
+    );
   });
 });

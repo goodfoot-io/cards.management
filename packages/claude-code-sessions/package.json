@@ -10,16 +10,18 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "vitest-unchanged",
+    "test": "vitest run",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src && jsdoczoom -l"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
+    "@goodfoot/vitest-cache": "^1.0.0",
     "@types/node": "24.x",
     "@typescript/native-preview": "^7.0.0-dev",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
   },
   "engines": {
     "node": ">=22"

@@ -23,13 +23,17 @@ import {
   makeTempDir,
   removeTempDir,
   SESSION_ID,
+  withExpectedStderr,
   withoutEnv
 } from '../helpers.js';
 
+/** Exact stderr chunks the next `run` must produce; reset to none before each test. */
+let expectedStderr: string[] = [];
 let root: string;
 let restoreEnv: () => void;
 
 beforeEach(() => {
+  expectedStderr = [];
   root = makeTempDir('pre-invocation');
   makeCardRepo(root);
   restoreEnv = withoutEnv('CARD_ID', 'ANTIGRAVITY_SESSION_ID', 'CARDS_ASSISTANT_SESSION', 'CARDS_ASSISTANT_WINDOW_ID');
@@ -68,11 +72,13 @@ async function run(
   const { deps, recorders } = makeDeps(root, overrides);
   let result: { output?: unknown } | null = null;
   let failure: HandlerFailure | null = null;
-  try {
-    result = await dispatchAntigravityHook(input, handlePreInvocation, deps);
-  } catch (error) {
-    failure = error as HandlerFailure;
-  }
+  await withExpectedStderr(expectedStderr, async () => {
+    try {
+      result = await dispatchAntigravityHook(input, handlePreInvocation, deps);
+    } catch (error) {
+      failure = error as HandlerFailure;
+    }
+  });
   return { result, failure, recorders };
 }
 
@@ -211,6 +217,9 @@ describe('Cards Assistant PreInvocation contract', () => {
   });
 
   it('fails an Assistant launch when its window identity is missing', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at session-identity: [session-identity] CARDS_ASSISTANT_WINDOW_ID is not set: the launcher must export the owning window identity\n'
+    ];
     delete process.env['CARD_ID'];
     process.env['CARDS_ASSISTANT_SESSION'] = '1';
     delete process.env['CARDS_ASSISTANT_WINDOW_ID'];
@@ -232,6 +241,9 @@ describe('PreInvocation failure contract', () => {
   });
 
   it('fails closed on invalid input and scopes the failure marker to the conversation', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at input: [input] Antigravity hook input field "transcriptPath" must be a non-empty string\n'
+    ];
     const input = makeInvocationInput(root) as unknown as Record<string, unknown>;
     delete input['transcriptPath'];
     const { failure } = await run({}, input);
@@ -246,6 +258,9 @@ describe('PreInvocation failure contract', () => {
   });
 
   it('scopes the failure marker to the unknown-conversation placeholder when no conversation id arrived', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at input: [input] Antigravity hook input field "conversationId" must be a non-empty string\n'
+    ];
     const input = makeInvocationInput(root) as unknown as Record<string, unknown>;
     delete input['conversationId'];
     const { failure } = await run({}, input);
@@ -254,6 +269,9 @@ describe('PreInvocation failure contract', () => {
   });
 
   it('fails closed when the launcher session identity is missing', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at session-identity: [session-identity] ANTIGRAVITY_SESSION_ID is not set: the launcher must export the Cards session id pre-spawn\n'
+    ];
     const { failure } = await run({ resolveSessionId: () => null });
     expect(failure?.stage).toBe('session-identity');
     expect(defaultAntigravityIo.existsSync(markerPath(cardsHome(), null, CONVERSATION_ID, 'failure'))).toBe(true);
@@ -261,12 +279,18 @@ describe('PreInvocation failure contract', () => {
   });
 
   it('fails closed when the action environment is broken', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at action-env: [action-env] the Cards action environment is missing or malformed\n'
+    ];
     const { failure } = await run({ loadActionInput: () => null });
     expect(failure?.stage).toBe('action-env');
     expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the card repository is inaccessible', async () => {
+    expectedStderr = [
+      `[antigravity-cards-hooks] failure at card-context: [card-context] Cannot read card repository at ${join(root, 'cards', 'main-453')}: ENOENT: no such file or directory, open '${join(root, 'cards', 'main-453', 'CARD.meta.json')}'\n`
+    ];
     rmSync(join(root, 'cards', 'main-453', 'CARD.meta.json'));
     const { failure } = await run();
     expect(failure?.stage).toBe('card-context');
@@ -274,24 +298,34 @@ describe('PreInvocation failure contract', () => {
   });
 
   it('fails closed when the agent PID cannot be identified', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at watcher-setup: [watcher-setup] could not identify the agent PID for the stream-sync-watcher\n'
+    ];
     const { failure } = await run({ findMonitorPid: async () => null });
     expect(failure?.stage).toBe('watcher-setup');
     expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the manifest builder rejects the canonical conversation DB path', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at watcher-setup: [watcher-setup] manifest build failed: Antigravity transcriptPath basename "wrong.jsonl" must be the conversation DB ("<conversationId>.db")\n'
+    ];
     const { failure } = await run({ conversationDbPath: () => join(root, 'conversations', 'wrong.jsonl') });
     expect(failure?.stage).toBe('watcher-setup');
     expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when the watcher spawn does not happen', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at watcher-setup: [watcher-setup] the stream-sync-watcher did not spawn\n'
+    ];
     const { failure } = await run({ spawnWatcher: () => false });
     expect(failure?.stage).toBe('watcher-setup');
     expect(defaultAntigravityIo.existsSync(readyMarker())).toBe(false);
   });
 
   it('fails closed when session registration fails', async () => {
+    expectedStderr = ['[antigravity-cards-hooks] failure at session-registration: [session-registration] disk full\n'];
     const { failure } = await run({
       registerSession: async () => {
         throw new Error('disk full');
@@ -302,6 +336,7 @@ describe('PreInvocation failure contract', () => {
   });
 
   it('fails closed when the ready marker cannot be written', async () => {
+    expectedStderr = ['[antigravity-cards-hooks] failure at ready-marker: [ready-marker] read-only filesystem\n'];
     const failingIo = {
       ...defaultAntigravityIo,
       writeTextFileSync: (path: string, data: string) => {

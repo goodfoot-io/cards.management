@@ -1,0 +1,18 @@
+{
+  "files": {
+    "public/packages/agent-hooks/test/antigravity/internal/outputs.test.ts": [],
+    "public/packages/agent-hooks/test/claude/assistant/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/session-end.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/session-start-after-compaction.test.ts": [],
+    "public/packages/agent-hooks/test/claude/runtime/subagent-stop.test.ts": [],
+    "public/packages/agent-hooks/test/codex/assistant/session-start.test.ts": [],
+    "public/packages/agent-hooks/test/codex/runtime/session-start-after-compaction.test.ts": [],
+    "public/packages/agent-hooks/test/codex/runtime/stop-exit-when-done.test.ts": [],
+    "public/packages/agent-hooks/test/codex/runtime/subagent-stop.test.ts": [],
+    "public/packages/agent-hooks/test/compiled-bundles/esm-require-bridge.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/card-mention.test.ts": [],
+    "public/packages/agent-hooks/test/opencode/module-shape.test.ts": [],
+    "public/packages/agent-hooks/test/shared/file-tree.test.ts": [],
+    "public/packages/agent-hooks/test/shared/resolve-head.test.ts": []
+  }
+}

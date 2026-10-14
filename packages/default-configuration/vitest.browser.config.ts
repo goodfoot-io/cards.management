@@ -3,7 +3,7 @@
  * @summary Default configuration browser test selection
  */
 import { configDefaults, defineConfig } from 'vitest/config';
-import config from './vitest.config';
+import { baseConfig as config } from './vitest.config';
 
 export default defineConfig({
   ...config,

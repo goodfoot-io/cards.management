@@ -12,7 +12,15 @@ import { describe, expect, it } from 'vitest';
 import { HandlerFailure, handlePreInvocation } from '../../../src/antigravity/internal/handlers.js';
 import { markerPath } from '../../../src/antigravity/internal/markers.js';
 import { dispatchAntigravityHook } from '../../../src/antigravity/internal/transport.js';
-import { CONVERSATION_ID, makeDeps, makeTempDir, removeTempDir, SESSION_ID, withoutEnv } from '../helpers.js';
+import {
+  CONVERSATION_ID,
+  makeDeps,
+  makeTempDir,
+  removeTempDir,
+  SESSION_ID,
+  withExpectedStderr,
+  withoutEnv
+} from '../helpers.js';
 
 function joinCardsHome(root: string): string {
   return join(root, 'cards-home');
@@ -46,15 +54,20 @@ describe('dispatchAntigravityHook', () => {
     const root = makeTempDir('dispatch-failure');
     try {
       const { deps } = makeDeps(root);
-      await expect(
-        dispatchAntigravityHook(
-          { conversationId: CONVERSATION_ID },
-          async () => {
-            throw new HandlerFailure('watcher-setup', 'spawn returned false', CONVERSATION_ID);
-          },
-          deps
-        )
-      ).rejects.toBeInstanceOf(HandlerFailure);
+      await withExpectedStderr(
+        ['[antigravity-cards-hooks] failure at watcher-setup: [watcher-setup] spawn returned false\n'],
+        async () => {
+          await expect(
+            dispatchAntigravityHook(
+              { conversationId: CONVERSATION_ID },
+              async () => {
+                throw new HandlerFailure('watcher-setup', 'spawn returned false', CONVERSATION_ID);
+              },
+              deps
+            )
+          ).rejects.toBeInstanceOf(HandlerFailure);
+        }
+      );
 
       const failurePath = markerPath(joinCardsHome(root), SESSION_ID, CONVERSATION_ID, 'failure');
       expect(deps.io.existsSync(failurePath)).toBe(true);
@@ -70,15 +83,17 @@ describe('dispatchAntigravityHook', () => {
     const root = makeTempDir('dispatch-unexpected');
     try {
       const { deps } = makeDeps(root);
-      await expect(
-        dispatchAntigravityHook(
-          { conversationId: CONVERSATION_ID },
-          async () => {
-            throw new Error('boom');
-          },
-          deps
-        )
-      ).rejects.toBeInstanceOf(HandlerFailure);
+      await withExpectedStderr(['[antigravity-cards-hooks] failure at unexpected: boom\n'], async () => {
+        await expect(
+          dispatchAntigravityHook(
+            { conversationId: CONVERSATION_ID },
+            async () => {
+              throw new Error('boom');
+            },
+            deps
+          )
+        ).rejects.toBeInstanceOf(HandlerFailure);
+      });
 
       const failurePath = markerPath(joinCardsHome(root), SESSION_ID, CONVERSATION_ID, 'failure');
       const payload = JSON.parse(deps.io.readTextFileSync(failurePath)) as { stage: string };
@@ -92,15 +107,20 @@ describe('dispatchAntigravityHook', () => {
     const root = makeTempDir('dispatch-scope');
     try {
       const { deps } = makeDeps(root, { resolveSessionId: () => null });
-      await expect(
-        dispatchAntigravityHook(
-          { conversationId: CONVERSATION_ID },
-          async () => {
-            throw new HandlerFailure('input', 'field transcriptPath invalid', CONVERSATION_ID);
-          },
-          deps
-        )
-      ).rejects.toBeInstanceOf(HandlerFailure);
+      await withExpectedStderr(
+        ['[antigravity-cards-hooks] failure at input: [input] field transcriptPath invalid\n'],
+        async () => {
+          await expect(
+            dispatchAntigravityHook(
+              { conversationId: CONVERSATION_ID },
+              async () => {
+                throw new HandlerFailure('input', 'field transcriptPath invalid', CONVERSATION_ID);
+              },
+              deps
+            )
+          ).rejects.toBeInstanceOf(HandlerFailure);
+        }
+      );
 
       expect(deps.io.existsSync(markerPath(joinCardsHome(root), null, CONVERSATION_ID, 'failure'))).toBe(true);
     } finally {

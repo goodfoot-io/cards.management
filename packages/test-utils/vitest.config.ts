@@ -10,16 +10,20 @@
  * @summary Vitest configuration for @cards.management/test-utils
  */
 
+import { loadCacheContract, withTestOutput } from '@goodfoot/vitest-cache/policy';
 import { defineConfig } from 'vitest/config';
 
-export default defineConfig({
-  test: {
-    include: ['test/**/*.test.ts'],
-    environment: 'node',
-    testTimeout: 30000,
-    reporters: ['dot'],
-    env: {
-      CARDS_HOOKS_LOG_FILE: '/dev/null'
+export default withTestOutput(
+  defineConfig({
+    test: {
+      include: ['test/**/*.test.ts'],
+      environment: 'node',
+      testTimeout: 30000,
+      reporters: ['dot'],
+      env: {
+        CARDS_HOOKS_LOG_FILE: '/dev/null'
+      }
     }
-  }
-});
+  }),
+  loadCacheContract(new URL('./vitest.cache.json', import.meta.url))
+);

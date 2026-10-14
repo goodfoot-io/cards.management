@@ -8,6 +8,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { devNull } from 'node:os';
 import { dirname, resolve } from 'node:path';
+import { loadCacheContract, withTestOutput } from '@goodfoot/vitest-cache/policy';
 import { configDefaults, defineConfig } from 'vitest/config';
 
 // Repo root — the `.md` assets live at `<root>/public/claude/...`, outside this
@@ -15,7 +16,7 @@ import { configDefaults, defineConfig } from 'vitest/config';
 // file dir + workspace root), which covers the repo root, so no explicit
 // `server.fs.allow` config is needed or accepted here (`test.server` no longer
 // has an `fs` key in vitest 4).
-const repoRoot = resolve(__dirname, '../../..');
+const repoRoot = resolve(import.meta.dirname, '../../..');
 
 /**
  * Configures vitest behavior for the package package.
@@ -46,8 +47,8 @@ const textAssetPlugin = {
   }
 };
 
-// vitest's experimental fs module cache (`--experimental.fsModuleCache`, set by
-// the vitest-unchanged runner) fetches `/@fs/` ids without the `url[0] !== '/'
+// vitest's experimental fs module cache (`test.fsModuleCache`, enabled by the
+// result-cache wrapper) fetches `/@fs/` ids without the `url[0] !== '/'
 // resolveId` stage, so a `.js`-suffixed import whose source is the `.ts` sibling
 // (e.g. the sdk's internal `./childProcess.js`) skips vite's `.js`→`.ts`
 // probing, and the unmapped id is handed to node's native loader, which cannot
@@ -72,8 +73,8 @@ const jsToTsSiblingResolve = {
   }
 };
 
-// vitest's experimental fs module cache (`--experimental.fsModuleCache`, set by
-// the vitest-unchanged runner) skips the resolveId stage that would otherwise
+// vitest's experimental fs module cache (`test.fsModuleCache`, enabled by the
+// result-cache wrapper) skips the resolveId stage that would otherwise
 // let `publicDir: false` (below) prevent Vite's public-directory URL rewrite.
 // A relative import that walks outside this package into the sibling `public/`
 // workspace root (e.g. `../../../codex/cards-assistant/hooks/hooks.json`,
@@ -85,7 +86,7 @@ const jsToTsSiblingResolve = {
 // ("Cannot find module '/codex/.../hooks.json'"). Re-map any root-absolute id
 // whose stripped-prefix form exists under the `public/` workspace root back
 // to the real file.
-const publicRoot = resolve(__dirname, '../..');
+const publicRoot = resolve(import.meta.dirname, '../..');
 const publicRootRewrite = {
   name: 'public-root-rewrite',
   enforce: 'pre' as const,
@@ -98,7 +99,8 @@ const publicRootRewrite = {
   }
 };
 
-export default defineConfig({
+/** Uncached base configuration, reused by the opt-in browser configuration. */
+export const baseConfig = defineConfig({
   // This monorepo's workspace-root directory is literally named `public/`
   // (`<repoRoot>/public/packages/...`). Vite's default `publicDir` detection
   // walks up to that same workspace root and treats it as the static-asset
@@ -130,3 +132,5 @@ export default defineConfig({
     }
   }
 });
+
+export default withTestOutput(baseConfig, loadCacheContract(new URL('./vitest.cache.json', import.meta.url)));

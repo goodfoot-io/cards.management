@@ -8,7 +8,7 @@
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, bench, describe } from 'vitest';
+import { afterAll, describe, test } from 'vitest';
 import { type CheckoutWitness, removeQuarantinedCheckout } from '../src/checkout-removal.js';
 
 const DIRECTORIES = 277;
@@ -61,15 +61,17 @@ async function removeWith(witness: CheckoutWitness): Promise<void> {
 describe('verified removal of 7,277 entries', () => {
   afterAll(() => rmSync(parent, { recursive: true, force: true }));
 
-  const options = {
-    iterations: ITERATIONS,
-    time: 0,
-    warmupIterations: 1,
-    warmupTime: 0,
-    setup: () => {
-      while (prepared.length < ITERATIONS + 1) buildCheckout();
-    }
-  };
-  bench('ctime witness', () => removeWith('ctime'), options);
-  bench('hash witness', () => removeWith('hash'), options);
+  test('ctime and hash witnesses', async ({ bench }) => {
+    // Checkouts are queued before each benchmark's cycle so iterations time removal alone.
+    const fnOpts = {
+      beforeAll: () => {
+        while (prepared.length < ITERATIONS + 1) buildCheckout();
+      }
+    };
+    await bench.compare(
+      bench('ctime witness', fnOpts, () => removeWith('ctime')),
+      bench('hash witness', fnOpts, () => removeWith('hash')),
+      { iterations: ITERATIONS, time: 0, warmupIterations: 1, warmupTime: 0 }
+    );
+  });
 });

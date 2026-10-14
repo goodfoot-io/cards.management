@@ -22,13 +22,17 @@ import {
   makeTempDir,
   removeTempDir,
   SESSION_ID,
+  withExpectedStderr,
   withoutEnv
 } from '../helpers.js';
 
+/** Exact stderr chunks the next `run` must produce; reset to none before each test. */
+let expectedStderr: string[] = [];
 let root: string;
 let restoreEnv: () => void;
 
 beforeEach(() => {
+  expectedStderr = [];
   root = makeTempDir('stop');
   makeCardRepo(root);
   restoreEnv = withoutEnv('CARD_ID', 'ANTIGRAVITY_SESSION_ID', 'CARDS_ASSISTANT_SESSION', 'CARDS_ASSISTANT_WINDOW_ID');
@@ -67,11 +71,13 @@ async function run(
   const { deps, recorders } = makeDeps(root, overrides);
   let result: { output?: unknown } | null = null;
   let failure: HandlerFailure | null = null;
-  try {
-    result = await dispatchAntigravityHook(input, handleStop, deps);
-  } catch (error) {
-    failure = error as HandlerFailure;
-  }
+  await withExpectedStderr(expectedStderr, async () => {
+    try {
+      result = await dispatchAntigravityHook(input, handleStop, deps);
+    } catch (error) {
+      failure = error as HandlerFailure;
+    }
+  });
   return { result, failure, recorders };
 }
 
@@ -118,6 +124,9 @@ describe('Stop drain and cleanup contract', () => {
   });
 
   it('fails closed on invalid input', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at input: [input] Antigravity hook input field "workspacePaths" must be a non-empty array of non-empty strings\n'
+    ];
     const input = makeCommonInput(root) as unknown as Record<string, unknown>;
     delete input['workspacePaths'];
     const { failure } = await run({}, input);
@@ -146,6 +155,9 @@ describe('Cards Assistant Stop contract', () => {
   });
 
   it('fails closed when Assistant cleanup fails', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at session-cleanup: [session-cleanup] Cards Assistant cleanup had 1 failure(s)\n'
+    ];
     delete process.env['CARD_ID'];
     process.env['CARDS_ASSISTANT_SESSION'] = '1';
     process.env['CARDS_ASSISTANT_WINDOW_ID'] = 'window-453';
@@ -165,6 +177,7 @@ describe('Cards Assistant Stop contract', () => {
 
 describe('Stop marker invariants', () => {
   it('fails closed without drain readiness when the drain-ready marker cannot be written', async () => {
+    expectedStderr = ['[antigravity-cards-hooks] failure at drain-marker: [drain-marker] read-only filesystem\n'];
     const failingIo = {
       ...defaultAntigravityIo,
       writeTextFileSync: (path: string, data: string) => {

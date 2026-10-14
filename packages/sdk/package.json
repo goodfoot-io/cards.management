@@ -71,7 +71,7 @@
     "typecheck": "tsgo --noEmit",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test ./bench && jsdoczoom -l ./src ./test ./bench",
     "bench": "vitest bench --run",
-    "test": "vitest-unchanged"
+    "test": "vitest run"
   },
   "dependencies": {
     "@cards.management/sessions": "workspace:*",
@@ -90,11 +90,13 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
+    "@goodfoot/vitest-cache": "^1.0.0",
     "@types/mime-types": "^3.0.1",
     "@types/node": "24.x",
     "@types/ws": "^8.18.1",
     "jsdom": "^29.1.1",
-    "vitest": "^4.1.5",
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4",
     "ws": "^8.20.0"
   }
 }

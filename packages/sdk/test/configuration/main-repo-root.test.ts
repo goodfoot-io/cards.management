@@ -10,7 +10,7 @@ import * as path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { resolveMainRepoRoot } from '../../src/config/main-repo-root.js';
 
-describe.sequential('main repository root resolution', () => {
+describe('main repository root resolution', () => {
   let tempDir: string;
   let savedCwd: string;
   let savedRepoRoot: string | undefined;

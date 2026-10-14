@@ -24,13 +24,17 @@ import {
   makeTempDir,
   removeTempDir,
   SESSION_ID,
+  withExpectedStderr,
   withoutEnv
 } from '../helpers.js';
 
+/** Exact stderr chunks the next `run` must produce; reset to none before each test. */
+let expectedStderr: string[] = [];
 let root: string;
 let restoreEnv: () => void;
 
 beforeEach(() => {
+  expectedStderr = [];
   root = makeTempDir('post-invocation');
   makeCardRepo(root);
   restoreEnv = withoutEnv(
@@ -76,11 +80,13 @@ async function run(
   const { deps, recorders } = makeDeps(root, overrides);
   let result: { output?: unknown } | null = null;
   let failure: HandlerFailure | null = null;
-  try {
-    result = await dispatchAntigravityHook(input, handlePostInvocation, deps);
-  } catch (error) {
-    failure = error as HandlerFailure;
-  }
+  await withExpectedStderr(expectedStderr, async () => {
+    try {
+      result = await dispatchAntigravityHook(input, handlePostInvocation, deps);
+    } catch (error) {
+      failure = error as HandlerFailure;
+    }
+  });
   return { result, failure, recorders };
 }
 
@@ -208,6 +214,7 @@ describe('PostInvocation idle and failure invariants', () => {
   });
 
   it('fails closed on decision errors without injecting a guessed route', async () => {
+    expectedStderr = ['[antigravity-cards-hooks] failure at decision: [decision] git rev-list failed: git failed\n'];
     const { failure } = await run({
       unmergedCommitCount: () => {
         throw new Error('git failed');
@@ -219,6 +226,9 @@ describe('PostInvocation idle and failure invariants', () => {
   });
 
   it('fails closed on invalid invocation input', async () => {
+    expectedStderr = [
+      '[antigravity-cards-hooks] failure at input: [input] Antigravity hook input field "invocationNum" must be an integer ≥ 0\n'
+    ];
     const { failure } = await run({}, makeInvocationInput(root, { invocationNum: -1 }));
     expect(failure?.stage).toBe('input');
     expect(defaultAntigravityIo.existsSync(marker('failure'))).toBe(true);

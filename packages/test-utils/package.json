@@ -9,11 +9,10 @@
     "./vitest": "./src/vitest/gitHomeIsolation.ts"
   },
   "bin": {
-    "build-unchanged": "./src/bin/build-unchanged.ts",
-    "vitest-unchanged": "./src/bin/vitest-unchanged.ts"
+    "build-unchanged": "./src/bin/build-unchanged.ts"
   },
   "scripts": {
-    "test": "vitest-unchanged",
+    "test": "vitest run",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -l",
     "typecheck": "tsgo --noEmit"
   },
@@ -28,12 +27,14 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
+    "@goodfoot/vitest-cache": "^1.0.0",
     "@types/fs-extra": "^11.0.4",
     "@types/node": "24.x",
     "@types/ws": "^8.18.1",
     "@typescript/native-preview": "^7.0.0-dev",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.5"
+    "vite": "^8.3.4",
+    "vitest": "^5.0.4"
   },
   "engines": {
     "node": ">=22"

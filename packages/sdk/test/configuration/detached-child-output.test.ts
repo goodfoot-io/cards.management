@@ -54,7 +54,7 @@ async function runDetached(args: string[], capture: DetachedChildOutputCapture):
   });
 }
 
-describe.sequential('detached-child output capture', () => {
+describe('detached-child output capture', () => {
   let tempDir: string;
   let savedCwd: string;
   const savedEnv: Partial<Record<(typeof ENV_KEYS)[number], string>> = {};

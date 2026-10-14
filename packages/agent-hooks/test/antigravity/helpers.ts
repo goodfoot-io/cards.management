@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ActionInput } from '@cards.management/sdk/config';
 import type { SessionSyncManifest } from '@cards.management/sdk/transcript-sync';
+import { expect, vi } from 'vitest';
 import type { AntigravityCardMeta, AntigravityHandlerDeps } from '../../src/antigravity/internal/deps.js';
 import { defaultAntigravityHandlerDeps } from '../../src/antigravity/internal/deps.js';
 import type { AntigravityCommonInput, AntigravityInvocationInput } from '../../src/antigravity/internal/inputs.js';
@@ -312,4 +313,28 @@ export function withoutEnv(...keys: string[]): () => void {
       }
     }
   };
+}
+
+/**
+ * Runs `body` while owning everything written to `process.stderr`, then asserts
+ * the captured lines are exactly `expected` (the hook's deliberate diagnostics).
+ *
+ * @param expected - Exact stderr chunks the body must produce, in order.
+ * @param body - Work whose stderr output is claimed.
+ * @returns The body's result.
+ */
+export async function withExpectedStderr<T>(expected: readonly string[], body: () => Promise<T>): Promise<T> {
+  const captured: string[] = [];
+  const spy = vi.spyOn(process.stderr, 'write').mockImplementation(((chunk: string | Uint8Array) => {
+    captured.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf8'));
+    return true;
+  }) as typeof process.stderr.write);
+  let result: T;
+  try {
+    result = await body();
+  } finally {
+    spy.mockRestore();
+  }
+  expect(captured).toEqual(expected);
+  return result;
 }

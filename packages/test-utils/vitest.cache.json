@@ -1,0 +1,20 @@
+{
+  "files": {
+    "public/packages/test-utils/test/TestD1Database.test.ts": [],
+    "public/packages/test-utils/test/fixtures/entities.test.ts": [],
+    "public/packages/test-utils/test/http/TestHttpClient.test.ts": [],
+    "public/packages/test-utils/test/ws/TestWebSocketServer.test.ts": [],
+    "public/packages/test-utils/test/ws/TestWebSocketServer.awaitMessage-leak.test.ts": [],
+    "public/packages/test-utils/test/build-unchanged.test.ts": []
+  },
+  "roots": {
+    "files": {
+      "public/packages/test-utils/test/build-unchanged.test.ts": ["public/packages/test-utils/src/bin/build-unchanged.ts"]
+    }
+  },
+  "executables": {
+    "files": {
+      "public/packages/test-utils/test/build-unchanged.test.ts": ["node", "sh"]
+    }
+  }
+}

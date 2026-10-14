@@ -1,0 +1,7 @@
+{
+  "files": {
+    "public/packages/claude-code-sessions/test/card-repo.test.ts": [],
+    "public/packages/claude-code-sessions/test/internal.test.ts": [],
+    "public/packages/claude-code-sessions/test/ipc.test.ts": []
+  }
+}
