@@ -106,7 +106,6 @@ export { findAgentPid, isAgentProcessTreeDrained, PROCESS_TREE_MAX_DEPTH } from 
 export { resolveScaffoldDir, resolveScaffoldDirFromSource } from './scaffold-dir.js';
 // --- Session Resolver ---
 export { resolveSessionId } from './session-resolver.js';
-export * from './stream-session/index.js';
 // --- Symlink Capability ---
 export { canCreateSymlinks, invalidateSymlinkCapability } from './symlink-capability.js';
 // --- Theme CSS value safety ---
