@@ -107,6 +107,7 @@
       "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl",
       "public/packages/default-configuration/test/fixtures/opencode/*.jsonl"
     ],
+    "public/packages/default-configuration/test/provider-linkage.test.ts": [],
     "public/packages/default-configuration/test/session-projection.test.ts": [],
     "public/packages/default-configuration/test/session-renderer.test.ts": [],
     "public/packages/default-configuration/test/session-source.test.ts": [],
