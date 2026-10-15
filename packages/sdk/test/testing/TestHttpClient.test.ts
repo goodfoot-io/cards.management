@@ -6,10 +6,10 @@
  *
  *
  * @summary Unit tests for TestHttpClient
- * @module test-utils/test/http/TestHttpClient.test
+ * @module sdk/test/testing/TestHttpClient.test
  */
 import { beforeEach, describe, expect, it } from 'vitest';
-import { TestHttpClient } from '../../src/http/TestHttpClient.js';
+import { TestHttpClient } from '../../src/testing/TestHttpClient.js';
 
 describe('TestHttpClient', () => {
   let client: TestHttpClient;

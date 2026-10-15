@@ -17,12 +17,12 @@
  *
  *
  * @summary Domain entity factories for test fixtures
- * @module test-utils/fixtures/entities
+ * @module sdk/testing/entities
  */
 import { randomUUID } from 'node:crypto';
-import type { Card, CardMetadata } from '@cards.management/sdk/protocol';
-import { DEFAULT_CARD_GATES } from '@cards.management/sdk/protocol';
-import { now } from './time.js';
+import { now } from '@cards.management/test-utils';
+import type { Card, CardMetadata } from '../protocol/index.js';
+import { DEFAULT_CARD_GATES } from '../protocol/index.js';
 
 // --- Card Factories ---
 

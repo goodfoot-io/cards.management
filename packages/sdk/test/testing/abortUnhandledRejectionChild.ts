@@ -20,11 +20,11 @@
  * and the process exits 0.
  *
  * @summary Reproduce a slow-to-close teardown abort rejection in an isolated process
- * @module test-utils/test/git/abortUnhandledRejectionChild
+ * @module sdk/test/testing/abortUnhandledRejectionChild
  */
 import { chmod, mkdir, writeFile } from 'node:fs/promises';
 import * as path from 'node:path';
-import { TestCardRepository } from '../../src/git/TestCardRepository.js';
+import { TestCardRepository } from '../../src/testing/TestCardRepository.js';
 
 /** Sentinel printed only if the process survives the contained abort rejection. */
 const POST_ABORT_SENTINEL = 'POST_ABORT_SENTINEL_REACHED';

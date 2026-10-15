@@ -144,8 +144,10 @@ async function judgeTree(git: SlotGit, walk: Walk, site: Site, repositories: str
     if ('detail' in opened) return opened;
     claimed.add(await canonical(opened.repository));
     const sub = opened.site;
+    // `status` would otherwise refresh and rewrite the submodule's index, which a set-aside copy has already recorded.
     const status = await git.text(sub.dir, [
       ...sub.target,
+      '--no-optional-locks',
       'status',
       '--porcelain',
       '--untracked-files=all',

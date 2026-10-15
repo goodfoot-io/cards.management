@@ -12,9 +12,9 @@
  *
  *
  * @summary Test utility for HTTP client mocking
- * @module test-utils/http/TestHttpClient
+ * @module sdk/testing/TestHttpClient
  */
-import type { HttpClient } from '@cards.management/sdk/protocol';
+import type { HttpClient } from '../protocol/index.js';
 
 /**
  * Recorded HTTP request information.

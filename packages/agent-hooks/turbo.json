@@ -1,0 +1,20 @@
+{
+  "extends": [
+    "//"
+  ],
+  "tasks": {
+    "test:uncached": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/extension/src/services/ClaudeSettingsService.ts",
+        "$TURBO_ROOT$/public/antigravity/runtime/bin/*.mjs",
+        "$TURBO_ROOT$/public/antigravity/runtime/hooks.json",
+        "$TURBO_ROOT$/public/opencode/**",
+        "$TURBO_ROOT$/public/opencode/runtime/plugin/session-start.mjs",
+        "$TURBO_ROOT$/public/opencode/runtime/skills/card/references/merge.md",
+        "$TURBO_ROOT$/public/opencode/runtime/skills/card/references/shutdown.md",
+        "!$TURBO_ROOT$/**/.DS_Store"
+      ]
+    }
+  }
+}

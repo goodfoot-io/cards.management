@@ -1,9 +1,9 @@
 import { PLANS_PREFIX } from '@cards.management/sdk/card-repo-layout';
-import { TestHttpClient } from '@cards.management/test-utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CardsClient } from '../../src/client/cardsClient.js';
 import { ApiError } from '../../src/client/types/errors.js';
 import type { EnvironmentsResponse, StreamMeta, VariableGroupsResponse } from '../../src/protocol/index.js';
+import { TestHttpClient } from '../../src/testing/index.js';
 
 /**
  * Exercises cards client behavior in the client area through focused scenarios.

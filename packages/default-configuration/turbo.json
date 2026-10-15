@@ -1,0 +1,17 @@
+{
+  "extends": [
+    "//"
+  ],
+  "tasks": {
+    "test:uncached": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/cards/web/src/styles/**",
+        "$TURBO_ROOT$/public/codex/cards-assistant/hooks/hooks.json",
+        "$TURBO_ROOT$/public/codex/runtime/hooks/hooks.json",
+        "$TURBO_ROOT$/public/opencode/**",
+        "!$TURBO_ROOT$/**/.DS_Store"
+      ]
+    }
+  }
+}

@@ -59,7 +59,8 @@
     "./context": "./src/context.ts",
     "./git-hooks": "./src/git-hooks.ts",
     "./transcript-sync": "./src/transcript-sync/index.ts",
-    "./transcript-sync/adapters": "./src/transcript-sync/adapters/index.ts"
+    "./transcript-sync/adapters": "./src/transcript-sync/adapters/index.ts",
+    "./testing": "./src/testing/index.ts"
   },
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -71,7 +72,8 @@
     "typecheck": "tsgo --noEmit",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test ./bench && jsdoczoom -l ./src ./test ./bench",
     "bench": "vitest bench --run",
-    "test": "vitest run"
+    "test": "yarn run -T turbo run test:uncached --filter=@cards.management/sdk --cwd \"$PROJECT_CWD\" --",
+    "test:uncached": "vitest run"
   },
   "dependencies": {
     "@cards.management/sessions": "workspace:*",
@@ -91,10 +93,14 @@
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
     "@goodfoot/vitest-cache": "^1.0.0",
+    "@types/fs-extra": "^11.0.4",
     "@types/mime-types": "^3.0.1",
     "@types/node": "24.x",
     "@types/ws": "^8.18.1",
+    "fs-extra": "^11.3.4",
     "jsdom": "^29.1.1",
+    "simple-git": "^3.36.0",
+    "uuid": "^13.0.0",
     "vite": "^8.3.4",
     "vitest": "^5.0.4",
     "ws": "^8.20.0"

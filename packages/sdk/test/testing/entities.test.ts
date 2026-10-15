@@ -6,7 +6,7 @@
  *
  *
  * @summary Unit tests for fixture entity factories
- * @module test-utils/test/fixtures/entities.test
+ * @module sdk/test/testing/entities.test
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -18,7 +18,7 @@ import {
   createMultipleComments,
   createMultipleNotes,
   createNote
-} from '../../src/fixtures/entities.js';
+} from '../../src/testing/entities.js';
 
 describe('Entity Fixtures', () => {
   describe('createCardMetadata()', () => {

@@ -9,7 +9,8 @@
   "scripts": {
     "build": "build-unchanged --input src --input scripts --input package.json --input ../sdk/src --input ../claude-code-sessions/src --input ../../../packages/cards/web/src --output ../../claude/cards/hooks --output ../../claude/cards-assistant/hooks --output ../../claude/runtime/hooks --output ../../codex/cards/hooks --output ../../codex/cards-assistant/hooks --output ../../codex/runtime/hooks --output ../../opencode/cards/plugin --output ../../opencode/cards-assistant/plugin --output ../../opencode/runtime/plugin --output ../../antigravity/runtime/hooks.json --output ../../antigravity/runtime/bin --manifest dist/.build-unchanged.json -- node scripts/build.mjs",
     "watch": "yarn build && chokidar 'src/**/*.{ts,md,txt}' -c 'yarn build'",
-    "test": "vitest run",
+    "test": "yarn run -T turbo run test:uncached --filter=@cards.management/agent-hooks --cwd \"$PROJECT_CWD\" --",
+    "test:uncached": "vitest run",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -l",
     "typecheck": "tsgo --noEmit"
   },

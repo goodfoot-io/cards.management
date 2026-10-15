@@ -6,15 +6,15 @@
  *
  *
  * @summary Integration tests for TestCardRepository
- * @module test-utils/test/git/TestIssueRepository.test
+ * @module sdk/test/testing/TestCardRepository.test
  */
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { ATTACHMENTS_DIR, COMMENTS_DIR, COMMENTS_PREFIX, PLANS_DIR } from '@cards.management/sdk/card-repo-layout';
-import { COMMITS_DIR } from '@cards.management/sdk/protocol';
 import * as fs from 'fs-extra';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { TestCardRepository } from '../../src/git/TestCardRepository.js';
+import { ATTACHMENTS_DIR, COMMENTS_DIR, COMMENTS_PREFIX, PLANS_DIR } from '../../src/cardRepoLayout.js';
+import { COMMITS_DIR } from '../../src/protocol/index.js';
+import { TestCardRepository } from '../../src/testing/TestCardRepository.js';
 
 describe('TestCardRepository', () => {
   let repo: TestCardRepository;

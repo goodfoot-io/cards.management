@@ -151,6 +151,10 @@
     "public/packages/sdk/test/stream-store/store-auto-subscribe.test.ts": [],
     "public/packages/sdk/test/stream-store/store.test.ts": [],
     "public/packages/sdk/test/symlink-capability.test.ts": [],
+    "public/packages/sdk/test/testing/TestCardRepository.test.ts": [],
+    "public/packages/sdk/test/testing/TestHttpClient.test.ts": [],
+    "public/packages/sdk/test/testing/abortTeardown.test.ts": [],
+    "public/packages/sdk/test/testing/entities.test.ts": [],
     "public/packages/sdk/test/timer.test.ts": [],
     "public/packages/sdk/test/transcript-sync/adapters/antigravity.test.ts": [],
     "public/packages/sdk/test/transcript-sync/adapters/claude-code.test.ts": [],
@@ -301,6 +305,12 @@
         "ps",
         "sh"
       ],
+      "public/packages/sdk/test/testing/TestCardRepository.test.ts": [
+        "git"
+      ],
+      "public/packages/sdk/test/testing/abortTeardown.test.ts": [
+        "git"
+      ],
       "public/packages/sdk/test/transcript-sync/engine/commit.test.ts": [
         "git"
       ],
@@ -381,6 +391,9 @@
       "public/packages/sdk/test/slot-lock.test.ts": [
         "tsx"
       ],
+      "public/packages/sdk/test/testing/abortTeardown.test.ts": [
+        "tsx"
+      ],
       "public/packages/sdk/test/worktree-slot-boundary.test.ts": [
         "tsx"
       ]
@@ -424,6 +437,9 @@
       ],
       "public/packages/sdk/test/e2e/builder-cli.test.ts": [
         "public/packages/sdk/src/config/factories/index.ts"
+      ],
+      "public/packages/sdk/test/testing/abortTeardown.test.ts": [
+        "public/packages/sdk/test/testing/abortUnhandledRejectionChild.ts"
       ],
       "public/packages/sdk/test/worktree-slot-boundary.test.ts": [
         "public/packages/sdk/src/bin/create-worktree.ts",

@@ -12,14 +12,12 @@
     "build-unchanged": "./src/bin/build-unchanged.ts"
   },
   "scripts": {
-    "test": "vitest run",
+    "test": "yarn run -T turbo run test:uncached --filter=@cards.management/test-utils --cwd \"$PROJECT_CWD\" --",
+    "test:uncached": "vitest run",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src ./test && jsdoczoom -l",
     "typecheck": "tsgo --noEmit"
   },
   "dependencies": {
-    "@cards.management/hybrid-store": "workspace:*",
-    "@cards.management/sdk": "workspace:*",
-    "@cards.management/server": "workspace:*",
     "fs-extra": "^11.3.4",
     "simple-git": "^3.36.0",
     "uuid": "^13.0.0",

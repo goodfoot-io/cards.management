@@ -1,0 +1,18 @@
+{
+  "extends": [
+    "//"
+  ],
+  "tasks": {
+    "test:uncached": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/cards/web/src/**",
+        "$TURBO_ROOT$/public/packages/default-configuration/package.json",
+        "$TURBO_ROOT$/public/packages/default-configuration/scripts/**",
+        "$TURBO_ROOT$/public/packages/default-configuration/settings.config.ts",
+        "$TURBO_ROOT$/public/packages/default-configuration/src/**",
+        "!$TURBO_ROOT$/**/.DS_Store"
+      ]
+    }
+  }
+}

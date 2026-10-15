@@ -10,7 +10,8 @@
   },
   "scripts": {
     "typecheck": "tsgo --noEmit",
-    "test": "vitest run",
+    "test": "yarn run -T turbo run test:uncached --filter=@cards.management/sessions --cwd \"$PROJECT_CWD\" --",
+    "test:uncached": "vitest run",
     "lint": "biome check --write --unsafe --max-diagnostics 500 ./src && jsdoczoom -l"
   },
   "devDependencies": {

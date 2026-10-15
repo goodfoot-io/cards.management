@@ -22,7 +22,7 @@
  * never-awaited commit, so the child is still alive when the guard runs.
  *
  * @summary Teardown abort must not surface a fatal unhandled rejection (slow child)
- * @module test-utils/test/git/abortTeardown
+ * @module sdk/test/testing/abortTeardown
  */
 import { spawn } from 'node:child_process';
 import * as path from 'node:path';
