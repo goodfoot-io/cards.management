@@ -366,9 +366,16 @@ export type {
 // --- Stream Types ---
 export type {
   AttachmentInfoFile,
+  SessionDescriptor,
+  SessionMember,
   StreamDefinition,
   StreamMeta,
-  StreamMetaFile
+  StreamMetaFile,
+  StreamSessionRef,
+  StreamSourceBinding,
+  StreamSourceRef,
+  StreamSourceSnapshot,
+  StreamSourceVersion
 } from './stream.js';
 // --- Timeline Types ---
 export type {

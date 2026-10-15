@@ -26,6 +26,7 @@
     "./config/env": "./src/config/env.ts",
     "./config/completion-handoff": "./src/config/completion-handoff.ts",
     "./marketplace": "./src/marketplace.ts",
+    "./stream-session": "./src/stream-session/index.ts",
     "./stream-store": "./src/stream-store/index.ts",
     "./worktree": "./src/worktree.ts",
     "./worktree-for-card": "./src/worktreeForCard.ts",

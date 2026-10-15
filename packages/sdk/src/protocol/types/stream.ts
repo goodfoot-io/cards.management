@@ -209,3 +209,83 @@ export interface StreamDefinition {
   /** Maximum cumulative bytes per stream file before auto-close with `'size_limit'` status (default 100 MB). */
   maxStreamSize?: number;
 }
+
+/** Exact navigation identity of one provider session on one card. */
+export interface StreamSessionRef {
+  /** Owning card. */
+  cardId: string;
+  /** Provider stream type. */
+  streamType: string;
+  /** Authoritative session identity. */
+  sessionId: string;
+}
+
+/** Exact identity of one native transcript source. */
+export interface StreamSourceRef {
+  /** Owning card. */
+  cardId: string;
+  /** Provider stream type. */
+  streamType: string;
+  /** Logical source-relative path. */
+  relPath: string;
+}
+
+/** Server-owned source incarnation; ordinary appends preserve both epochs. */
+export interface StreamSourceVersion {
+  /** Changes on server restart. */
+  serverEpoch: string;
+  /** Changes on replacement, truncation, or routing metadata changes. */
+  sourceEpoch: string;
+}
+
+/** Authoritative routing metadata accepted together with source bytes. */
+export interface StreamSourceBinding {
+  /** Session owning this version. */
+  sessionId: string;
+  /** Source role within that session. */
+  role: 'main' | 'subagent' | 'auxiliary';
+  /** Explicit provider agent identity when present. */
+  agentId?: string;
+}
+
+/** Coherent snapshot of contiguous complete native lines, never a partial last line. */
+export interface StreamSourceSnapshot {
+  /** Exact source accepted by the server. */
+  source: StreamSourceRef;
+  /** Server-owned incarnation. */
+  version: StreamSourceVersion;
+  /** Routing identity accepted with this read. */
+  binding: StreamSourceBinding;
+  /** Source metadata from the same accepted read. */
+  meta: StreamMeta;
+  /** Unmodified native lines without newline delimiters. */
+  lines: string[];
+  /** One-based first coordinate; empty snapshots use totalLineCount + 1. */
+  firstLineNumber: number;
+  /** Number of complete lines in the coherent source read. */
+  totalLineCount: number;
+}
+
+/** Inspectable source membership without provider transcript interpretation. */
+export interface SessionMember {
+  /** Exact native source identity. */
+  source: StreamSourceRef;
+  /** Authoritative membership role. */
+  role: StreamSourceBinding['role'];
+  /** Provider identity when supplied. */
+  agentId?: string;
+  /** Optional display title. */
+  title?: string;
+}
+
+/** Deterministically ordered membership with no arbitrary main selection. */
+export interface SessionDescriptor {
+  /** Exact session tuple. */
+  session: StreamSessionRef;
+  /** Ordered by main, subagent, auxiliary, then source key. */
+  members: SessionMember[];
+  /** Non-null only when exactly one member is main. */
+  main: StreamSourceRef | null;
+  /** Explicit missing or conflicting main anomaly. */
+  validity: 'ready' | 'missing-main' | 'conflicting-main';
+}

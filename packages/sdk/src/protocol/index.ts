@@ -376,6 +376,15 @@ export {
   type RuntimeCredentialFile,
   runtimeCredentialFileSchema
 } from './types/runtime-credential-file.js';
+export type {
+  SessionDescriptor,
+  SessionMember,
+  StreamSessionRef,
+  StreamSourceBinding,
+  StreamSourceRef,
+  StreamSourceSnapshot,
+  StreamSourceVersion
+} from './types/stream.js';
 export {
   clearsCardDeletion,
   type InvalidBranchEntry,
