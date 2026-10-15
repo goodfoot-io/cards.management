@@ -92,7 +92,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
-    "@goodfoot/vitest-cache": "^1.0.0",
+    "@goodfoot/vitest-cache": "^1.0.5",
     "@types/fs-extra": "^11.0.4",
     "@types/mime-types": "^3.0.1",
     "@types/node": "24.x",

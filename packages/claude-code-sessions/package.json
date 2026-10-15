@@ -17,7 +17,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
-    "@goodfoot/vitest-cache": "^1.0.0",
+    "@goodfoot/vitest-cache": "^1.0.5",
     "@types/node": "24.x",
     "@typescript/native-preview": "^7.0.0-dev",
     "typescript": "^6.0.3",

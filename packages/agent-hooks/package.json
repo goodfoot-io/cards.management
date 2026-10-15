@@ -26,7 +26,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
-    "@goodfoot/vitest-cache": "^1.0.0",
+    "@goodfoot/vitest-cache": "^1.0.5",
     "@opencode-ai/plugin": "^1.18.23",
     "@opencode-ai/sdk": "^1.18.23",
     "@types/js-yaml": "^4.0.9",

@@ -45,7 +45,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.2.34",
     "@biomejs/biome": "^2.4.14",
     "@cards.management/test-utils": "workspace:*",
-    "@goodfoot/vitest-cache": "^1.0.0",
+    "@goodfoot/vitest-cache": "^1.0.5",
     "@types/bun": "^1.3.13",
     "@types/cross-spawn": "^6.0.6",
     "@types/fs-extra": "^11.0.4",
