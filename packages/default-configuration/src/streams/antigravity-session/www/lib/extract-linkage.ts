@@ -1,19 +1,33 @@
 /**
- * Extracts antigravity relationship evidence from unmodified native source records.
- * Capability is bounded to main-only; no membership or placement is inferred.
- * @summary Antigravity native linkage extraction
+ * Antigravity materialization carries no witnessed child topology.
+ * Native payload hints never authorize fabricated delegation relationships.
+ * @summary Antigravity main-only linkage extraction
  * @module streams/antigravity-session/www/lib/extract-linkage
  */
 
-import type { SourceLinkageEvidence } from '../../../lib/session/linkage';
+import {
+  type NativeLinkageDiagnostic,
+  readLinkageRecords,
+  type SourceLinkageEvidence
+} from '../../../lib/session/linkage';
 import type { NativeTranscriptSource } from '../../../lib/session/types';
 
 /**
- * Inspect one complete available native range with absolute provenance coordinates.
- * @param _source - Caller-authorized current source range and metadata.
- * @throws {Error} Until native evidence extraction is implemented.
- * @returns Native identity and relationship evidence, without target acquisition.
+ * Preserve the explicit main-only limit while reporting malformed native records.
+ * @param source - Caller-authorized current source range and metadata.
+ * @returns Empty identity/relationship evidence with a bounded capability diagnostic.
  */
-export function extractAntigravityLinkage(_source: NativeTranscriptSource): SourceLinkageEvidence {
-  throw new Error('Not Implemented');
+export function extractAntigravityLinkage(source: NativeTranscriptSource): SourceLinkageEvidence {
+  const diagnostics: NativeLinkageDiagnostic[] = [];
+  readLinkageRecords(source, diagnostics);
+  diagnostics.push({ code: 'unsupported-topology', reason: 'native-materialization-is-main-only', occurrences: [] });
+  return {
+    sourceKey: source.sourceKey,
+    generation: source.generation,
+    provider: 'antigravity',
+    capability: 'main-only',
+    identities: [],
+    delegations: [],
+    diagnostics
+  };
 }

@@ -36,7 +36,7 @@ export interface NativeDelegationEvidence {
   readonly target: NativeLinkageIdentity;
   /** All native call/result occurrences supporting this claim. */
   readonly evidence: readonly NativeRecordProvenance[];
-  /** Only the captured Claude structured chain qualifies as delegation here. */
+  /** Delegation requires a witnessed structured chain; reference-only capabilities cannot claim it. */
   readonly relation: 'delegation' | 'reference';
 }
 
@@ -56,4 +56,75 @@ export interface SourceLinkageEvidence {
   readonly identities: readonly NativeSourceIdentityEvidence[];
   readonly delegations: readonly NativeDelegationEvidence[];
   readonly diagnostics: readonly NativeLinkageDiagnostic[];
+}
+
+/** Parsed native record with its unchanged physical source occurrence. */
+export interface LinkageRecord {
+  readonly value: Readonly<Record<string, unknown>>;
+  readonly occurrence: NativeRecordProvenance;
+}
+
+/**
+ * Narrow unknown native values without trusting provider parser assertions.
+ * @param value - Native JSON value.
+ * @returns Object fields, or null for arrays, primitives and absent values.
+ */
+export function linkageObject(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : null;
+}
+
+/**
+ * Accept bounded nonempty native identifiers without control characters; preserve exact bytes.
+ * @param value - Native identifier field.
+ * @returns Native string, or undefined when unusable.
+ */
+export function linkageIdentifier(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length > 4096 || value.trim().length === 0) return undefined;
+  for (let index = 0; index < value.length; index++) {
+    const code = value.charCodeAt(index);
+    if (code < 32 || (code >= 127 && code <= 159)) return undefined;
+  }
+  return value;
+}
+
+/**
+ * Decode a snapshot while retaining absolute physical provenance and inert diagnostics.
+ * @param source - Caller-authorized complete native range.
+ * @param diagnostics - Destination for identifier-free malformed-record reasons.
+ * @returns Parsed object records in source order.
+ */
+export function readLinkageRecords(
+  source: import('./types').NativeTranscriptSource,
+  diagnostics: NativeLinkageDiagnostic[]
+): readonly LinkageRecord[] {
+  const records: LinkageRecord[] = [];
+  for (const [index, line] of source.lines.entries()) {
+    const occurrence = {
+      sourceKey: source.sourceKey,
+      generation: source.generation,
+      lineNumber: source.headLineNumber + index,
+      selector: 'record'
+    };
+    if (!line.trim()) continue;
+    let value: Readonly<Record<string, unknown>> | null = null;
+    try {
+      value = linkageObject(JSON.parse(line));
+    } catch {
+      /* Malformed native input is data. */
+    }
+    if (value === null) {
+      diagnostics.push({ code: 'malformed', reason: 'invalid-native-record', occurrences: [occurrence] });
+      continue;
+    }
+    records.push({
+      value,
+      occurrence: {
+        ...occurrence,
+        ...(linkageIdentifier(value['uuid']) ? { nativeEventId: linkageIdentifier(value['uuid']) } : {})
+      }
+    });
+  }
+  return records;
 }
