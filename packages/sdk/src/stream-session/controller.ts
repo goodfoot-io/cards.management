@@ -3,6 +3,7 @@
  * @summary Injected native transcript session controller contracts
  * @module stream-session/controller
  */
+
 import type {
   SessionDescriptor,
   StreamMeta,
@@ -12,6 +13,7 @@ import type {
   StreamSourceSnapshot,
   StreamSourceVersion
 } from '../protocol/types/stream.js';
+import { createController } from './runtime.js';
 
 /** Requested native history coverage; full coverage cannot be downgraded by a delayed tail. */
 export type SessionHistoryMode = 'tail' | 'full';
@@ -92,6 +94,8 @@ export interface SessionSourceState {
   subscribed: boolean;
   /** Current source reconciliation epoch. */
   reconciliationEpoch: number;
+  /** Current renderer subscription correlation; automatic refetches retain this identity. */
+  requestId: string | null;
   /** Requested history coverage. */
   mode: SessionHistoryMode;
   /** Explicit loading or paused synchronization state. */
@@ -170,9 +174,9 @@ export interface SessionController {
  * operation is fenced by session, generation, source reconciliation epoch,
  * request identity, and request-start baseline.
  * @param _options - Trusted lifetime scope and injected host dependencies.
- * @throws Error until the contract bootstrap is implemented.
+ * @throws Error when the trusted session scope or generation is invalid.
  * @returns A controller that performs no work until started.
  */
 export function createSessionController(_options: SessionControllerOptions): SessionController {
-  throw new Error('Not Implemented');
+  return createController(_options);
 }
