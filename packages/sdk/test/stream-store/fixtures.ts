@@ -22,7 +22,8 @@ import type {
   StreamDisplayMode,
   StreamInitData,
   StreamRendererStore,
-  StreamStoreDiagnostic
+  StreamStoreDiagnostic,
+  StreamViewState
 } from '../../src/stream-store/types.js';
 
 export const session: StreamSessionRef = { cardId: 'card-1', streamType: 'claude-code-session', sessionId: 's1' };
@@ -163,9 +164,12 @@ export interface Harness {
  * @param options - Init overrides.
  * @param options.mode - Display mode.
  * @param options.descriptor - Initial membership.
+ * @param options.viewState - Restored view state.
  * @returns Harness with captured traffic.
  */
-export function harness(options: { mode?: StreamDisplayMode; descriptor?: SessionDescriptor } = {}): Harness {
+export function harness(
+  options: { mode?: StreamDisplayMode; descriptor?: SessionDescriptor; viewState?: StreamViewState } = {}
+): Harness {
   const sent: RendererToHostMessage[] = [];
   const diagnostics: StreamStoreDiagnostic[] = [];
   const themes: Harness['themes'] = [];
@@ -176,7 +180,8 @@ export function harness(options: { mode?: StreamDisplayMode; descriptor?: Sessio
     generation,
     descriptor: options.descriptor ?? descriptor(mainMember, childMember),
     revision: 1,
-    mode: options.mode ?? 'compact'
+    mode: options.mode ?? 'compact',
+    ...(options.viewState ? { viewState: options.viewState } : {})
   };
   const store = createStreamStore({
     init,

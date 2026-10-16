@@ -47,7 +47,9 @@ export type {
   StreamStoreDiagnostic,
   StreamStoreOptions,
   StreamStoreState,
-  ThemeChangeMessage
+  StreamViewState,
+  ThemeChangeMessage,
+  ViewStateMessage
 } from './types.js';
 export {
   MAX_APPEND_LINES,
@@ -56,6 +58,8 @@ export {
   MAX_PENDING_EVENTS,
   MAX_SCROLL_DELTA,
   MAX_TOKEN_LENGTH,
+  MAX_VIEW_STATE_ENTRIES,
+  MAX_VIEW_STATE_KEY_LENGTH,
   TAIL_HISTORY_LINES
 } from './types.js';
-export { validateHostMessage, validateRendererMessage } from './validate.js';
+export { validateHostMessage, validateRendererMessage, validateViewState } from './validate.js';

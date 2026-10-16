@@ -40,9 +40,10 @@ import {
   type StreamInitData,
   type StreamSourceInvalidationReason,
   type StreamSourceLoadError,
+  type StreamViewState,
   type ThemeChangeMessage
 } from '../stream-store/types.js';
-import { validateHostMessage, validateRendererMessage } from '../stream-store/validate.js';
+import { validateHostMessage, validateRendererMessage, validateViewState } from '../stream-store/validate.js';
 
 /** Renderer actions the host performs on the user's behalf after validation. */
 export type StreamHostAction = CloseMessage | OpenFileMessage | ShowDiffMessage;
@@ -84,6 +85,10 @@ export interface StreamHostBridgeOptions {
   action?(action: StreamHostAction): void;
   /** Receives validated, generation-matched layout messages. */
   layout?(message: LayoutRendererMessage): void;
+  /** View state persisted from an earlier load of this session; over-bound state is dropped with a diagnostic. */
+  initialViewState?: StreamViewState;
+  /** Receives each validated, generation-matched view state for the host to persist per session. */
+  viewState?(state: StreamViewState): void;
   /** Identifier-only diagnostics from the bridge and its controller. */
   diagnostic?(event: StreamBridgeDiagnostic): void;
 }
@@ -92,7 +97,7 @@ export interface StreamHostBridgeOptions {
 export interface StreamHostBridge {
   /** Starts the controller; listeners are installed before any request. */
   start(): void;
-  /** Initialization for the renderer document, or null before the first accepted membership. */
+  /** Initialization for the renderer document carrying the latest accepted view state, or null before the first accepted membership. */
   getInit(): StreamInitData | null;
   /** Marks the renderer window live (its load event) and delivers any state newer than its initialization. */
   attach(): void;
@@ -230,6 +235,12 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
   let announced = false;
   let sentRevision = 0;
   let connected = true;
+  let view: StreamViewState | null = null;
+  if (options.initialViewState !== undefined) {
+    const checked = validateViewState(options.initialViewState);
+    if (checked.ok) view = structuredClone(checked.message);
+    else options.diagnostic?.({ code: 'rejected-message', reason: checked.reason });
+  }
 
   const events: SessionEventSource = {
     subscribe(listener: (event: SessionControllerEvent) => void) {
@@ -288,7 +299,8 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
       generation,
       descriptor: structuredClone(state.descriptor),
       revision: state.revision,
-      mode: options.mode
+      mode: options.mode,
+      ...(view ? { viewState: structuredClone(view) } : {})
     };
   }
 
@@ -571,6 +583,10 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
         case 'openFile':
         case 'showDiff':
           options.action?.(message);
+          return;
+        case 'view:state':
+          view = structuredClone(message.state);
+          options.viewState?.(structuredClone(message.state));
           return;
         default:
           options.layout?.(message);
