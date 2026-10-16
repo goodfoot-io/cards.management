@@ -47,6 +47,12 @@ export const MAX_LAYOUT_HEIGHT = 100_000;
 /** Largest accepted absolute scroll delta per `layout:scroll` message in CSS pixels. */
 export const MAX_SCROLL_DELTA = 10_000;
 
+/** Maximum entries in each {@link StreamViewState} list. */
+export const MAX_VIEW_STATE_ENTRIES = 2000;
+
+/** Maximum length of a {@link StreamViewState} key. */
+export const MAX_VIEW_STATE_KEY_LENGTH = 1024;
+
 // ============================================================================
 // Shared vocabulary
 // ============================================================================
@@ -110,6 +116,21 @@ export interface StreamInitData {
   revision: number;
   /** Host-selected display mode. */
   mode: StreamDisplayMode;
+  /** View state the host persisted from an earlier load of this session, restored on rebuild. */
+  viewState?: StreamViewState;
+}
+
+/**
+ * Renderer-owned view state the host persists opaquely across iframe rebuilds.
+ * Keys are unique stable renderer leaf keys of at most
+ * {@link MAX_VIEW_STATE_KEY_LENGTH} characters; each list holds at most
+ * {@link MAX_VIEW_STATE_ENTRIES} entries.
+ */
+export interface StreamViewState {
+  /** Disclosure open state per leaf key. */
+  open: Array<[string, boolean]>;
+  /** Loaded line range per key; `first` and `count` are positive safe integers. */
+  ranges: Array<[string, { first: number; count: number }]>;
 }
 
 // ============================================================================
@@ -305,6 +326,13 @@ export interface LayoutAnchorMessage {
   delta: number;
 }
 
+/** Latest renderer view state for the host to persist; each message replaces the previous one. */
+export interface ViewStateMessage {
+  type: 'view:state';
+  generation: string;
+  state: StreamViewState;
+}
+
 /** Messages sent from the renderer to the host. */
 export type RendererToHostMessage =
   | SourceSubscribeMessage
@@ -316,7 +344,8 @@ export type RendererToHostMessage =
   | LayoutReadyMessage
   | LayoutSizeMessage
   | LayoutScrollMessage
-  | LayoutAnchorMessage;
+  | LayoutAnchorMessage
+  | ViewStateMessage;
 
 /** Layout bridge subset of {@link RendererToHostMessage}. */
 export type LayoutRendererMessage = LayoutReadyMessage | LayoutSizeMessage | LayoutScrollMessage | LayoutAnchorMessage;
@@ -379,6 +408,8 @@ export interface StreamStoreState {
   sources: ReadonlyMap<string, StreamSourceView>;
   /** Current layout handshake token, or null before the first handshake. */
   layoutToken: string | null;
+  /** View state restored from initialization, or null when the host supplied none. */
+  viewState: StreamViewState | null;
 }
 
 /** Identifier-only renderer diagnostics. */
@@ -425,6 +456,8 @@ export interface StreamRendererStore {
   showDiff(sha: string, filePath?: string): void;
   /** Posts a layout message correlated with the current generation and handshake token. */
   postLayout(message: LayoutPayload): void;
+  /** Posts the latest view state for the host to persist; over-bound state is rejected with a diagnostic. */
+  postViewState(state: StreamViewState): void;
   /** Removes listeners and suppresses all later traffic. */
   dispose(): void;
 }

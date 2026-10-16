@@ -40,7 +40,7 @@ import type {
   StreamStoreState
 } from './types.js';
 import { MAX_PENDING_BYTES, MAX_PENDING_EVENTS, TAIL_HISTORY_LINES } from './types.js';
-import { validateHostMessage, validateRendererMessage } from './validate.js';
+import { validateHostMessage, validateRendererMessage, validateViewState } from './validate.js';
 
 declare global {
   interface Window {
@@ -164,7 +164,8 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
         init.descriptor.session.sessionId
       ]) ||
     Object.keys(init.session).length !== 3 ||
-    (init.mode !== 'compact' && init.mode !== 'expanded')
+    (init.mode !== 'compact' && init.mode !== 'expanded') ||
+    (init.viewState !== undefined && !validateViewState(init.viewState).ok)
   ) {
     throw new Error('Invalid stream store initialization');
   }
@@ -187,7 +188,8 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     mode: init.mode,
     connection: 'connected',
     sources: new Map(),
-    layoutToken: null
+    layoutToken: null,
+    viewState: init.viewState ?? null
   }));
 
   /**
@@ -884,6 +886,9 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       const token = store.getState().layoutToken;
       if (disposed || token === null) return;
       post({ ...payload, generation, token } as RendererToHostMessage);
+    },
+    postViewState(state) {
+      post({ type: 'view:state', generation, state: structuredClone(state) });
     },
     dispose() {
       if (disposed) return;

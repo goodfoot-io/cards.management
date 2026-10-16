@@ -25,10 +25,12 @@ import {
   createStreamStore,
   type HostToRendererMessage,
   type LayoutRendererMessage,
+  MAX_VIEW_STATE_ENTRIES,
   type StreamDisplayMode,
   type StreamInitData,
   type StreamRendererStore,
   type StreamSourceView,
+  type StreamViewState,
   TAIL_HISTORY_LINES
 } from '../../src/stream-store/index.js';
 import { child, childBinding, main, mainBinding, meta, session, v1, v2 } from '../stream-store/fixtures.js';
@@ -91,6 +93,7 @@ interface Rig {
   actions: StreamHostAction[];
   layouts: LayoutRendererMessage[];
   inits: StreamInitData[];
+  views: StreamViewState[];
   emit(event: SessionControllerEvent): void;
   listeners(): number;
   /** Creates the renderer from the bridge's initialization and attaches it. */
@@ -104,9 +107,10 @@ interface Rig {
 /**
  * Starts a bridge over deferred Cards traffic.
  * @param mode - Display mode.
+ * @param initialViewState - View state persisted from an earlier load.
  * @returns Rig with the controller started.
  */
-function rig(mode: StreamDisplayMode = 'compact'): Rig {
+function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewState): Rig {
   const lists: Array<(records: StreamMeta[]) => void> = [];
   const reads: PendingRead[] = [];
   const posted: HostToRendererMessage[] = [];
@@ -114,6 +118,7 @@ function rig(mode: StreamDisplayMode = 'compact'): Rig {
   const actions: StreamHostAction[] = [];
   const layouts: LayoutRendererMessage[] = [];
   const inits: StreamInitData[] = [];
+  const views: StreamViewState[] = [];
   const toRenderer: HostToRendererMessage[] = [];
   const toHost: unknown[] = [];
   let listener: ((event: SessionControllerEvent) => void) | undefined;
@@ -154,7 +159,9 @@ function rig(mode: StreamDisplayMode = 'compact'): Rig {
     ready: (init) => inits.push(init),
     action: (action) => actions.push(action),
     layout: (message) => layouts.push(message),
-    diagnostic: (event) => diagnostics.push(event)
+    diagnostic: (event) => diagnostics.push(event),
+    viewState: (state) => views.push(state),
+    ...(initialViewState ? { initialViewState } : {})
   });
   bridge.start();
   return {
@@ -166,6 +173,7 @@ function rig(mode: StreamDisplayMode = 'compact'): Rig {
     actions,
     layouts,
     inits,
+    views,
     emit: (event) => listener?.(event),
     listeners: () => Number(listener !== undefined) + Number(timer !== undefined),
     open(storeMode = mode) {
@@ -521,5 +529,69 @@ describe('renderer scope and correlation', () => {
     await r.pump();
     expect(r.posted).toEqual([]);
     expect(r.lists).toHaveLength(0);
+  });
+});
+
+describe('view state persistence', () => {
+  const saved: StreamViewState = { open: [['row-1', true]], ranges: [['tool-1', { first: 2, count: 10 }]] };
+
+  /**
+   * Accepts the first membership so initialization is available.
+   * @param r - Rig.
+   */
+  async function accept(r: Rig): Promise<void> {
+    r.lists.shift()?.([meta(main, mainBinding, 1)]);
+    await flush();
+  }
+
+  it('restores persisted state into initialization and the renderer store', async () => {
+    const r = rig('compact', saved);
+    await accept(r);
+    expect(r.bridge.getInit()?.viewState).toEqual(saved);
+    expect(r.inits[0]?.viewState).toEqual(saved);
+    expect(r.open().getState().viewState).toEqual(saved);
+  });
+
+  it('omits view state from initialization when none was persisted', async () => {
+    const r = rig();
+    await accept(r);
+    expect(r.bridge.getInit()).not.toHaveProperty('viewState');
+    expect(r.open().getState().viewState).toBeNull();
+  });
+
+  it('hands each renderer state to the host and carries the latest into a rebuild', async () => {
+    const r = rig();
+    await accept(r);
+    r.open();
+    const next: StreamViewState = { open: [['row-2', false]], ranges: [] };
+    r.store().postViewState(saved);
+    r.store().postViewState(next);
+    await r.pump();
+    expect(r.views).toEqual([saved, next]);
+    expect(r.bridge.getInit()?.viewState).toEqual(next);
+    const rebuilt = rig('compact', r.views.at(-1));
+    await accept(rebuilt);
+    expect(rebuilt.open().getState().viewState).toEqual(next);
+  });
+
+  it('rejects over-bound and stale-generation state with diagnostics', async () => {
+    const overBound: StreamViewState = {
+      open: Array.from({ length: MAX_VIEW_STATE_ENTRIES + 1 }, (_, index): [string, boolean] => [`k${index}`, true]),
+      ranges: []
+    };
+    const r = rig('compact', overBound);
+    expect(r.diagnostics).toEqual([{ code: 'rejected-message', reason: 'invalid-view-state' }]);
+    await accept(r);
+    expect(r.bridge.getInit()).not.toHaveProperty('viewState');
+    r.open();
+    await r.pump();
+    r.bridge.receive({ type: 'view:state', generation, state: overBound });
+    r.bridge.receive({ type: 'view:state', generation: 'view-0', state: saved });
+    expect(r.diagnostics.slice(1).map((event) => [event.code, event.reason])).toEqual([
+      ['rejected-message', 'invalid-view-state'],
+      ['stale-generation', undefined]
+    ]);
+    expect(r.views).toEqual([]);
+    expect(r.bridge.getInit()).not.toHaveProperty('viewState');
   });
 });

@@ -11,8 +11,15 @@
  * @module stream-store/validate
  */
 
-import type { HostToRendererMessage, MessageValidation, RendererToHostMessage } from './types.js';
-import { MAX_APPEND_LINES, MAX_LAYOUT_HEIGHT, MAX_SCROLL_DELTA, MAX_TOKEN_LENGTH } from './types.js';
+import type { HostToRendererMessage, MessageValidation, RendererToHostMessage, StreamViewState } from './types.js';
+import {
+  MAX_APPEND_LINES,
+  MAX_LAYOUT_HEIGHT,
+  MAX_SCROLL_DELTA,
+  MAX_TOKEN_LENGTH,
+  MAX_VIEW_STATE_ENTRIES,
+  MAX_VIEW_STATE_KEY_LENGTH
+} from './types.js';
 
 /** Thrown internally with an identifier-only reason; never escapes a validator. */
 class Rejection extends Error {}
@@ -465,9 +472,51 @@ function renderer(value: unknown): void {
         reject('invalid-anchor');
       return;
     }
+    case 'view:state': {
+      const record = exact(value, ['type', 'generation', 'state'], [], 'invalid-message');
+      token(record.generation, 'invalid-generation');
+      viewState(record.state);
+      return;
+    }
     default:
       reject('unknown-type');
   }
+}
+
+/**
+ * Validates one bounded list of unique-key view-state pairs.
+ * @param value - Candidate list.
+ * @param entry - Throwing validator for one pair's value.
+ * @throws Rejection when the list, a key, or a value is invalid.
+ */
+function viewEntries(value: unknown, entry: (item: unknown) => void): void {
+  if (!Array.isArray(value) || value.length > MAX_VIEW_STATE_ENTRIES) reject('invalid-view-state');
+  const keys = new Set<string>();
+  for (const pair of value) {
+    if (!Array.isArray(pair) || pair.length !== 2) reject('invalid-view-state');
+    const [key, item] = pair as [unknown, unknown];
+    identifier(key, 'invalid-view-state', MAX_VIEW_STATE_KEY_LENGTH);
+    if (keys.has(key)) reject('invalid-view-state');
+    keys.add(key);
+    entry(item);
+  }
+}
+
+/**
+ * Validates an exact view-state record.
+ * @param value - Candidate.
+ * @throws Rejection when any list, key, or range is invalid.
+ */
+function viewState(value: unknown): void {
+  const record = exact(value, ['open', 'ranges'], [], 'invalid-view-state');
+  viewEntries(record.open, (item) => {
+    if (typeof item !== 'boolean') reject('invalid-view-state');
+  });
+  viewEntries(record.ranges, (item) => {
+    const range = exact(item, ['first', 'count'], [], 'invalid-view-state');
+    positive(range.first, 'invalid-view-state');
+    positive(range.count, 'invalid-view-state');
+  });
 }
 
 /**
@@ -503,4 +552,13 @@ export function validateHostMessage(value: unknown): MessageValidation<HostToRen
  */
 export function validateRendererMessage(value: unknown): MessageValidation<RendererToHostMessage> {
   return run(value, renderer);
+}
+
+/**
+ * Validates untrusted persisted or renderer-supplied view state.
+ * @param value - Candidate state.
+ * @returns The typed state, or an identifier-only rejection reason.
+ */
+export function validateViewState(value: unknown): MessageValidation<StreamViewState> {
+  return run(value, viewState);
 }

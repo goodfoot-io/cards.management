@@ -8,9 +8,11 @@ import {
   MAX_APPEND_LINES,
   MAX_LAYOUT_HEIGHT,
   MAX_SCROLL_DELTA,
-  MAX_TOKEN_LENGTH
+  MAX_TOKEN_LENGTH,
+  MAX_VIEW_STATE_ENTRIES,
+  MAX_VIEW_STATE_KEY_LENGTH
 } from '../../src/stream-store/types.js';
-import { validateHostMessage, validateRendererMessage } from '../../src/stream-store/validate.js';
+import { validateHostMessage, validateRendererMessage, validateViewState } from '../../src/stream-store/validate.js';
 import {
   append,
   childMember,
@@ -60,7 +62,19 @@ const rendererValid: unknown[] = [
   { type: 'layout:size', generation, token: 't', revision: 9, height: MAX_LAYOUT_HEIGHT },
   { type: 'layout:scroll', generation, token: 't', command: { kind: 'delta', deltaY: -MAX_SCROLL_DELTA } },
   { type: 'layout:scroll', generation, token: 't', command: { kind: 'key', key: 'page-down' } },
-  { type: 'layout:anchor', generation, token: 't', revision: 2, key: 'row-1', delta: -24.5 }
+  { type: 'layout:anchor', generation, token: 't', revision: 2, key: 'row-1', delta: -24.5 },
+  { type: 'view:state', generation, state: { open: [], ranges: [] } },
+  {
+    type: 'view:state',
+    generation,
+    state: {
+      open: [
+        ['row-1', true],
+        ['row-2', false]
+      ],
+      ranges: [['tool-1', { first: 3, count: 40 }]]
+    }
+  }
 ];
 
 describe('validateHostMessage', () => {
@@ -246,5 +260,72 @@ describe('validateRendererMessage', () => {
       { type: 'close' }
     ];
     for (const message of bad) expect(validateRendererMessage(message).ok).toBe(false);
+  });
+});
+
+describe('validateViewState', () => {
+  /**
+   * Builds a list of distinct-key entries.
+   * @param count - Entry count.
+   * @param value - Per-entry value.
+   * @returns Pairs keyed `k0..k{count-1}`.
+   */
+  function entries<T>(count: number, value: T): Array<[string, T]> {
+    return Array.from({ length: count }, (_, index) => [`k${index}`, value]);
+  }
+
+  it('accepts state at its entry and key bounds', () => {
+    const state = {
+      open: entries(MAX_VIEW_STATE_ENTRIES, true),
+      ranges: [
+        ['x'.repeat(MAX_VIEW_STATE_KEY_LENGTH), { first: Number.MAX_SAFE_INTEGER, count: Number.MAX_SAFE_INTEGER }]
+      ]
+    };
+    expect(validateViewState(state)).toEqual({ ok: true, message: state });
+  });
+
+  it('rejects over-bound, duplicate, malformed, and inexact state', () => {
+    const range = { first: 1, count: 1 };
+    const bad: unknown[] = [
+      null,
+      [],
+      { open: [] },
+      { open: [], ranges: [], extra: [] },
+      { open: entries(MAX_VIEW_STATE_ENTRIES + 1, true), ranges: [] },
+      { open: [], ranges: entries(MAX_VIEW_STATE_ENTRIES + 1, range) },
+      { open: [['x'.repeat(MAX_VIEW_STATE_KEY_LENGTH + 1), true]], ranges: [] },
+      { open: [['', true]], ranges: [] },
+      { open: [['a\nb', true]], ranges: [] },
+      {
+        open: [
+          ['a', true],
+          ['a', false]
+        ],
+        ranges: []
+      },
+      { open: [['a', 1]], ranges: [] },
+      { open: [['a', true, 'extra']], ranges: [] },
+      { open: [{ key: 'a', value: true }], ranges: [] },
+      { open: [], ranges: [['a', { first: 0, count: 1 }]] },
+      { open: [], ranges: [['a', { first: 1, count: 0 }]] },
+      { open: [], ranges: [['a', { first: 1.5, count: 1 }]] },
+      { open: [], ranges: [['a', { first: Number.MAX_SAFE_INTEGER + 1, count: 1 }]] },
+      { open: [], ranges: [['a', { first: 1, count: 1, last: 1 }]] },
+      {
+        open: [],
+        ranges: [
+          ['a', range],
+          ['a', range]
+        ]
+      }
+    ];
+    for (const state of bad) {
+      expect(validateViewState(state)).toEqual({ ok: false, reason: 'invalid-view-state' });
+      if (state !== null && typeof state === 'object' && !Array.isArray(state))
+        expect(validateRendererMessage({ type: 'view:state', generation, state }).ok).toBe(false);
+    }
+    expect(validateRendererMessage({ type: 'view:state', generation, state: { open: [], ranges: [] }, x: 1 }).ok).toBe(
+      false
+    );
   });
 });

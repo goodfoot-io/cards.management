@@ -9,7 +9,13 @@
 
 import { describe, expect, it } from 'vitest';
 import { createStreamStore } from '../../src/stream-store/store.js';
-import { MAX_PENDING_BYTES, MAX_PENDING_EVENTS, TAIL_HISTORY_LINES } from '../../src/stream-store/types.js';
+import {
+  MAX_PENDING_BYTES,
+  MAX_PENDING_EVENTS,
+  MAX_VIEW_STATE_ENTRIES,
+  type StreamViewState,
+  TAIL_HISTORY_LINES
+} from '../../src/stream-store/types.js';
 import {
   append,
   child,
@@ -113,6 +119,39 @@ describe('stream store initialization', () => {
     ).toThrow();
     expect(create({ ...base, generation: '', descriptor: descriptor(mainMember) })).toThrow();
     expect(create({ ...base, revision: 0, descriptor: descriptor(mainMember) })).toThrow();
+    const overBound: StreamViewState = {
+      open: Array.from({ length: MAX_VIEW_STATE_ENTRIES + 1 }, (_, index): [string, boolean] => [`k${index}`, true]),
+      ranges: []
+    };
+    expect(create({ ...base, descriptor: descriptor(mainMember), viewState: overBound })).toThrow();
+  });
+});
+
+describe('view state', () => {
+  const restored: StreamViewState = { open: [['row-1', true]], ranges: [['tool-1', { first: 5, count: 20 }]] };
+
+  it('exposes restored state and null when none was supplied', () => {
+    expect(harness({ viewState: restored }).store.getState().viewState).toEqual(restored);
+    expect(harness().store.getState().viewState).toBeNull();
+  });
+
+  it('posts generation-correlated state and rejects over-bound state with a diagnostic', () => {
+    const h = harness();
+    h.sent.length = 0;
+    h.store.postViewState(restored);
+    expect(h.sent).toEqual([{ type: 'view:state', generation, state: restored }]);
+    h.store.postViewState({
+      open: [
+        ['row-1', true],
+        ['row-1', false]
+      ],
+      ranges: []
+    });
+    expect(h.sent).toHaveLength(1);
+    expect(h.diagnostics.at(-1)).toEqual({ code: 'rejected-message', reason: 'invalid-view-state' });
+    h.store.dispose();
+    h.store.postViewState(restored);
+    expect(h.sent).toHaveLength(1);
   });
 });
 
