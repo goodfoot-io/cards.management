@@ -27,6 +27,7 @@ import {
   type SessionSourceModel,
   useSessionModel
 } from './use-session-model';
+import { type SectionWindow, useViewStateReporting } from './view-state';
 import './session-renderer.css';
 
 /** Rows in the initial card-detail preview of a section. */
@@ -37,13 +38,6 @@ export const PAGE_ROWS = 20;
 export const MAX_WINDOW_ROWS = 100;
 /** Measured height above which card detail narrows its windows, below the bridge ceiling. */
 export const HEIGHT_BUDGET = 60_000;
-
-/** Card-detail window of one section; `start` null previews the live end. */
-export interface SectionWindow {
-  /** First mounted row identity, or null for a live-end preview. */
-  readonly start: string | null;
-  readonly count: number;
-}
 
 /** Shared context for nested child sections, so memoized rows never rerender for child updates. */
 interface RendererContextValue {
@@ -80,9 +74,10 @@ export function SessionRenderer<Payloads extends object>({
 }: {
   adapter: SessionProviderAdapter<Payloads>;
 }): ReactElement {
+  const store = useRendererStore();
   const model = useSessionModel(adapter);
   const compact = model.state.mode === 'compact';
-  const [windows, setWindows] = useState<ReadonlyMap<string, SectionWindow>>(new Map());
+  const [windows, setWindows] = useState<ReadonlyMap<string, SectionWindow>>(() => model.restored.windows);
   const setWindow = useCallback((key: string, window: SectionWindow) => {
     setWindows((previous) => new Map(previous).set(key, window));
   }, []);
@@ -91,6 +86,11 @@ export function SessionRenderer<Payloads extends object>({
     [model, adapter, compact, windows, setWindow]
   );
   useCloseEmptySession(model.state, compact);
+  const viewState = useMemo(
+    () => ({ open: model.disclosures.open, full: model.full, windows }),
+    [model.disclosures.open, model.full, windows]
+  );
+  useViewStateReporting(store, viewState);
   return (
     <RendererContext.Provider value={value}>
       {compact ? <CompactSession /> : <ExpandedSession />}
@@ -229,6 +229,7 @@ function CompactSession(): ReactElement {
   const store = useRendererStore();
   const root = useRef<HTMLDivElement>(null);
   const bridge = useRef<LayoutBridge | null>(null);
+  const handshaken = useRef<string | null>(null);
   const [hooks, setHooks] = useState<SessionLayoutHooks>({});
   const [overHeight, setOverHeight] = useState(0);
   useLayoutEffect(() => {
@@ -238,6 +239,7 @@ function CompactSession(): ReactElement {
       onHeight: (height) => setOverHeight((previous) => (height > HEIGHT_BUDGET ? previous + 1 : previous))
     });
     bridge.current = next;
+    handshaken.current = null;
     setHooks(next.hooks);
     return () => {
       next.dispose();
@@ -245,8 +247,11 @@ function CompactSession(): ReactElement {
     };
   }, [store]);
   const token = model.state.layoutToken;
-  useEffect(() => {
-    if (token) bridge.current?.handshake();
+  // Each bridge answers each token once, including a token that arrived before this bridge mounted.
+  useLayoutEffect(() => {
+    if (!token || !bridge.current || handshaken.current === token) return;
+    handshaken.current = token;
+    bridge.current.handshake();
   }, [token]);
   const mainKey = model.composition.mainKey;
   const main = mainKey ? model.sources.get(mainKey) : undefined;
@@ -313,7 +318,7 @@ function WindowedSection({
 }): ReactElement {
   const { model, adapter, windows, setWindow } = useRenderer();
   const rows = source?.projection.rows ?? NO_ROWS;
-  const window = windows.get(sourceKey) ?? { start: null, count: PREVIEW_ROWS };
+  const window = windows.get(sourceKey) ?? { startLine: null, count: PREVIEW_ROWS };
   const narrowed = useRef(overHeight);
   const [tooTall, setTooTall] = useState(false);
   // Oversized measurements halve the mounted window, keeping the next page under the ceiling;
@@ -342,15 +347,15 @@ function WindowedSection({
       return;
     }
     const start = Math.max(0, range.start - PAGE_ROWS);
-    page({ start: rows[start]!.id, count: window.start === null ? MAX_WINDOW_ROWS : window.count });
+    page({ startLine: rowLine(rows[start]!), count: window.startLine === null ? MAX_WINDOW_ROWS : window.count });
   };
   const showNewer = (): void => {
     const start = Math.min(rows.length - 1, range.start + PAGE_ROWS);
-    page({ start: rows[start]!.id, count: window.count });
+    page({ startLine: rowLine(rows[start]!), count: window.count });
   };
   const showConversation = (): void => {
     const start = Math.max(0, rows.length - PAGE_ROWS);
-    page({ start: rows[start]?.id ?? null, count: MAX_WINDOW_ROWS });
+    page({ startLine: rows[start] ? rowLine(rows[start]) : null, count: MAX_WINDOW_ROWS });
   };
   const loading = view?.history === 'full' && view.earlierUnloaded && view.status !== 'ready';
   return (
@@ -362,7 +367,7 @@ function WindowedSection({
             {loading ? 'Loading earlier…' : 'Show earlier'}
           </button>
         ) : null}
-        {window.start === null && rows.length > range.end - range.start ? (
+        {window.startLine === null && rows.length > range.end - range.start ? (
           <button type="button" onClick={showConversation}>
             Show conversation
           </button>
@@ -393,7 +398,7 @@ function WindowedSection({
           }
         />
       )}
-      {range.end < rows.length && window.start !== null ? (
+      {range.end < rows.length && window.startLine !== null ? (
         <div className="session-window-controls">
           <button type="button" onClick={showNewer}>
             Show newer ({rows.length - range.end})
@@ -405,19 +410,29 @@ function WindowedSection({
 }
 
 /**
- * Resolves a window to row indices; a vanished start row falls back to the earliest row.
+ * First absolute native line a row projects, so windows survive rebuilds and earlier loads.
+ * @param row - Projected row.
+ * @returns Absolute line number, or 1 for a row without native provenance.
+ */
+function rowLine(row: SessionRow): number {
+  return Math.max(1, row.provenance[0]?.lineNumber ?? 1);
+}
+
+/**
+ * Resolves a window to row indices: the first row at or after the window's native start line;
+ * a start beyond the loaded rows shows the live end.
  * @param rows - Section rows.
  * @param window - Window state.
  * @returns Half-open index range.
  */
 export function windowRange(rows: readonly SessionRow[], window: SectionWindow): { start: number; end: number } {
-  if (window.start === null) {
+  const startLine = window.startLine;
+  const found = startLine === null ? -1 : rows.findIndex((row) => rowLine(row) >= startLine);
+  if (found < 0) {
     const start = Math.max(0, rows.length - window.count);
     return { start, end: rows.length };
   }
-  const found = rows.findIndex((row) => row.id === window.start);
-  const start = found < 0 ? 0 : found;
-  return { start, end: Math.min(rows.length, start + window.count) };
+  return { start: found, end: Math.min(rows.length, found + window.count) };
 }
 
 /**

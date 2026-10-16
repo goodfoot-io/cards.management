@@ -20,6 +20,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { StreamViewState, ViewStateMessage } from '@cards.management/sdk/stream-store';
 import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -65,13 +66,19 @@ afterEach(async () => {
 async function mount(
   adapter: SessionProviderAdapter<object>,
   members: readonly HostMember[],
-  options: { mode?: 'compact' | 'expanded'; streamType?: string; runtime?: string } = {}
+  options: {
+    mode?: 'compact' | 'expanded';
+    streamType?: string;
+    runtime?: string;
+    viewState?: StreamViewState;
+  } = {}
 ): Promise<{ host: SessionHost; container: HTMLDivElement; settle: () => Promise<void> }> {
   const host = createSessionHost({
     streamType: options.streamType ?? 'claude-code-session',
     runtime: options.runtime ?? 'claude-code',
     mode: options.mode ?? 'expanded',
-    members
+    members,
+    viewState: options.viewState
   });
   const container = document.createElement('div');
   document.body.append(container);
@@ -177,6 +184,53 @@ describe('Claude Code — witnessed-delegation — expanded', () => {
     await settle();
     for (const root of mounted.splice(0)) await act(async () => root.unmount());
     expect(frames.size).toBe(0);
+  });
+});
+
+describe('View state across renderer rebuilds', () => {
+  const childPlacement = JSON.stringify(['session-member', JSON.stringify(['card-1', 'claude-code-session', CHILD])]);
+  const reported = (host: SessionHost): StreamViewState | undefined =>
+    host.sent.filter((message): message is ViewStateMessage => message.type === 'view:state').at(-1)?.state;
+
+  it('reports disclosure choices and full-history requests once they settle', async () => {
+    const { host, container, settle } = await mount(claude, MEMBERS);
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await act(async () => host.snapshot(CHILD, lines([sidechain('A', 'Child A working', 'a1')]), { first: 60 }));
+    await settle();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`${PLACEMENT} > .session-disclosure-button`)!.click()
+    );
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    const state = reported(host);
+    expect(state?.open).toContainEqual([childPlacement, true]);
+    expect(state?.ranges.map(([key]) => key)).toContain(
+      JSON.stringify(['history', JSON.stringify(['card-1', 'claude-code-session', CHILD])])
+    );
+  });
+
+  it('rehydrates an open member with full history and a paged card-detail window', async () => {
+    const childKey = JSON.stringify(['card-1', 'claude-code-session', CHILD]);
+    const mainKey = JSON.stringify(['card-1', 'claude-code-session', MAIN]);
+    const { host, container, settle } = await mount(claude, MEMBERS, {
+      mode: 'compact',
+      viewState: {
+        open: [[childPlacement, true]],
+        ranges: [
+          [JSON.stringify(['history', childKey]), { first: 1, count: 1 }],
+          [JSON.stringify(['window', mainKey]), { first: 2, count: 100 }]
+        ]
+      }
+    });
+    expect(host.subscribes(CHILD).at(-1)?.history).toBe('full');
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await act(async () => host.snapshot(CHILD, lines([sidechain('A', 'Child A working', 'a1')])));
+    await settle();
+    const placement = container.querySelector(`${PLACEMENT} > .session-disclosure-button`);
+    expect(placement?.getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('.session-window')?.textContent).not.toContain('Investigate the failure');
+    expect(container.textContent).toContain('Child A working');
   });
 });
 

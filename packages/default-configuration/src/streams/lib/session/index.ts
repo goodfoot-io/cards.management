@@ -19,3 +19,4 @@ export * from './types';
 export * from './use-absolute-fold';
 export * from './use-session-model';
 export * from './use-transcript-source';
+export * from './view-state';

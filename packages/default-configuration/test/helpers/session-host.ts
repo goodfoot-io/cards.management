@@ -18,7 +18,8 @@ import {
   type RendererToHostMessage,
   type SourceSubscribeMessage,
   type StreamDisplayMode,
-  type StreamRendererStore
+  type StreamRendererStore,
+  type StreamViewState
 } from '@cards.management/sdk/stream-store';
 
 /** One declared session member. */
@@ -35,6 +36,8 @@ export interface SessionHostOptions {
   readonly sessionId?: string;
   readonly members: readonly HostMember[];
   readonly mode?: StreamDisplayMode;
+  /** View state the host replays from a previous renderer. */
+  readonly viewState?: StreamViewState;
 }
 
 /** Captured host traffic and helpers to drive the store as the host would. */
@@ -105,7 +108,14 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
   };
   let counter = 0;
   const store = createStreamStore({
-    init: { session: descriptor.session, generation, descriptor, revision: 1, mode: options.mode ?? 'expanded' },
+    init: {
+      session: descriptor.session,
+      generation,
+      descriptor,
+      revision: 1,
+      mode: options.mode ?? 'expanded',
+      ...(options.viewState ? { viewState: options.viewState } : {})
+    },
     post: (message) => sent.push(structuredClone(message)),
     listen: (listener) => {
       listeners.add(listener);

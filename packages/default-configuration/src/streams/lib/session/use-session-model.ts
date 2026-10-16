@@ -26,6 +26,7 @@ import type {
   SessionProjection
 } from './types';
 import { type SessionSourceEntry, useSessionSources } from './use-transcript-source';
+import { decodeViewState, type RestoredViewState } from './view-state';
 
 /** Placement identity of the session-level relationship diagnostics section. */
 export const RELATIONSHIPS_SECTION_ID = JSON.stringify(['session-relationships']);
@@ -51,6 +52,10 @@ export interface SessionModel<Payloads extends object> {
   readonly disclosures: SessionDisclosureState;
   /** Requests complete history for a source; `full` upgrades an existing tail subscription. */
   readonly loadFull: (key: string) => void;
+  /** View state replayed by the host at initialization. */
+  readonly restored: RestoredViewState;
+  /** Sources the reader asked to load with full history, for view-state reporting. */
+  readonly full: ReadonlySet<string>;
 }
 
 /** Cached per-source projection lifecycle. */
@@ -125,11 +130,15 @@ export function useSessionModel<Payloads extends object>(
   const composition = useComposition(snapshot.state, sources, adapter);
   const insertions = useStableInsertions(composition, sources);
 
-  const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(new Map());
+  const restored = useMemo(() => decodeViewState(store.getState().viewState), [store]);
+  const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(() => restored.open);
+  const [full, setFull] = useState<ReadonlySet<string>>(() => restored.full);
   const loadFull = useCallback(
     (key: string) => {
       const view = store.getState().sources.get(key);
-      if (view?.member) store.subscribeSource(view.source, 'full');
+      if (!view?.member) return;
+      setFull((previous) => (previous.has(key) ? previous : new Set(previous).add(key)));
+      if (view.history !== 'full' || view.status === 'unsubscribed') store.subscribeSource(view.source, 'full');
     },
     [store]
   );
@@ -145,10 +154,10 @@ export function useSessionModel<Payloads extends object>(
     [loadFull]
   );
   const disclosures = useMemo<SessionDisclosureState>(() => ({ open, onOpenChange }), [open, onOpenChange]);
-  useDisclosureReconciliation(sources, composition, adapter, setOpen);
-  useMemberSubscriptions(snapshot.state, composition, open);
+  useDisclosureReconciliation(sources, composition, adapter, setOpen, restored);
+  useMemberSubscriptions(snapshot.state, composition, open, full);
 
-  return { state: snapshot.state, sources, composition, insertions, disclosures, loadFull };
+  return { state: snapshot.state, sources, composition, insertions, disclosures, loadFull, restored, full };
 }
 
 /**
@@ -303,14 +312,19 @@ function relationshipsLabel(composition: SessionComposition): string {
  * @param composition - Current composition.
  * @param adapter - Provider seam.
  * @param setOpen - Disclosure state setter.
+ * @param restored - Replayed view state; its choices survive until their leaves first load.
  */
 function useDisclosureReconciliation<Payloads extends object>(
   sources: ReadonlyMap<string, SessionSourceModel<Payloads>>,
   composition: SessionComposition,
   adapter: SessionProviderAdapter<Payloads>,
-  setOpen: (update: (previous: ReadonlyMap<string, boolean>) => ReadonlyMap<string, boolean>) => void
+  setOpen: (update: (previous: ReadonlyMap<string, boolean>) => ReadonlyMap<string, boolean>) => void,
+  restored: RestoredViewState
 ): void {
   const owners = useRef(new Map<string, string>());
+  // Restored leaves are not loaded yet after a rebuild; pruning waits until each first appears.
+  const pending = useRef<Set<string> | null>(null);
+  pending.current ??= new Set(restored.open.keys());
   useEffect(() => {
     const ids = new Set<string>([RELATIONSHIPS_SECTION_ID]);
     const nextOwners = new Map<string, string>();
@@ -319,6 +333,9 @@ function useDisclosureReconciliation<Payloads extends object>(
       for (const [leaf, owner] of adapter.adoptions?.(source.projection.rows) ?? []) nextOwners.set(leaf, owner);
     }
     for (const child of composition.children.values()) ids.add(child.placementId);
+    const awaiting = pending.current!;
+    for (const id of ids) awaiting.delete(id);
+    for (const id of awaiting) ids.add(id);
     const adopted = [...nextOwners].filter(([leaf, owner]) => owners.current.get(leaf) !== owner);
     owners.current = nextOwners;
     setOpen((previous) => {
@@ -338,21 +355,29 @@ function useDisclosureReconciliation<Payloads extends object>(
  * @param state - Current store state.
  * @param composition - Current composition.
  * @param open - Current disclosure state.
+ * @param full - Sources the reader asked to load in full, including restored requests.
  */
 function useMemberSubscriptions(
   state: StreamStoreState,
   composition: SessionComposition,
-  open: ReadonlyMap<string, boolean>
+  open: ReadonlyMap<string, boolean>,
+  full: ReadonlySet<string>
 ): void {
   const store = useRendererStore();
   useEffect(() => {
     for (const member of state.descriptor.members) {
       const key = JSON.stringify([member.source.cardId, member.source.streamType, member.source.relPath]);
-      if (key === composition.mainKey) continue;
       const view = state.sources.get(key);
-      if (view && view.status !== 'unsubscribed') continue;
       const placement = composition.children.get(key)?.placementId;
-      store.subscribeSource(member.source, placement && open.get(placement) ? 'full' : 'tail');
+      const wantsFull = full.has(key) || Boolean(placement && open.get(placement));
+      if (key === composition.mainKey) {
+        // The store subscribes the main itself; a restored full-history request upgrades it once.
+        if (wantsFull && view && view.history !== 'full' && view.status !== 'unsubscribed')
+          store.subscribeSource(member.source, 'full');
+        continue;
+      }
+      if (view && view.status !== 'unsubscribed') continue;
+      store.subscribeSource(member.source, wantsFull ? 'full' : 'tail');
     }
-  }, [store, state.descriptor, state.sources, composition, open]);
+  }, [store, state.descriptor, state.sources, composition, open, full]);
 }
