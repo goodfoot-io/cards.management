@@ -16,6 +16,7 @@ import {
 import { replayTranscript } from '../src/streams/lib/session/projection';
 import { SessionContent } from '../src/streams/lib/session/SessionContent';
 import type { NativeTranscriptSource, SessionRow } from '../src/streams/lib/session/types';
+import { streamMeta } from './helpers/stream-meta';
 
 function nativeLine(type: string, payload: unknown, seconds = 0): string {
   return JSON.stringify({ timestamp: `2026-09-01T11:00:${String(seconds).padStart(2, '0')}.000Z`, type, payload });
@@ -27,7 +28,7 @@ function source(lines: readonly string[], isActive = false): NativeTranscriptSou
     generation: 'native-one',
     lines,
     headLineNumber: 1,
-    meta: { lineCount: lines.length, isActive },
+    meta: streamMeta({ lineCount: lines.length, isActive }),
     filename: 'rollout.jsonl',
     isLoading: false,
     error: null

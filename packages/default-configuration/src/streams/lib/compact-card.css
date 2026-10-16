@@ -51,6 +51,13 @@
   min-width: 0;
 }
 
+/* Loaded-range scope note for summaries folded from a trailing window. */
+.compact-container .coverage {
+  color: var(--stream-fg-muted);
+  font-size: var(--stream-text-label);
+  line-height: 1.5em;
+}
+
 /* Row 1 — liveness dot + status word + right-aligned timing. */
 .compact-container .row-head {
   display: flex;

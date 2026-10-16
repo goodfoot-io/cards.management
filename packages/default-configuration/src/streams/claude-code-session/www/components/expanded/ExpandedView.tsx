@@ -4,14 +4,11 @@
  * @summary Claude native source, projection, controlled content and viewport
  * @module components/expanded/ExpandedView
  */
-import { streamStore } from '@cards.management/sdk/stream-store';
-import { type ReactElement, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import { SessionViewport } from '../../../../lib/session/SessionViewport';
 import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
-import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
-import { useStreamStore } from '../../hooks/useStreamStore';
 import { type ClaudePayloads, type ClaudeRow, claudeSessionProjector } from '../../lib/project-session';
 import { CLAUDE_PARTS, claudeDisclosureIds } from './ClaudePresentation';
 
@@ -22,7 +19,7 @@ const EMPTY_ROWS = [] as const;
  * @param rows - Native projected rows, including render-only grouping containers.
  * @returns The enclosing tool identity for each adopted hook.
  */
-function hookToolOwners(rows: readonly ClaudeRow[]): Map<string, string> {
+export function hookToolOwners(rows: readonly ClaudeRow[]): Map<string, string> {
   const owners = new Map<string, string>();
   const visit = (row: ClaudeRow): void => {
     for (const part of row.parts) {
@@ -108,18 +105,4 @@ export function ClaudeSourceView({ source }: { source: NativeTranscriptSource })
       </div>
     </div>
   );
-}
-/**
- * Expanded owner supplies an iframe-scoped identity while compact mode remains on its existing fold.
- * @returns Expanded Claude owner subscribed to the selected native file.
- */
-export function ExpandedView(): ReactElement {
-  const scope = useId();
-  const filename = useStreamStore((state) => state.primary);
-  const source = useTranscriptSource(streamStore, {
-    filename,
-    sourceKey: JSON.stringify(['claude-expanded', scope, filename]),
-    generation: 'native-store'
-  });
-  return <ClaudeSourceView key={source.sourceKey} source={source} />;
 }

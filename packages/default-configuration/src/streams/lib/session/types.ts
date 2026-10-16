@@ -8,7 +8,7 @@
  * @module streams/lib/session/types
  */
 
-import type { StreamMeta } from '@cards.management/sdk/stream-store';
+import type { StreamMeta } from '@cards.management/sdk/protocol';
 
 /** Opaque identity qualified by the caller; a filename alone is not globally unique. */
 export type TranscriptSourceKey = string;

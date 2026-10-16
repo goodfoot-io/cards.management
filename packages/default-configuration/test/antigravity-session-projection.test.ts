@@ -14,6 +14,7 @@ import { antigravitySessionProjector } from '../src/streams/antigravity-session/
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import type { NativeTranscriptSource, SessionProjection } from '../src/streams/lib/session/types';
 import { nativeFixture, recordLine } from './fixtures/antigravity-projection';
+import { streamMeta } from './helpers/stream-meta';
 
 const source = (lines: readonly string[], extra: Partial<NativeTranscriptSource> = {}): NativeTranscriptSource => ({
   sourceKey: 'card/antigravity/conversation-1',
@@ -297,16 +298,16 @@ describe('Antigravity native session projection', () => {
     const malformed = ['not JSON'];
     const active = replayTranscript(
       antigravitySessionProjector,
-      source(malformed, { meta: { lineCount: 1, isActive: true } })
+      source(malformed, { meta: streamMeta({ lineCount: 1, isActive: true }) })
     );
     const settledError = replayTranscript(
       antigravitySessionProjector,
-      source(malformed, { meta: { lineCount: 1, isActive: false } })
+      source(malformed, { meta: streamMeta({ lineCount: 1, isActive: false }) })
     );
     const anomalyOnly = replayTranscript(
       antigravitySessionProjector,
       source([recordLine(1, 15, 3, 'revised', { kind: 'host-drift', detail: 'host changed this step' })], {
-        meta: { lineCount: 1, isActive: false }
+        meta: streamMeta({ lineCount: 1, isActive: false })
       })
     );
 

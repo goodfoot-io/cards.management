@@ -65,14 +65,41 @@ describe('Claude production built entry', () => {
       .trimEnd()
       .split('\n');
     server = createServer((request, response) => {
-      const seed = request.url === '/live' ? lines.slice(0, 34) : lines;
+      const live = request.url === '/live';
+      const seed = live ? lines.slice(0, 34) : lines;
+      const source = { cardId: 'card-1', streamType: 'claude-code-session', relPath: 'fixture.jsonl' };
+      const session = { cardId: 'card-1', streamType: 'claude-code-session', sessionId: 'fixture' };
       const init = {
-        primary: 'fixture.jsonl',
+        session,
+        generation: 'gen-1',
+        revision: 1,
         mode: 'expanded',
-        availableFiles: ['fixture.jsonl'],
-        files: { 'fixture.jsonl': { lines: seed, meta: { lineCount: seed.length, isActive: request.url === '/live' } } }
+        descriptor: { session, members: [{ source, role: 'main' }], main: source, validity: 'ready' }
       };
-      const bootstrap = `<script>window.__STREAM_INIT__=${JSON.stringify(init).replaceAll('<', '\\u003c')};window.rendererErrors=[];addEventListener('error',event=>rendererErrors.push(event.message));</script>`;
+      const authority = {
+        generation: 'gen-1',
+        source,
+        version: { serverEpoch: 'server-1', sourceEpoch: 'source-1' },
+        binding: { sessionId: 'fixture', role: 'main' }
+      };
+      const meta = {
+        version: 1,
+        relPath: 'fixture.jsonl',
+        streamType: 'claude-code-session',
+        runtime: 'claude-code',
+        sessionId: 'fixture',
+        role: 'main',
+        sourcePath: '/native/fixture.jsonl',
+        startedAt: '2026-01-01T00:00:00.000Z',
+        lineCount: seed.length,
+        createdAt: '2026-01-01T00:00:00.000Z',
+        isActive: live
+      };
+      const safe = (value: unknown): string => JSON.stringify(value).replaceAll('<', '\\u003c');
+      // The page is its own parent, so this in-page host answers the renderer's subscribe with
+      // the same coherent snapshot and append messages a real host sends.
+      const host = `window.host={authority:${safe(authority)},append(first,lines){postMessage({type:'source:append',...host.authority,firstLineNumber:first,lines},'*')}};addEventListener('message',event=>{const message=event.data;if(message?.type!=='source:subscribe')return;postMessage({type:'source:snapshot',...host.authority,requestId:message.requestId,meta:${safe(meta)},lines:${safe(seed)},firstLineNumber:1,totalLineCount:${seed.length}},'*')});`;
+      const bootstrap = `<script>window.__STREAM_INIT__=${safe(init)};window.rendererErrors=[];addEventListener('error',event=>rendererErrors.push(event.message));${host}</script>`;
       response.setHeader('Content-Type', 'text/html');
       response.end(html.replace('<head>', `<head>${bootstrap}`));
     });
@@ -103,10 +130,7 @@ describe('Claude production built entry', () => {
       mode === 'live' ? 'Skill · pending' : 'Skill · complete'
     );
     if (mode === 'live') {
-      const messages = lines
-        .slice(34)
-        .map((line, index) => ({ type: 'stream:line', filename: 'fixture.jsonl', lineNumber: index + 35, line }));
-      await evaluate(`${JSON.stringify(messages)}.forEach(message => window.postMessage(message, '*')); true`);
+      await evaluate(`window.host.append(35, ${JSON.stringify(lines.slice(34))}); true`);
       await browser('wait', '--text', 'skill ran');
     }
     const result = await evaluate<{

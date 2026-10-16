@@ -1,0 +1,99 @@
+/* Consolidated session presentation shared by every provider renderer. */
+
+/* Card detail: the parent timeline adopts the measured content height, so the document must
+   size to its content (never to the iframe viewport) and never scroll or clip on its own. */
+html:has(> body.mode-compact),
+body.mode-compact,
+body.mode-compact #stream-root {
+  height: auto;
+  overflow: hidden;
+}
+
+.session-compact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--stream-gap-row, 4px);
+  color: var(--stream-fg);
+  font-size: var(--stream-text-body, var(--vscode-font-size));
+  line-height: 1.5;
+}
+
+/* Measured normal-flow content must lay out every mounted row; skipped rows would report
+   placeholder heights and oscillate against the host's sizing. */
+.session-compact .session-row {
+  content-visibility: visible;
+  contain-intrinsic-block-size: none;
+}
+
+.session-notices {
+  padding: 4px 12px;
+}
+
+.session-notice {
+  margin: 2px 0;
+  font-size: var(--stream-text-dense, var(--vscode-font-size));
+}
+
+.session-tone--info {
+  color: var(--stream-fg-muted);
+}
+
+.session-window {
+  padding: 0 12px;
+}
+
+.session-window-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-block: 4px;
+  font-size: var(--stream-text-label, var(--vscode-font-size));
+}
+
+.session-window-controls button {
+  font: inherit;
+  padding: 2px 8px;
+  min-height: 24px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: var(--vscode-cornerRadius-small, 4px);
+}
+
+.session-window-controls button:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.session-window-controls button:focus-visible {
+  outline: 1px solid var(--stream-focus-border);
+  outline-offset: 2px;
+}
+
+.session-window-controls button:disabled {
+  color: var(--vscode-disabledForeground);
+  cursor: default;
+}
+
+.session-window-range {
+  margin-inline-end: auto;
+}
+
+.session-child {
+  border-inline-start: 2px solid var(--stream-tool-agent, var(--stream-border-subtle));
+  padding-inline-start: 8px;
+}
+
+.session-diagnostics {
+  margin: 4px 0;
+  padding-inline-start: 1.25em;
+  list-style: disc;
+  color: var(--stream-fg-muted);
+  font-size: var(--stream-text-dense, var(--vscode-font-size));
+}
+
+:root[data-vscode-theme-kind="high-contrast"] .session-window-controls button:hover {
+  background: transparent;
+  outline: 1px dashed var(--vscode-contrastActiveBorder);
+}

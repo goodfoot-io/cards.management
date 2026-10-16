@@ -41,7 +41,6 @@
     "public/packages/default-configuration/test/codex-compact-adapter.test.ts": [],
     "public/packages/default-configuration/test/codex-compact-fold.test.ts": [],
     "public/packages/default-configuration/test/codex-compact-state.test.ts": [],
-    "public/packages/default-configuration/test/codex-compact-view-live-empty-close.test.ts": [],
     "public/packages/default-configuration/test/codex-dedup.test.ts": [],
     "public/packages/default-configuration/test/codex-expanded.test.ts": [],
     "public/packages/default-configuration/test/codex-home-collision.test.ts": [],
@@ -62,12 +61,9 @@
     "public/packages/default-configuration/test/compact-facts.test.ts": [],
     "public/packages/default-configuration/test/compact-state-metrics.test.ts": [],
     "public/packages/default-configuration/test/compact-view-away-summary.test.ts": [],
-    "public/packages/default-configuration/test/compact-view-live-empty-close.test.ts": [],
     "public/packages/default-configuration/test/compact-view-reconcile.test.ts": [],
     "public/packages/default-configuration/test/create-worktree.test.ts": [],
-    "public/packages/default-configuration/test/expanded-view-bootstrap-race.test.ts": [],
     "public/packages/default-configuration/test/expanded-view-dedup.test.ts": [],
-    "public/packages/default-configuration/test/expanded-view-uncaught-exceptions.test.ts": [],
     "public/packages/default-configuration/test/hook-row.test.ts": [],
     "public/packages/default-configuration/test/interview.test.ts": [],
     "public/packages/default-configuration/test/json-block.test.ts": [],
@@ -98,16 +94,23 @@
       "public/packages/default-configuration/src/streams/*/www/**",
       "packages/cards/web/src/styles/**"
     ],
+    "public/packages/default-configuration/test/provider-linkage.test.ts": [],
     "public/packages/default-configuration/test/publish-bundle-atomic.test.ts": [],
     "public/packages/default-configuration/test/raw-fallback.test.ts": [],
     "public/packages/default-configuration/test/session-announcements.test.ts": [],
+    "public/packages/default-configuration/test/session-compose.test.ts": [
+      "public/packages/default-configuration/test/fixtures/antigravity/*",
+      "public/packages/default-configuration/test/fixtures/codex-session/*"
+    ],
+    "public/packages/default-configuration/test/session-consolidated-renderer.test.ts": [
+      "public/packages/default-configuration/test/fixtures/antigravity/*"
+    ],
     "public/packages/default-configuration/test/session-header.test.ts": [],
     "public/packages/default-configuration/test/session-identity-uniqueness.test.ts": [
       "public/packages/default-configuration/test/fixtures/cc-thread-converter/*.jsonl",
       "public/packages/default-configuration/test/fixtures/codex-session/*.jsonl",
       "public/packages/default-configuration/test/fixtures/opencode/*.jsonl"
     ],
-    "public/packages/default-configuration/test/provider-linkage.test.ts": [],
     "public/packages/default-configuration/test/session-projection.test.ts": [],
     "public/packages/default-configuration/test/session-renderer.test.ts": [],
     "public/packages/default-configuration/test/session-source.test.ts": [],

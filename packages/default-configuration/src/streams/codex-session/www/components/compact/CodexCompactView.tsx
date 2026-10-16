@@ -1,103 +1,45 @@
 /**
  * Compact micro-card view for the codex-session stream renderer.
  *
- * Mirrors the claude-code-session {@link CompactView} lifecycle: it bootstraps
- * from `streamStore.getState()` before subscribing, folds the primary file's
- * lines via {@link reconcileFolded} on each update, observes `meta.isActive`
- * for liveness, and asks the host to `close()` a stream whose primary file has
- * zero lines so no blank box shows in the card detail. Folding is incremental:
- * lines past a watermark are appended onto the prior fold, so each store
- * update only parses what is new; a shrink rebuilds fully. The folded state is
- * adapted into a provider-neutral `CompactCardModel` via
+ * Receives the session's main source from the session renderer and folds its
+ * loaded range via {@link reconcileFolded} by absolute coordinates, so a trimmed
+ * tail keeps folding new records while a new incarnation, gap or newly loaded
+ * earlier history rebuilds. Empty-session closing belongs to the session
+ * renderer. The folded state is adapted into a provider-neutral `CompactCardModel` via
  * {@link codexToCompactCardModel} and rendered through the shared `CompactCard`
  * component — the DOM/CSS for the card live there, not here.
  *
  * Status is liveness-only — `RUNNING` or `ENDED` — and never an asserted
  * outcome: the Codex rollout carries no honest success signal, so this view
- * fabricates none. The live elapsed timer only ticks while active; the interval
- * is cleared the moment the stream ends.
+ * fabricates none.
  *
  * @summary Compact Codex session card: folds state, adapts it, renders the shared CompactCard
  * @module streams/codex-session/www/components/compact/CodexCompactView
  */
 
-import { close, streamStore } from '@cards.management/sdk/stream-store';
 import type React from 'react';
-import { useEffect, useState } from 'react';
 import { CompactCard } from '../../../../lib/CompactCard';
+import { type SessionSummaryProps, summaryCoverage } from '../../../../lib/session/adapter';
+import { useAbsoluteFold } from '../../../../lib/session/use-absolute-fold';
 import { codexToCompactCardModel } from '../../lib/adapt-compact-model';
-import type { FoldedState } from '../../lib/compact-state';
 import { buildFoldedState, reconcileFolded } from '../../lib/compact-state';
 
 /**
- * Reads the primary stream file's lines and liveness from the store.
- * @returns The primary file's lines and `isActive` flag.
- */
-function readPrimary(): { lines: string[]; isActive: boolean } {
-  const s = streamStore.getState();
-  const file = s.files.get(s.primary);
-  return { lines: file ? file.lines : [], isActive: file?.meta.isActive ?? false };
-}
-
-/**
- * Compact Codex session card. Folds the primary stream into a
- * {@link FoldedState}, adapts its snapshot into a `CompactCardModel`, and ticks
- * while the stream is active. Closes the renderer when the primary file has
- * zero lines.
+ * Compact session card for the session's main source. Folds the loaded range into a
+ * `FoldedState` by absolute coordinates, so a trimmed tail keeps folding new records, and
+ * labels the summary's scope while earlier content is unloaded.
+ * @param props - Main source snapshot and its loaded coverage.
  * @returns Rendered compact card.
  */
-export function CodexCompactView(): React.ReactElement {
-  const [folded, setFolded] = useState<FoldedState>(() => {
-    const { lines, isActive } = readPrimary();
-    return buildFoldedState(lines, isActive);
-  });
-  const [isActive, setIsActive] = useState<boolean>(() => readPrimary().isActive);
-
-  // Bootstrap-then-subscribe: fold once for lines that arrived between the
-  // initial render and this effect (the empty-on-boot primary's
-  // subscribe:response can land in exactly this window), then keep folding on
-  // every store update. reconcileFolded appends only lines past its watermark,
-  // so steady-state updates parse just the new lines; shrink/reset rebuilds.
-  useEffect(() => {
-    const sync = (): void => {
-      const { lines, isActive: active } = readPrimary();
-      setIsActive(active);
-      setFolded((prev) => reconcileFolded(prev, lines, active));
-    };
-    sync();
-    return streamStore.subscribe(sync);
-  }, []);
-
-  // Close a settled stream whose primary file has zero lines so the host doesn't
-  // render a blank box for it. A live (active) stream is never closed for
-  // emptiness: it is mid-flight and its backlog is still arriving out of band via
-  // the async `subscribe:response` backfill (the host boots the iframe with no
-  // lines and the server seeds `stream:started` with lineCount:0), so closing on
-  // the seed would collapse the live transcript pane the instant it opens.
-  useEffect(() => {
-    const checkEmpty = (): void => {
-      const s = streamStore.getState();
-      const file = s.files.get(s.primary);
-      if (file && file.meta.lineCount === 0 && !file.meta.isActive) close();
-    };
-    checkEmpty();
-    return streamStore.subscribe(checkEmpty);
-  }, []);
-
-  // Reconcile on a ~1s tick while the stream is active as a safety net for
-  // updates that bypass the subscription. A tick with no new lines returns the
-  // prior folded value by reference, so React bails out instead of re-rendering.
-  // The interval is cleared on unmount and whenever `isActive` flips to false,
-  // so an ended card never churns re-renders on a timer.
-  useEffect(() => {
-    if (!isActive) return;
-    const id = setInterval(() => {
-      const { lines, isActive: active } = readPrimary();
-      setFolded((prev) => reconcileFolded(prev, lines, active));
-    }, 1000);
-    return () => clearInterval(id);
-  }, [isActive]);
-
-  const model = codexToCompactCardModel(folded.state, isActive);
-  return <CompactCard model={model} />;
+export function CodexCompactView(props: SessionSummaryProps): React.ReactElement {
+  const { source } = props;
+  const isActive = source.meta?.isActive ?? false;
+  const folded = useAbsoluteFold(
+    source,
+    (lines) => buildFoldedState(lines, isActive),
+    (prev, lines) => reconcileFolded(prev, lines, isActive)
+  );
+  return (
+    <CompactCard model={{ ...codexToCompactCardModel(folded.state, isActive), coverage: summaryCoverage(props) }} />
+  );
 }

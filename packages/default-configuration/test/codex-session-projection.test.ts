@@ -17,6 +17,7 @@ import { LeafViewState, useOwnedLeafViewState } from '../src/streams/lib/session
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import { SessionContent } from '../src/streams/lib/session/SessionContent';
 import type { NativeTranscriptSource, SessionRow } from '../src/streams/lib/session/types';
+import { streamMeta } from './helpers/stream-meta';
 
 const fixture = readFileSync(new URL('./fixtures/codex-session/native-session.jsonl', import.meta.url), 'utf8')
   .trimEnd()
@@ -40,7 +41,7 @@ function source(lines: readonly string[], overrides: Partial<NativeTranscriptSou
     generation: 'native-one',
     lines,
     headLineNumber: 1,
-    meta: { lineCount: lines.length, isActive: false },
+    meta: streamMeta({ lineCount: lines.length, isActive: false }),
     filename: 'rollout.jsonl',
     isLoading: false,
     error: null,
@@ -257,7 +258,9 @@ describe('Codex native session projection', () => {
         expect(JSON.stringify(previous)).toBe(frozen);
         previous = next;
       }
-      const metadata = controller.update(source(lines, { meta: { lineCount: lines.length, isActive: true } }));
+      const metadata = controller.update(
+        source(lines, { meta: streamMeta({ lineCount: lines.length, isActive: true }) })
+      );
       expect(metadata.projection.rows).toEqual(previous.rows);
       for (let index = 0; index < previous.rows.length; index++) {
         expect(metadata.projection.rows[index]).toBe(previous.rows[index]);
@@ -306,7 +309,10 @@ describe('Codex native session projection', () => {
       JSON.stringify({ type: 'event_msg', payload: { type: 'user_message', message: 'appended' } })
     ]);
     expect(controller.update(appended).projection.header).toEqual(header);
-    const metadata = controller.update({ ...appended, meta: { lineCount: appended.lines.length, isActive: true } });
+    const metadata = controller.update({
+      ...appended,
+      meta: streamMeta({ lineCount: appended.lines.length, isActive: true })
+    });
     expect(metadata.projection.header).toMatchObject({ provider: 'openai', threadId: 'thread-1', status: 'running' });
     const reset = controller.update({ ...source([]), generation: 'replacement' });
     expect(reset.projection.header.provider).toBeUndefined();

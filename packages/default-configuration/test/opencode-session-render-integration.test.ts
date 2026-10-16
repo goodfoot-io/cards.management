@@ -28,6 +28,7 @@ import {
   type OpencodeRow,
   opencodeSessionProjector
 } from '../src/streams/opencode-session/www/lib/project-session';
+import { streamMeta } from './helpers/stream-meta';
 
 const FIXTURE_LINES = readFileSync(new URL('./fixtures/opencode/full-lifecycle.jsonl', import.meta.url), 'utf8')
   .trimEnd()
@@ -44,7 +45,7 @@ function source(lines: readonly string[], overrides: Partial<NativeTranscriptSou
     generation: 'fixture-1',
     lines,
     headLineNumber: 1,
-    meta: { lineCount: lines.length, isActive: true },
+    meta: streamMeta({ lineCount: lines.length, isActive: true }),
     filename: 'opencode-session.jsonl',
     isLoading: false,
     error: null,

@@ -1,186 +1,156 @@
 /**
- * Native external-store subscription checks with a real synchronous store.
- * @summary Coherent snapshots and listener lifetime
+ * Session source subscription checks against the real SDK store over an in-memory host.
+ * @summary Coherent session snapshots, absolute coordinates and listener lifetime
  */
-import type { StreamFile, StreamStoreState } from '@cards.management/sdk/stream-store';
 import { describe, expect, it } from 'vitest';
-import { createNativeTranscriptSubscription } from '../src/streams/lib/session/use-transcript-source';
+import {
+  createSessionSourcesSubscription,
+  nativeTranscriptSource,
+  sourceGeneration
+} from '../src/streams/lib/session/use-transcript-source';
+import { createSessionHost } from './helpers/session-host';
 
-function nativeStore() {
-  let state: StreamStoreState = {
-    primary: 'main',
-    files: new Map(),
-    availableFiles: [],
-    connected: true,
-    mode: 'expanded'
-  };
-  const listeners = new Set<() => void>();
-  return {
-    getState: () => state,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
-    update: (file: StreamFile) => {
-      state = { ...state, files: new Map(state.files).set(file.filename, file) };
-      for (const listener of listeners) listener();
-    },
-    listeners
-  };
+const MAIN = 's1.jsonl';
+const CHILD = 's1/subagents/agent-a.jsonl';
+
+function host(mode: 'compact' | 'expanded' = 'expanded') {
+  return createSessionHost({
+    streamType: 'claude-code-session',
+    runtime: 'claude-code',
+    mode,
+    members: [
+      { relPath: CHILD, role: 'subagent', agentId: 'a' },
+      { relPath: MAIN, role: 'main' }
+    ]
+  });
 }
 
-function file(extra: Partial<StreamFile> = {}): StreamFile {
-  return {
-    filename: 'main',
-    lines: ['one'],
-    headLineNumber: 7,
-    meta: { lineCount: 7, isActive: true },
-    isSubscribed: true,
-    isLoading: false,
-    error: null,
-    ...extra
-  };
-}
-const binding = { sourceKey: 'card/main', generation: 'caller-generation', filename: 'main' };
+const settle = () => new Promise((resolve) => setTimeout(resolve, 25));
 
-describe('native source subscription', () => {
-  it('reads missing, historical, and metadata-only snapshots coherently', async () => {
-    const store = nativeStore();
-    const adapter = createNativeTranscriptSubscription(store, binding);
-    expect(adapter.getSnapshot().lines).toEqual([]);
-    let notifications = 0;
-    const cleanup = adapter.subscribe(() => {
-      notifications++;
+describe('session source subscription', () => {
+  it('orders entries by descriptor membership and maps absolute coordinates', () => {
+    const session = host();
+    session.snapshot(MAIN, ['seven', 'eight'], { first: 7 });
+    session.store.subscribeSource(session.ref(CHILD), 'tail');
+    const adapter = createSessionSourcesSubscription(session.store);
+    const snapshot = adapter.getSnapshot();
+    expect(snapshot.entries.map((entry) => entry.key)).toEqual([session.key(CHILD), session.key(MAIN)]);
+    const main = snapshot.byKey.get(session.key(MAIN))!;
+    expect(main.source).toMatchObject({
+      sourceKey: session.key(MAIN),
+      lines: ['seven', 'eight'],
+      headLineNumber: 7,
+      filename: 's1.jsonl',
+      isLoading: false,
+      error: null
     });
-    store.update(file());
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    const first = adapter.getSnapshot();
-    expect(first.headLineNumber).toBe(7);
-    expect(adapter.getSnapshot()).toBe(first);
-    store.update(file({ meta: { lineCount: 7, isActive: false, agentId: 'child', role: 'subagent' } }));
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(adapter.getSnapshot().meta?.agentId).toBe('child');
-    expect(notifications).toBe(2);
-    cleanup();
-    expect(store.listeners.size).toBe(0);
+    expect(main.source.meta?.lineCount).toBe(8);
+    expect(main.view.earlierUnloaded).toBe(true);
+    expect(snapshot.byKey.get(session.key(CHILD))!.source.isLoading).toBe(true);
+    adapter.dispose();
   });
 
-  it('coalesces a burst of appends and notifies subscribers with the latest snapshot', async () => {
-    const store = nativeStore();
-    const adapter = createNativeTranscriptSubscription(store, binding);
+  it('scopes generation to the authoritative version, never to line count', () => {
+    const session = host();
+    const adapter = createSessionSourcesSubscription(session.store);
+    const pending = adapter.getSnapshot().byKey.get(session.key(MAIN))!;
+    expect(sourceGeneration(pending.view)).toBe('unversioned');
+    session.snapshot(MAIN, ['one']);
+    const loaded = adapter.getSnapshot().byKey.get(session.key(MAIN))!;
+    session.append(MAIN, 2, ['two']);
+    const appended = adapter.getSnapshot().byKey.get(session.key(MAIN))!;
+    expect(appended.source.generation).toBe(loaded.source.generation);
+    expect(appended.source.generation).toBe(JSON.stringify(['server-1', 'source-1']));
+    expect(appended.source.lines).toEqual(['one', 'two']);
+    adapter.dispose();
+  });
+
+  it('reuses unchanged entries and only re-reads sources whose view changed', () => {
+    const session = host();
+    session.snapshot(MAIN, ['one']);
+    session.store.subscribeSource(session.ref(CHILD), 'tail');
+    session.snapshot(CHILD, ['child']);
+    const adapter = createSessionSourcesSubscription(session.store);
+    const before = adapter.getSnapshot();
+    expect(adapter.getSnapshot()).toBe(before);
+    session.append(MAIN, 2, ['two']);
+    const after = adapter.getSnapshot();
+    expect(after).not.toBe(before);
+    expect(after.byKey.get(session.key(CHILD))).toBe(before.byKey.get(session.key(CHILD)));
+    expect(after.byKey.get(session.key(MAIN))).not.toBe(before.byKey.get(session.key(MAIN)));
+    adapter.dispose();
+  });
+
+  it('coalesces a burst of appends into one notification with the latest snapshot', async () => {
+    const session = host();
+    session.snapshot(MAIN, ['one']);
+    const adapter = createSessionSourcesSubscription(session.store);
     let notifications = 0;
     adapter.subscribe(() => {
       notifications++;
     });
-
-    store.update(file({ lines: ['one', 'two'], meta: { lineCount: 8, isActive: true } }));
-    store.update(file({ lines: ['one', 'two', 'three'], meta: { lineCount: 9, isActive: true } }));
-    store.update(file({ lines: ['one', 'two', 'three', 'four'], meta: { lineCount: 10, isActive: true } }));
-
+    session.append(MAIN, 2, ['two']);
+    session.append(MAIN, 3, ['three']);
+    session.append(MAIN, 4, ['four']);
     expect(notifications).toBe(0);
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await settle();
     expect(notifications).toBe(1);
-    expect(adapter.getSnapshot().lines).toEqual(['one', 'two', 'three', 'four']);
+    expect(adapter.getSnapshot().byKey.get(session.key(MAIN))!.source.lines).toEqual(['one', 'two', 'three', 'four']);
     adapter.dispose();
-  });
-
-  it('cancels a pending notification on cleanup and isolates the replacement binding', async () => {
-    const store = nativeStore();
-    const adapter = createNativeTranscriptSubscription(store, binding);
-    let stale = 0;
-    const cleanup = adapter.subscribe(() => {
-      stale++;
-    });
-    store.update(file());
-    cleanup();
-    const replacement = createNativeTranscriptSubscription(store, {
-      ...binding,
-      sourceKey: 'replacement',
-      generation: 'two'
-    });
-    let fresh = 0;
-    replacement.subscribe(() => {
-      fresh++;
-    });
-    store.update(file({ lines: ['replacement'] }));
-    adapter.dispose();
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(stale).toBe(0);
-    expect(fresh).toBe(1);
-    expect(replacement.getSnapshot()).toMatchObject({
-      sourceKey: 'replacement',
-      generation: 'two',
-      lines: ['replacement']
-    });
-    replacement.dispose();
-    expect(store.listeners.size).toBe(0);
   });
 
   it('observes updates between the first read and subscription without a missed snapshot', () => {
-    const store = nativeStore();
-    const adapter = createNativeTranscriptSubscription(store, binding);
+    const session = host();
+    const adapter = createSessionSourcesSubscription(session.store);
     const before = adapter.getSnapshot();
-    store.update(file());
+    session.snapshot(MAIN, ['one']);
     const cleanup = adapter.subscribe(() => undefined);
     expect(adapter.getSnapshot()).not.toBe(before);
-    expect(adapter.getSnapshot().lines).toEqual(['one']);
+    expect(adapter.getSnapshot().byKey.get(session.key(MAIN))!.source.lines).toEqual(['one']);
     cleanup();
     adapter.dispose();
   });
 
-  it('ignores other files, disposes all listeners and rejects late subscriptions', () => {
-    const store = nativeStore();
-    const adapter = createNativeTranscriptSubscription(store, binding);
+  it('reflects lifecycle activity in metadata without changing generation', () => {
+    const session = host();
+    session.snapshot(MAIN, ['one']);
+    const adapter = createSessionSourcesSubscription(session.store);
+    const live = adapter.getSnapshot().byKey.get(session.key(MAIN))!.source;
+    session.lifecycle(MAIN, 'ended', 1);
+    const ended = adapter.getSnapshot().byKey.get(session.key(MAIN))!.source;
+    expect(live.meta?.isActive).toBe(true);
+    expect(ended.meta?.isActive).toBe(false);
+    expect(ended.generation).toBe(live.generation);
+    adapter.dispose();
+  });
+
+  it('cancels pending notifications on cleanup, disposes idempotently and rejects late use', async () => {
+    const session = host();
+    const adapter = createSessionSourcesSubscription(session.store);
     let notifications = 0;
-    adapter.subscribe(() => {
+    const cleanup = adapter.subscribe(() => {
       notifications++;
     });
     adapter.subscribe(() => {
       notifications++;
     });
-    store.update(file({ filename: 'other' }));
-    expect(notifications).toBe(0);
+    session.snapshot(MAIN, ['one']);
+    cleanup();
     adapter.dispose();
     adapter.dispose();
-    expect(store.listeners.size).toBe(0);
-    store.update(file());
+    await settle();
     expect(notifications).toBe(0);
     expect(() => adapter.subscribe(() => undefined)).toThrow(/disposed/i);
     expect(() => adapter.getSnapshot()).toThrow(/disposed/i);
   });
 
-  it('keeps caller generation unchanged for shorter native snapshots', () => {
-    const store = nativeStore();
-    store.update(file());
-    const adapter = createNativeTranscriptSubscription(store, binding);
-    store.update(file({ lines: [] }));
-    expect(adapter.getSnapshot().generation).toBe(binding.generation);
-    expect(adapter.getSnapshot().lines).toEqual([]);
+  it('names load failures by identifier text and never as content', () => {
+    const session = host();
+    const adapter = createSessionSourcesSubscription(session.store);
+    const view = adapter.getSnapshot().byKey.get(session.key(MAIN))!.view;
+    const source = nativeTranscriptSource(session.key(MAIN), { ...view, status: 'unavailable', error: 'not-found' });
+    expect(source.error).toMatch(/not found/i);
+    expect(source.lines).toEqual([]);
     adapter.dispose();
-  });
-  it('notifies every subscriber once and makes already queued callbacks inert after cleanup', async () => {
-    const store = nativeStore();
-    const adapter = createNativeTranscriptSubscription(store, binding);
-    const notifications: [number, number] = [0, 0];
-    const first = adapter.subscribe(() => {
-      notifications[0]++;
-    });
-    adapter.subscribe(() => {
-      notifications[1]++;
-    });
-    const queued = [...store.listeners];
-    store.update(file());
-    expect(notifications).toEqual([0, 0]);
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(notifications).toEqual([1, 1]);
-    first();
-    adapter.dispose();
-    store.update(file({ lines: ['changed'] }));
-    for (const callback of queued) callback();
-    await new Promise((resolve) => setTimeout(resolve, 25));
-    expect(notifications).toEqual([1, 1]);
-    expect(store.listeners.size).toBe(0);
   });
 });

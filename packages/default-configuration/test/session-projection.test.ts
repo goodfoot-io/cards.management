@@ -10,6 +10,7 @@ import {
   sessionIdentity
 } from '../src/streams/lib/session/projection';
 import type { NativeTranscriptSource, SessionRow } from '../src/streams/lib/session/types';
+import { streamMeta } from './helpers/stream-meta';
 
 function source(lines: readonly string[], extra: Partial<NativeTranscriptSource> = {}): NativeTranscriptSource {
   return {
@@ -18,7 +19,7 @@ function source(lines: readonly string[], extra: Partial<NativeTranscriptSource>
     lines,
     headLineNumber: 1,
     filename: 'native.jsonl',
-    meta: { lineCount: lines.length, isActive: true },
+    meta: streamMeta({ lineCount: lines.length, isActive: true }),
     isLoading: false,
     error: null,
     ...extra
@@ -111,7 +112,9 @@ describe('native transcript projection', () => {
     const controller = createTranscriptProjection(projector, 'card/source');
     const initial = controller.update(source(['a']));
     expect(controller.update(source(['a'])).projection).toBe(initial.projection);
-    const next = controller.update(source(['a'], { meta: { lineCount: 1, isActive: false, title: 'Completed' } }));
+    const next = controller.update(
+      source(['a'], { meta: streamMeta({ lineCount: 1, isActive: false, title: 'Completed' }) })
+    );
     expect(next.kind).toBe('metadata');
     expect(next.projection.header.title).toBe('Completed');
     expect(counts.parsed).toBe(1);

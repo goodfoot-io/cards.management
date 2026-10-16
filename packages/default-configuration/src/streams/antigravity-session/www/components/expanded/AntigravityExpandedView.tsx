@@ -5,12 +5,9 @@
  * @module streams/antigravity-session/www/components/expanded/AntigravityExpandedView
  */
 
-import { streamStore } from '@cards.management/sdk/stream-store';
-import { type ReactElement, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import type { NativeTranscriptSource, SessionDisclosureState, SessionProjection } from '../../../../lib/session/types';
-import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
-import { useStreamStore } from '../../hooks/useStreamStore';
 import { type AntigravityPayloads, type AntigravityRow, antigravitySessionProjector } from '../../lib/project-session';
 import { AntigravitySessionView } from './AntigravitySessionView';
 
@@ -19,7 +16,7 @@ import { AntigravitySessionView } from './AntigravitySessionView';
  * @param rows - Projected source rows.
  * @returns All top-level and leaf identities still present in this generation.
  */
-function disclosureIds(rows: readonly AntigravityRow[]): Set<string> {
+export function antigravityDisclosureIds(rows: readonly AntigravityRow[]): Set<string> {
   return new Set(rows.flatMap((row) => [row.id, ...row.parts.map((part) => part.id)]));
 }
 
@@ -52,7 +49,7 @@ export function AntigravitySourceView({ source }: { source: NativeTranscriptSour
     setOpen((previous) => {
       if (previous.size === 0) return previous;
       if (update.kind === 'initial' || update.kind === 'reset') return new Map();
-      const ids = disclosureIds(update.projection.rows);
+      const ids = antigravityDisclosureIds(update.projection.rows);
       if ([...previous.keys()].every((id) => ids.has(id))) return previous;
       return new Map([...previous].filter(([id]) => ids.has(id)));
     });
@@ -64,19 +61,4 @@ export function AntigravitySourceView({ source }: { source: NativeTranscriptSour
   const disclosures = useMemo<SessionDisclosureState>(() => ({ open, onOpenChange }), [open, onOpenChange]);
 
   return <AntigravitySessionView source={source} projection={projection} disclosures={disclosures} />;
-}
-
-/**
- * Selects the current main stream using the shared native subscription adapter.
- * @returns Expanded Antigravity session view bound to the existing host/store path.
- */
-export function AntigravityExpandedView(): ReactElement {
-  const scope = useId();
-  const filename = useStreamStore((state) => state.primary);
-  const source = useTranscriptSource(streamStore, {
-    filename,
-    sourceKey: JSON.stringify(['antigravity-expanded', scope, filename]),
-    generation: 'native-store'
-  });
-  return <AntigravitySourceView key={source.sourceKey} source={source} />;
 }

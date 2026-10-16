@@ -33,6 +33,7 @@ import {
   opencodeSessionProjector
 } from '../src/streams/opencode-session/www/lib/project-session';
 import * as toolPart from '../src/streams/opencode-session/www/lib/tool-part';
+import { streamMeta } from './helpers/stream-meta';
 
 const PAYLOAD_SIZE = 5 * 1024 * 1024;
 const FIXTURE_TEMPLATE = readFileSync(
@@ -60,7 +61,7 @@ function source(lines: readonly string[], overrides: Partial<NativeTranscriptSou
     generation: 'fixture-large-1',
     lines,
     headLineNumber: 1,
-    meta: { lineCount: lines.length, isActive: true },
+    meta: streamMeta({ lineCount: lines.length, isActive: true }),
     filename: 'opencode-session.jsonl',
     isLoading: false,
     error: null,

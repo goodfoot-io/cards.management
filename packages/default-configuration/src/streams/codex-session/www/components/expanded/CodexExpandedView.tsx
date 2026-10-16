@@ -5,19 +5,21 @@
  * @module components/expanded/CodexExpandedView
  */
 
-import { streamStore } from '@cards.management/sdk/stream-store';
 import type React from 'react';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import { SessionViewport } from '../../../../lib/session/SessionViewport';
 import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
-import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
-import { useStreamStore } from '../../hooks/useStreamStore';
 import { type CodexPayloads, type CodexRow, codexSessionProjector } from '../../lib/project-session';
 import { CODEX_PARTS, CODEX_ROWS } from './CodexPresentation';
 
-function disclosureIds(rows: readonly CodexRow[]): Set<string> {
+/**
+ * Collects row and part ids so controlled disclosures survive source appends.
+ * @param rows - Current semantic rows from Codex's projection.
+ * @returns Every current row and part identity.
+ */
+export function codexDisclosureIds(rows: readonly CodexRow[]): Set<string> {
   const ids = new Set<string>();
   for (const row of rows) {
     ids.add(row.id);
@@ -61,7 +63,7 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
     setOpen((previous) => {
       if (previous.size === 0) return previous;
       if (update.kind === 'initial' || update.kind === 'reset') return new Map();
-      const ids = disclosureIds(update.projection.rows as CodexRow[]);
+      const ids = codexDisclosureIds(update.projection.rows as CodexRow[]);
       if ([...previous.keys()].every((id) => ids.has(id))) return previous;
       return new Map([...previous].filter(([id]) => ids.has(id)));
     });
@@ -109,19 +111,4 @@ export function CodexSourceView({ source }: { source: NativeTranscriptSource }):
       </div>
     </div>
   );
-}
-
-/**
- * Expanded owner scopes the existing SDK store subscription to the selected Codex file.
- * @returns Expanded Codex view bound to the selected SDK file.
- */
-export function CodexExpandedView(): React.ReactElement {
-  const scope = useId();
-  const filename = useStreamStore((state) => state.primary);
-  const source = useTranscriptSource(streamStore, {
-    filename,
-    sourceKey: JSON.stringify(['codex-expanded', scope, filename]),
-    generation: 'native-store'
-  });
-  return <CodexSourceView key={source.sourceKey} source={source} />;
 }

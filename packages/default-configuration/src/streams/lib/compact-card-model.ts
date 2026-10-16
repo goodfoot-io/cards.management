@@ -105,4 +105,9 @@ export interface CompactCardModel {
    * count so the cap stays a single source of truth.
    */
   tail: TailLineModel[];
+  /**
+   * Scope note shown when the summary folds only a loaded trailing window, so counts and
+   * recaps never read as whole-session facts.
+   */
+  coverage?: string;
 }

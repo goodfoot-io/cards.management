@@ -15,6 +15,7 @@ import { opencodeNativeUpdateLines } from '../src/streams/opencode-session/www/l
 import { parseOpencodeLine } from '../src/streams/opencode-session/www/lib/parser';
 import type { OpencodePayloads } from '../src/streams/opencode-session/www/lib/project-session';
 import { opencodeSessionProjector } from '../src/streams/opencode-session/www/lib/project-session';
+import { streamMeta } from './helpers/stream-meta';
 
 const FIXTURE = readFileSync(new URL('./fixtures/opencode/full-lifecycle.jsonl', import.meta.url), 'utf8')
   .trimEnd()
@@ -31,7 +32,7 @@ function source(lines: readonly string[], overrides: Partial<NativeTranscriptSou
     generation: 'native-store',
     lines,
     headLineNumber: 1,
-    meta: { lineCount: lines.length, isActive: true },
+    meta: streamMeta({ lineCount: lines.length, isActive: true }),
     filename: 'opencode-session.jsonl',
     isLoading: false,
     error: null,

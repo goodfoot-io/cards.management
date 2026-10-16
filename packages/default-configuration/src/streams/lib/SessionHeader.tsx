@@ -17,7 +17,7 @@ import { Fragment } from 'react';
 /** Session running/completion status. */
 export type SessionStatus = 'running' | 'success' | 'error';
 
-interface SessionHeaderProps {
+export interface SessionHeaderProps {
   /** Model name (e.g. "claude-opus-4-5"). */
   model: string;
   /** Current working directory of the session. */

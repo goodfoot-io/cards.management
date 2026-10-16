@@ -128,11 +128,11 @@ function safeJson(value: unknown): string {
   }
 }
 
-const ANTIGRAVITY_PARTS: SessionProviderRegistry<AntigravityPayloads> = {
+export const ANTIGRAVITY_PARTS: SessionProviderRegistry<AntigravityPayloads> = {
   anomaly: { render: AntigravityAnomalyPart, disclosureKeys: () => [] },
   toolCall: { render: AntigravityToolCallRow, disclosureKeys: (leaf) => [leaf.id] }
 };
-const ANTIGRAVITY_ROWS: SessionProviderRegistry<AntigravityPayloads> = {
+export const ANTIGRAVITY_ROWS: SessionProviderRegistry<AntigravityPayloads> = {
   anomaly: { render: AntigravityAnomalyPart, disclosureKeys: () => [] },
   toolCall: { render: AntigravityToolCallRow, disclosureKeys: (leaf) => [leaf.id] }
 };

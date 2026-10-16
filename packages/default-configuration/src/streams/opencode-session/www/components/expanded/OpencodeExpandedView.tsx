@@ -4,15 +4,12 @@
  * @module streams/opencode-session/www/components/expanded/OpencodeExpandedView
  */
 
-import { streamStore } from '@cards.management/sdk/stream-store';
-import { type ReactElement, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { type ReactElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { SessionHeader } from '../../../../lib/SessionHeader';
 import { createTranscriptProjection, type TranscriptProjectionController } from '../../../../lib/session/projection';
 import type { SessionContentProps } from '../../../../lib/session/SessionContent';
 import { SessionViewport } from '../../../../lib/session/SessionViewport';
 import type { NativeTranscriptSource, SessionProjection } from '../../../../lib/session/types';
-import { useTranscriptSource } from '../../../../lib/session/use-transcript-source';
-import { useStreamStore } from '../../hooks/useStreamStore';
 import { type OpencodePayloads, opencodeSessionProjector } from '../../lib/project-session';
 import {
   OPENCODE_PRESENTATION,
@@ -103,18 +100,4 @@ export function OpencodeSourceView({ source }: { source: NativeTranscriptSource 
       </div>
     </div>
   );
-}
-
-/** Binds the active SDK file to this expanded view with caller-owned source identity and generation.
- * @returns Expanded OpenCode view bound to the selected native source.
- */
-export function OpencodeExpandedView(): ReactElement {
-  const scope = useId();
-  const filename = useStreamStore((state) => state.primary);
-  const source = useTranscriptSource(streamStore, {
-    filename,
-    sourceKey: JSON.stringify(['opencode-expanded', scope, filename]),
-    generation: 'native-store'
-  });
-  return <OpencodeSourceView key={source.sourceKey} source={source} />;
 }

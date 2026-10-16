@@ -1,14 +1,11 @@
 /**
  * Compact micro-card view for the antigravity-session stream renderer.
  *
- * Mirrors the opencode-session compact view's lifecycle: it bootstraps from
- * `streamStore.getState()` before subscribing, folds the primary file's lines
- * via {@link reconcileFolded} on each update, observes `meta.isActive` for
- * liveness, and asks the host to `close()` a stream whose primary file has
- * zero lines so no blank box shows in the card detail. Folding is
- * incremental: lines past a watermark are appended onto the prior fold, so
- * each store update only parses what is new; a shrink rebuilds fully. The
- * folded state is adapted into a provider-neutral `CompactCardModel` via
+ * Receives the session's main source from the session renderer and folds its
+ * loaded range via {@link reconcileFolded} by absolute coordinates, so a trimmed
+ * tail keeps folding new records while a new incarnation, gap or newly loaded
+ * earlier history rebuilds. Empty-session closing belongs to the session
+ * renderer. The folded state is adapted into a provider-neutral `CompactCardModel` via
  * {@link antigravityToCompactCardModel} and rendered through the shared
  * `CompactCard` component — the DOM/CSS for the card live there, not here.
  *
@@ -20,67 +17,31 @@
  * @module streams/antigravity-session/www/components/compact/AntigravityCompactView
  */
 
-import { close, streamStore } from '@cards.management/sdk/stream-store';
 import type React from 'react';
-import { useEffect, useState } from 'react';
 import { CompactCard } from '../../../../lib/CompactCard';
+import { type SessionSummaryProps, summaryCoverage } from '../../../../lib/session/adapter';
+import { useAbsoluteFold } from '../../../../lib/session/use-absolute-fold';
 import { antigravityToCompactCardModel } from '../../lib/adapt-compact-model';
-import type { FoldedState } from '../../lib/compact-state';
 import { buildFoldedState, reconcileFolded } from '../../lib/compact-state';
 
 /**
- * Reads the primary stream file's lines and liveness from the store.
- * @returns The primary file's lines and `isActive` flag.
- */
-function readPrimary(): { lines: string[]; isActive: boolean } {
-  const s = streamStore.getState();
-  const file = s.files.get(s.primary);
-  return { lines: file ? file.lines : [], isActive: file?.meta.isActive ?? false };
-}
-
-/**
- * Compact Antigravity session card. Folds the primary stream into a
- * {@link FoldedState}, adapts its snapshot into a `CompactCardModel`, and
- * reconciles on every store update. Closes the renderer when the primary
- * file has zero lines and the stream has settled.
+ * Compact session card for the session's main source. Folds the loaded range into a
+ * `FoldedState` by absolute coordinates, so a trimmed tail keeps folding new records, and
+ * labels the summary's scope while earlier content is unloaded.
+ * @param props - Main source snapshot and its loaded coverage.
  * @returns Rendered compact card.
  */
-export function AntigravityCompactView(): React.ReactElement {
-  const [folded, setFolded] = useState<FoldedState>(() => {
-    const { lines, isActive } = readPrimary();
-    return buildFoldedState(lines, isActive);
-  });
-  const [isActive, setIsActive] = useState<boolean>(() => readPrimary().isActive);
-
-  // Bootstrap-then-subscribe: fold once for lines that arrived between the
-  // initial render and this effect (the empty-on-boot primary's
-  // subscribe:response can land in exactly this window), then keep folding on
-  // every store update. reconcileFolded appends only lines past its watermark,
-  // so steady-state updates parse just the new lines; shrink/reset rebuilds.
-  useEffect(() => {
-    const sync = (): void => {
-      const { lines, isActive: active } = readPrimary();
-      setIsActive(active);
-      setFolded((prev) => reconcileFolded(prev, lines, active));
-    };
-    sync();
-    return streamStore.subscribe(sync);
-  }, []);
-
-  // Close a settled stream whose primary file has zero lines so the host
-  // doesn't render a blank box for it. A live (active) stream is never closed
-  // for emptiness: it is mid-flight and its backlog is still arriving out of
-  // band via the async `subscribe:response` backfill.
-  useEffect(() => {
-    const checkEmpty = (): void => {
-      const s = streamStore.getState();
-      const file = s.files.get(s.primary);
-      if (file && file.meta.lineCount === 0 && !file.meta.isActive) close();
-    };
-    checkEmpty();
-    return streamStore.subscribe(checkEmpty);
-  }, []);
-
-  const model = antigravityToCompactCardModel(folded.state, isActive);
-  return <CompactCard model={model} />;
+export function AntigravityCompactView(props: SessionSummaryProps): React.ReactElement {
+  const { source } = props;
+  const isActive = source.meta?.isActive ?? false;
+  const folded = useAbsoluteFold(
+    source,
+    (lines) => buildFoldedState(lines, isActive),
+    (prev, lines) => reconcileFolded(prev, lines, isActive)
+  );
+  return (
+    <CompactCard
+      model={{ ...antigravityToCompactCardModel(folded.state, isActive), coverage: summaryCoverage(props) }}
+    />
+  );
 }

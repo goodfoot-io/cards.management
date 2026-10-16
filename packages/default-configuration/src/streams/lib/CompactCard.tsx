@@ -123,6 +123,7 @@ export function CompactCard({ model }: CompactCardProps): React.ReactElement {
             <div className="headline">{model.headline}</div>
             <div className="metrics metrics-stacked">{renderFacts(model.stackedFacts)}</div>
             <div className="metrics metrics-split">{renderFacts(model.splitFacts)}</div>
+            {model.coverage && <div className="coverage">{model.coverage}</div>}
           </div>
         </div>
         <div className="panel panel-right">

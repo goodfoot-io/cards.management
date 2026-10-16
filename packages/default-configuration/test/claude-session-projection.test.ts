@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { claudeSessionProjector } from '../src/streams/claude-code-session/www/lib/project-session';
 import { createTranscriptProjection, replayTranscript } from '../src/streams/lib/session/projection';
 import { assistant, call, hook, line, parts, project, result, source, tools, user } from './fixtures/claude-projection';
+import { streamMeta } from './helpers/stream-meta';
 
 const mixed = [
   { type: 'system', subtype: 'init', uuid: 'init', model: 'Claude', cwd: '/repo', tools: ['Bash'] },
@@ -188,7 +189,9 @@ describe('Claude native projection conformance', () => {
     const controller = createTranscriptProjection(claudeSessionProjector, 'card/claude/main');
     const before = controller.update(source(mixed)).projection;
     const after = controller.update(
-      source(mixed, { meta: { role: 'subagent', agentId: 'worker', lineCount: mixed.length, isActive: false } })
+      source(mixed, {
+        meta: streamMeta({ role: 'subagent', agentId: 'worker', lineCount: mixed.length, isActive: false })
+      })
     );
     expect(after.kind).toBe('metadata');
     expect(after.projection.header.agentId).toBe('worker');
