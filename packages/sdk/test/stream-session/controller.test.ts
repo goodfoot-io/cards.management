@@ -956,4 +956,21 @@ describe('session controller contract', () => {
       available: true
     });
   });
+  it('filters well-formed events for other sessions silently while anomalous ones surface rate-limited', async () => {
+    const test = await opened();
+    test.reads.shift()?.resolve(snapshot(['one']));
+    await flush();
+    const foreign = { ...source, cardId: 'other-card' };
+    for (let line = 1; line <= 200; line++) {
+      test.emit({ ...append(line, 'x'), source: foreign });
+      test.emit({ ...append(line, 'x'), source: { ...source, streamType: 'codex' } });
+    }
+    expect(test.diagnostics).toEqual([]);
+    expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({ lines: ['one'] });
+    // Malformed event for this session's own scope still reports, deduplicated by power-of-two occurrence.
+    for (let index = 0; index < 100; index++) test.emit({ ...append(2, 'x'), version: undefined } as never);
+    const scope = test.diagnostics.filter((event) => event.code === 'rejected-scope');
+    expect(scope.length).toBeGreaterThanOrEqual(1);
+    expect(scope.length).toBeLessThanOrEqual(8);
+  });
 });

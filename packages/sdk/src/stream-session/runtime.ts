@@ -29,6 +29,9 @@ import {
 } from './errors.js';
 import { groupStreamSessions, streamSessionKey, streamSourceKey } from './grouping.js';
 
+/** Upper bound on distinct sources tracked for scope-rejection rate limiting. */
+const MAX_SCOPE_REJECTION_KEYS = 64;
+
 /** Private source reconciliation state, never exposed to consumers. */
 interface SourceWork {
   /** Accepted display data. */
@@ -169,11 +172,26 @@ export function createController(options: SessionControllerOptions): SessionCont
   let pending: SessionSourceEvent[] = [];
   let bufferedEvents = 0;
   let bufferedBytes = 0;
+  const scopeRejections = new Map<string, number>();
 
   /** Publishes defensive copies so consumers cannot mutate controller internals. */
   function publish(): void {
     state.sources = new Map([...works].map(([key, work]) => [key, work.state]));
     if (!disposed) options.publish(structuredClone(state));
+  }
+
+  /**
+   * Rate-limits scope rejections per source so a persistent anomaly cannot flood the log.
+   * Admits the 1st, 2nd, 4th, 8th... occurrence; the session is fixed per controller.
+   * @param work - Relevant source when known.
+   * @returns Whether this occurrence should be reported.
+   */
+  function admitScopeRejection(work?: SourceWork): boolean {
+    const key = work ? streamSourceKey(work.state.source) : '';
+    if (!scopeRejections.has(key) && scopeRejections.size >= MAX_SCOPE_REJECTION_KEYS) scopeRejections.clear();
+    const seen = (scopeRejections.get(key) ?? 0) + 1;
+    scopeRejections.set(key, seen);
+    return (seen & (seen - 1)) === 0;
   }
 
   /**
@@ -183,6 +201,7 @@ export function createController(options: SessionControllerOptions): SessionCont
    * @param requestId - Correlated request when known.
    */
   function diagnose(code: SessionDiagnostic['code'], work?: SourceWork, requestId?: string): void {
+    if (code === 'rejected-scope' && !admitScopeRejection(work)) return;
     const correlation = requestId ?? work?.state.requestId;
     options.diagnostic?.(
       structuredClone({
@@ -525,6 +544,14 @@ export function createController(options: SessionControllerOptions): SessionCont
    * @param event - Host-adapted source event.
    */
   function acceptEvent(event: SessionSourceEvent): void {
+    // Every mounted session receives every broadcast event; a well-formed event for another card or
+    // stream type is the normal case, not an anomaly, so it is dropped without a diagnostic.
+    if (
+      !disposed &&
+      validSource(event?.source) &&
+      (event.source.cardId !== session.cardId || event.source.streamType !== session.streamType)
+    )
+      return;
     if (
       disposed ||
       !shape(
