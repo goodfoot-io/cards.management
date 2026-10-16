@@ -55,6 +55,11 @@ describe('createCardsSessionClient', () => {
   it.each([
     [new ApiError('gone', 'NOT_FOUND'), 'not-found'],
     [new ApiError('bad scope', 'VALIDATION_ERROR'), 'rejected-scope'],
+    [new ApiError('changed during read', 'STREAM_SOURCE_INCOHERENT'), 'inconsistent-source'],
+    [new ApiError('reads unavailable', 'STREAM_SOURCE_UNAVAILABLE'), 'load-error'],
+    [new ApiError('metadata unbound', 'STREAM_SOURCE_UNBOUND'), 'rejected-scope'],
+    [new ApiError('publication failed', 'STREAM_SOURCE_PUBLICATION'), 'load-error'],
+    [new ApiError('inherited key', 'constructor'), 'load-error'],
     [new ApiError('boom', 'INTERNAL_ERROR'), 'load-error'],
     [new Error('native path /secret'), 'load-error']
   ] as const)('classifies %s as %s without its message', async (failure, code) => {

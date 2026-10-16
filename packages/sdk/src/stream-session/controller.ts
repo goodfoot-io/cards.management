@@ -72,6 +72,8 @@ export interface SessionEventSource {
 export interface SessionScheduler {
   /** Schedules recurring 30-second membership reconciliation and returns cancellation. */
   every(milliseconds: number, callback: () => void): () => void;
+  /** Schedules one bounded read-retry backoff and returns cancellation. */
+  after(milliseconds: number, callback: () => void): () => void;
 }
 
 /** Stable source state, including retained unavailable historical content. */
@@ -123,7 +125,14 @@ export interface SessionControllerState {
 /** Concise diagnostics that never contain native transcript contents. */
 export interface SessionDiagnostic {
   /** Stable failure category. */
-  code: 'rejected-scope' | 'load-error' | 'source-reset' | 'resync-overflow' | 'stale-response' | 'inconsistent-source';
+  code:
+    | 'rejected-scope'
+    | 'load-error'
+    | 'read-retry'
+    | 'source-reset'
+    | 'resync-overflow'
+    | 'stale-response'
+    | 'inconsistent-source';
   /** Trusted session identity. */
   session: StreamSessionRef;
   /** Relevant source, if known. */

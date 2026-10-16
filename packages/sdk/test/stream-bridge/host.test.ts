@@ -20,7 +20,7 @@ import {
   type StreamHostAction,
   type StreamHostBridge
 } from '../../src/stream-bridge/index.js';
-import type { SessionControllerEvent } from '../../src/stream-session/index.js';
+import { SESSION_READ_RETRY_DELAYS_MS, type SessionControllerEvent } from '../../src/stream-session/index.js';
 import {
   createStreamStore,
   type HostToRendererMessage,
@@ -95,6 +95,8 @@ interface Rig {
   inits: StreamInitData[];
   views: StreamViewState[];
   emit(event: SessionControllerEvent): void;
+  /** Runs every pending read-retry backoff. */
+  fire(): void;
   listeners(): number;
   /** Creates the renderer from the bridge's initialization and attaches it. */
   open(mode?: StreamDisplayMode): StreamRendererStore;
@@ -123,6 +125,7 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
   const toHost: unknown[] = [];
   let listener: ((event: SessionControllerEvent) => void) | undefined;
   let timer: (() => void) | undefined;
+  const backoffs: Array<{ run: () => void; live: boolean }> = [];
   let rendererListener: ((data: unknown) => void) | undefined;
   let renderer: StreamRendererStore | undefined;
   let requests = 0;
@@ -150,6 +153,13 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
         return () => {
           timer = undefined;
         };
+      },
+      after(_milliseconds, callback) {
+        const backoff = { run: callback, live: true };
+        backoffs.push(backoff);
+        return () => {
+          backoff.live = false;
+        };
       }
     },
     post(message) {
@@ -175,7 +185,15 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
     inits,
     views,
     emit: (event) => listener?.(event),
-    listeners: () => Number(listener !== undefined) + Number(timer !== undefined),
+    fire() {
+      for (const backoff of backoffs.splice(0))
+        if (backoff.live) {
+          backoff.live = false;
+          backoff.run();
+        }
+    },
+    listeners: () =>
+      Number(listener !== undefined) + Number(timer !== undefined) + backoffs.filter((backoff) => backoff.live).length,
     open(storeMode = mode) {
       const init = bridge.getInit();
       if (!init) throw new Error('no init');
@@ -417,14 +435,67 @@ describe('failures, retry, and connection', () => {
     expect(r.view()).toMatchObject({ status: 'ready', lines: ['a'], error: null });
   });
 
+  it('retries transient server read failures without surfacing an error to the renderer', async () => {
+    const r = rig();
+    r.lists.shift()?.([meta(main, mainBinding, 1)]);
+    await flush();
+    r.open();
+    await r.pump();
+    r.reads.shift()?.reject(new ApiError('changed during read', 'STREAM_SOURCE_INCOHERENT'));
+    await r.pump();
+    r.fire();
+    await r.pump();
+    r.reads.shift()?.reject(new ApiError('unavailable', 'STREAM_SOURCE_UNAVAILABLE'));
+    await r.pump();
+    expect(r.view()).toMatchObject({ status: 'loading', error: null });
+    r.fire();
+    await r.pump();
+    r.reads.shift()?.resolve(serverSnapshot(main, ['a']));
+    await r.pump();
+    expect(r.posted.map((message) => message.type)).toEqual(['source:snapshot']);
+    expect(r.view()).toMatchObject({ status: 'ready', lines: ['a'] });
+  });
+
+  it('pauses after the retry budget and an unbound source immediately', async () => {
+    const r = rig();
+    r.lists.shift()?.([meta(main, mainBinding, 1)]);
+    await flush();
+    r.open();
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new ApiError('changed during read', 'STREAM_SOURCE_INCOHERENT'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
+    expect(r.reads).toHaveLength(0);
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'inconsistent-source' });
+    r.emit({ type: 'started', source: main, version: v1, binding: mainBinding, totalLineCount: 1 });
+    r.lists.shift()?.([meta(main, mainBinding, 1)]);
+    await r.pump();
+    r.reads.shift()?.reject(new ApiError('unbound', 'STREAM_SOURCE_UNBOUND'));
+    await r.pump();
+    r.fire();
+    await r.pump();
+    expect(r.reads).toHaveLength(0);
+    expect(r.posted.filter((message) => message.type === 'source:error').map((message) => message.error)).toEqual([
+      'inconsistent-source',
+      'rejected-scope'
+    ]);
+  });
+
   it('maps unclassified failures to load-error without leaking the message', async () => {
     const r = rig();
     r.lists.shift()?.([meta(main, mainBinding, 1)]);
     await flush();
     r.open();
     await r.pump();
-    r.reads.shift()?.reject(new Error('native secret'));
-    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new Error('native secret'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
     expect(r.view()).toMatchObject({ status: 'paused', error: 'load-error' });
     expect(JSON.stringify([r.posted, r.diagnostics])).not.toContain('native secret');
   });

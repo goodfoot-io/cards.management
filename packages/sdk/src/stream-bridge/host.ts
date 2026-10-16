@@ -486,6 +486,8 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
         }
       }
       if (!current) continue;
+      // A lifted pause re-arms reporting so the next distinct pause reaches the renderer.
+      if (current.status !== 'paused') f.errorFor = null;
       if (current.status === 'paused') {
         const error = current.error as StreamSourceLoadError | null;
         fail(f, current.source, error && LOAD_ERRORS.includes(error) ? error : 'load-error');

@@ -25,15 +25,25 @@ export interface CardsStreamClient {
 }
 
 /**
+ * Server error codes with a session meaning. Incoherent and unavailable reads
+ * are transient under churn and retried by the controller; a missing source or
+ * an unbound sidecar waits for a new live event or refresh.
+ */
+const FAILURES: Readonly<Record<string, SessionSourceFailure>> = {
+  NOT_FOUND: 'not-found',
+  VALIDATION_ERROR: 'rejected-scope',
+  STREAM_SOURCE_UNBOUND: 'rejected-scope',
+  STREAM_SOURCE_INCOHERENT: 'inconsistent-source',
+  STREAM_SOURCE_UNAVAILABLE: 'load-error'
+};
+
+/**
  * Classifies a read rejection without exposing its message.
  * @param error - Rejection from the HTTP client.
- * @returns Identifier-only failure category.
+ * @returns Identifier-only failure category; unrecognized failures are `load-error`.
  */
 function classify(error: unknown): SessionSourceFailure {
-  if (error instanceof ApiError) {
-    if (error.code === 'NOT_FOUND') return 'not-found';
-    if (error.code === 'VALIDATION_ERROR') return 'rejected-scope';
-  }
+  if (error instanceof ApiError && Object.hasOwn(FAILURES, error.code)) return FAILURES[error.code] ?? 'load-error';
   return 'load-error';
 }
 

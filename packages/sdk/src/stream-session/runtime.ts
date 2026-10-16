@@ -21,7 +21,12 @@ import type {
   SessionSourceRequest,
   SessionSourceState
 } from './controller.js';
-import { SessionSourceError } from './errors.js';
+import {
+  isRetryableSourceFailure,
+  SESSION_READ_RETRY_DELAYS_MS,
+  SessionSourceError,
+  type SessionSourceFailure
+} from './errors.js';
 import { groupStreamSessions, streamSessionKey, streamSourceKey } from './grouping.js';
 
 /** Private source reconciliation state, never exposed to consumers. */
@@ -50,6 +55,12 @@ interface SourceWork {
   overflows: number;
   /** Transient native publications awaiting a snapshot. */
   buffer: SessionSourceEvent[];
+  /** Consecutive automatic read retries since the last success or budget reset. */
+  attempts: number;
+  /** Cancels the pending backoff timer, if any. */
+  cancelRetry?: () => void;
+  /** Paused by a classified read failure, liftable by a live event or refresh. */
+  readFailure: boolean;
 }
 
 /** Request-start identity and coordinates deliberately exclude native history and metadata. */
@@ -237,6 +248,7 @@ export function createController(options: SessionControllerOptions): SessionCont
    * @param rejectVersion - Whether its prior incarnation must never be restored.
    */
   function invalidate(work: SourceWork, rejectVersion: boolean): void {
+    stopRetry(work);
     work.abort?.abort();
     work.abort = undefined;
     work.serial = ++serial;
@@ -285,6 +297,7 @@ export function createController(options: SessionControllerOptions): SessionCont
         )
       )
         continue;
+      stopRetry(work);
       const abort = new AbortController();
       const operation = ++serial;
       const epoch = work.state.reconciliationEpoch;
@@ -322,10 +335,7 @@ export function createController(options: SessionControllerOptions): SessionCont
         })
         .catch((error: unknown) => {
           if (disposed || work.serial !== operation || abort.signal.aborted) return;
-          work.state.status = 'paused';
-          work.state.error = error instanceof SessionSourceError ? error.code : 'load-error';
-          diagnose('load-error', work);
-          publish();
+          readFailed(work, error instanceof SessionSourceError ? error.code : 'load-error');
         })
         .finally(() => {
           active--;
@@ -452,6 +462,8 @@ export function createController(options: SessionControllerOptions): SessionCont
     work.reset = false;
     work.conflict = false;
     work.rejectedVersion = undefined;
+    work.attempts = 0;
+    work.readFailure = false;
     work.abort = undefined;
     const buffered = work.buffer;
     clearBuffer(work);
@@ -582,6 +594,9 @@ export function createController(options: SessionControllerOptions): SessionCont
       return;
     }
     if (event.type !== 'append') {
+      if (event.type === 'started' || event.type === 'resumed') {
+        if (!resume(work)) work.attempts = 0;
+      }
       refresh();
       return;
     }
@@ -621,6 +636,69 @@ export function createController(options: SessionControllerOptions): SessionCont
   }
 
   /**
+   * Cancels a pending backoff without touching the attempt budget.
+   * @param work - Source work.
+   */
+  function stopRetry(work: SourceWork): void {
+    work.cancelRetry?.();
+    work.cancelRetry = undefined;
+  }
+
+  /**
+   * Retries a transient read failure after bounded backoff, or pauses visibly.
+   * Non-retryable failures and an exhausted budget pause until a live event,
+   * refresh, reconnection, or explicit retry lifts the pause.
+   * @param work - Source whose read failed in its current operation.
+   * @param code - Identifier-only failure category.
+   */
+  function readFailed(work: SourceWork, code: SessionSourceFailure): void {
+    stopRetry(work);
+    const delay = SESSION_READ_RETRY_DELAYS_MS[work.attempts];
+    if (isRetryableSourceFailure(code) && delay !== undefined && state.connected) {
+      work.attempts++;
+      work.state.status = work.state.authority ? 'resynchronizing' : 'loading';
+      work.state.error = null;
+      const epoch = work.state.reconciliationEpoch;
+      const operation = work.serial;
+      diagnose('read-retry', work);
+      work.cancelRetry = options.scheduler.after(delay, () => {
+        work.cancelRetry = undefined;
+        if (
+          disposed ||
+          !work.state.subscribed ||
+          work.state.status === 'paused' ||
+          work.state.reconciliationEpoch !== epoch ||
+          work.serial !== operation ||
+          work.abort
+        )
+          return;
+        request(work);
+      });
+      publish();
+      return;
+    }
+    work.state.status = 'paused';
+    work.state.error = code;
+    work.readFailure = true;
+    diagnose('load-error', work);
+    publish();
+  }
+
+  /**
+   * Lifts a read-failure pause with a fresh attempt budget; callers then read or refresh.
+   * @param work - Source work.
+   * @returns Whether the pause was lifted.
+   */
+  function resume(work: SourceWork): boolean {
+    if (!work.state.subscribed || work.state.status !== 'paused' || !work.readFailure) return false;
+    work.state.status = 'resynchronizing';
+    work.state.error = null;
+    work.attempts = 0;
+    work.readFailure = false;
+    return true;
+  }
+
+  /**
    * Requests bounded full coverage when accepted source coordinates leave a hole.
    * @param work - Source whose acknowledged content must be preserved.
    */
@@ -647,6 +725,8 @@ export function createController(options: SessionControllerOptions): SessionCont
         work.state.error = null;
         work.overflows = 0;
         work.gapRepairs = 0;
+        work.attempts = 0;
+        work.readFailure = false;
       }
     refresh();
   }
@@ -725,7 +805,9 @@ export function createController(options: SessionControllerOptions): SessionCont
               reset: false,
               conflict: false,
               overflows: 0,
-              buffer: []
+              buffer: [],
+              attempts: 0,
+              readFailure: false
             };
             works.set(key, work);
           } else if (work.state.available && work.state.meta) {
@@ -789,7 +871,10 @@ export function createController(options: SessionControllerOptions): SessionCont
       }
       if (event.cardId === session.cardId) {
         if (event.reason === 'retry') retry();
-        else refresh();
+        else {
+          for (const work of works.values()) resume(work);
+          refresh();
+        }
       }
       return;
     }
@@ -805,6 +890,8 @@ export function createController(options: SessionControllerOptions): SessionCont
             work.state.status = 'resynchronizing';
             work.state.error = null;
             work.overflows = 0;
+            work.attempts = 0;
+            work.readFailure = false;
           }
         refresh();
       } else {
@@ -813,6 +900,7 @@ export function createController(options: SessionControllerOptions): SessionCont
         listing = false;
         dirty = false;
         for (const work of works.values()) {
+          stopRetry(work);
           work.abort?.abort();
           work.abort = undefined;
           work.serial = ++serial;
@@ -859,6 +947,8 @@ export function createController(options: SessionControllerOptions): SessionCont
         work.state.status = 'resynchronizing';
         work.state.error = null;
         work.overflows = 0;
+        work.attempts = 0;
+        work.readFailure = false;
       }
       if (!wasSubscribed || upgrade || work.state.status !== 'ready') request(work);
       publish();
@@ -868,6 +958,9 @@ export function createController(options: SessionControllerOptions): SessionCont
       if (disposed || currentGeneration !== generation || !work) return;
       work.state.subscribed = false;
       work.state.requestId = null;
+      stopRetry(work);
+      work.attempts = 0;
+      work.readFailure = false;
       work.abort?.abort();
       work.abort = undefined;
       work.serial = ++serial;
@@ -891,6 +984,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       removeTimer = undefined;
       listAbort = undefined;
       for (const work of works.values()) {
+        stopRetry(work);
         work.abort?.abort();
         work.abort = undefined;
         work.serial = ++serial;

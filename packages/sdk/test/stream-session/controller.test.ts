@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { StreamMeta, StreamSourceSnapshot } from '../../src/protocol/types/stream.js';
 import {
   createSessionController,
+  SESSION_READ_RETRY_DELAYS_MS,
   type SessionController,
   type SessionControllerEvent,
   type SessionDiagnostic,
@@ -40,6 +41,22 @@ async function flush(): Promise<void> {
   for (let index = 0; index < 12; index++) await Promise.resolve();
 }
 
+/** One scheduled read-retry backoff. */
+interface Backoff {
+  milliseconds: number;
+  run(): void;
+  live: boolean;
+}
+
+/**
+ * Counts backoffs that are still scheduled.
+ * @param backoffs - Scheduled backoffs.
+ * @returns Number not yet run or cancelled.
+ */
+function liveBackoffs(backoffs: Backoff[]): number {
+  return backoffs.filter((backoff) => backoff.live).length;
+}
+
 /**
  * Builds a deferred real client/event adapter with explicit scheduling controls.
  * @returns Controller and controls for pending metadata, history, and events.
@@ -57,6 +74,8 @@ function harness(): {
   diagnostics: SessionDiagnostic[];
   emit(event: SessionControllerEvent): void;
   tick(): void;
+  backoffs: Backoff[];
+  fire(): void;
   listeners(): number;
 } {
   const lists: Array<(value: StreamMeta[]) => void> = [];
@@ -70,6 +89,7 @@ function harness(): {
   const diagnostics: SessionDiagnostic[] = [];
   let listener: ((event: SessionControllerEvent) => void) | undefined;
   let timer: (() => void) | undefined;
+  const backoffs: Backoff[] = [];
   const controller = createSessionController({
     session,
     generation: 'view-1',
@@ -98,6 +118,13 @@ function harness(): {
         return () => {
           timer = undefined;
         };
+      },
+      after(milliseconds, run) {
+        const backoff = { milliseconds, run, live: true };
+        backoffs.push(backoff);
+        return () => {
+          backoff.live = false;
+        };
       }
     },
     publish() {},
@@ -117,8 +144,17 @@ function harness(): {
     tick() {
       timer?.();
     },
+    backoffs,
+    fire() {
+      const due = backoffs.splice(0);
+      for (const backoff of due)
+        if (backoff.live) {
+          backoff.live = false;
+          backoff.run();
+        }
+    },
     listeners() {
-      return Number(listener !== undefined) + Number(timer !== undefined);
+      return Number(listener !== undefined) + Number(timer !== undefined) + liveBackoffs(backoffs);
     }
   };
 }
@@ -581,8 +617,12 @@ describe('session controller contract', () => {
 
   it('pauses load rejection and retries explicitly while retaining request identity', async () => {
     const test = await opened();
-    test.reads.shift()?.reject(new Error('native content must not be logged'));
-    await flush();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      test.reads.shift()?.reject(new Error('native content must not be logged'));
+      await flush();
+      test.fire();
+      await flush();
+    }
     expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({
       status: 'paused',
       error: 'load-error',
@@ -599,6 +639,119 @@ describe('session controller contract', () => {
     });
     expect(JSON.stringify(test.diagnostics)).not.toContain('native content');
   });
+  it('retries transient read failures with bounded backoff, then pauses visibly', async () => {
+    const test = await opened();
+    const state = () => test.controller.getState().sources.get(streamSourceKey(source));
+    const delays: number[] = [];
+    for (const code of ['inconsistent-source', 'load-error', 'inconsistent-source'] as const) {
+      test.reads.shift()?.reject(new SessionSourceError(code));
+      await flush();
+      expect(state()).toMatchObject({ status: 'loading', error: null });
+      expect(test.reads).toHaveLength(0);
+      delays.push(...test.backoffs.filter((backoff) => backoff.live).map((backoff) => backoff.milliseconds));
+      test.fire();
+      await flush();
+      expect(test.reads).toHaveLength(1);
+    }
+    expect(delays).toEqual([...SESSION_READ_RETRY_DELAYS_MS]);
+    test.reads.shift()?.reject(new SessionSourceError('inconsistent-source'));
+    await flush();
+    expect(state()).toMatchObject({ status: 'paused', error: 'inconsistent-source' });
+    expect(liveBackoffs(test.backoffs)).toBe(0);
+    test.tick();
+    test.lists.shift()?.([meta]);
+    await flush();
+    expect(test.reads).toHaveLength(0);
+    expect(test.diagnostics.filter((event) => event.code === 'read-retry')).toHaveLength(3);
+  });
+
+  it('resets the retry budget after a successful read', async () => {
+    const test = await opened();
+    test.reads.shift()?.reject(new SessionSourceError('load-error'));
+    await flush();
+    test.fire();
+    await flush();
+    test.reads.shift()?.resolve(snapshot(['one']));
+    await flush();
+    test.controller.subscribe({ source, mode: 'full', requestId: 'r2', generation: 'view-1' });
+    await flush();
+    for (let attempt = 0; attempt < SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      test.reads.shift()?.reject(new SessionSourceError('load-error'));
+      await flush();
+      expect(test.controller.getState().sources.get(streamSourceKey(source))?.status).toBe('resynchronizing');
+      test.fire();
+      await flush();
+    }
+    expect(test.reads).toHaveLength(1);
+  });
+
+  it('never retries non-retryable failures until a live start or refresh lifts the pause', async () => {
+    const test = await opened();
+    const state = () => test.controller.getState().sources.get(streamSourceKey(source));
+    test.reads.shift()?.reject(new SessionSourceError('rejected-scope'));
+    await flush();
+    expect(state()).toMatchObject({ status: 'paused', error: 'rejected-scope' });
+    expect(liveBackoffs(test.backoffs)).toBe(0);
+    test.tick();
+    test.lists.shift()?.([meta]);
+    await flush();
+    expect(test.reads).toHaveLength(0);
+    test.emit({ type: 'started', source, version, binding, totalLineCount: 1 });
+    expect(state()).toMatchObject({ status: 'resynchronizing', error: null });
+    test.lists.shift()?.([meta]);
+    await flush();
+    expect(test.reads).toHaveLength(1);
+    test.reads.shift()?.reject(new SessionSourceError('not-found'));
+    await flush();
+    expect(state()).toMatchObject({ status: 'paused', error: 'not-found' });
+    test.emit({ type: 'refresh', cardId: 'card', reason: 'commit' });
+    test.lists.shift()?.([meta]);
+    await flush();
+    test.reads.shift()?.resolve(snapshot(['one']));
+    await flush();
+    expect(state()).toMatchObject({ status: 'ready', error: null, lines: ['one'] });
+  });
+
+  it('cancels pending backoff on invalidation, unsubscribe, disconnect, and dispose', async () => {
+    const scenarios: Array<(test: ReturnType<typeof harness>) => void> = [
+      (test) => test.emit({ type: 'invalidated', source, version, binding, reason: 'replaced' }),
+      (test) => test.controller.unsubscribe(source, 'view-1'),
+      (test) => test.emit({ type: 'connection', connected: false }),
+      (test) => test.controller.dispose()
+    ];
+    for (const interrupt of scenarios) {
+      const test = await opened();
+      test.reads.shift()?.reject(new SessionSourceError('load-error'));
+      await flush();
+      expect(liveBackoffs(test.backoffs)).toBe(1);
+      interrupt(test);
+      expect(liveBackoffs(test.backoffs)).toBe(0);
+      const reads = test.reads.length;
+      test.fire();
+      await flush();
+      expect(test.reads).toHaveLength(reads);
+    }
+  });
+
+  it('discards a backoff superseded by a newer read', async () => {
+    const test = await opened();
+    test.reads.shift()?.reject(new SessionSourceError('load-error'));
+    await flush();
+    test.controller.subscribe({ source, mode: 'full', requestId: 'r2', generation: 'view-1' });
+    await flush();
+    expect(test.reads).toHaveLength(1);
+    expect(liveBackoffs(test.backoffs)).toBe(0);
+    test.fire();
+    await flush();
+    expect(test.reads).toHaveLength(1);
+    test.reads.shift()?.resolve(snapshot(['one']));
+    await flush();
+    expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({
+      status: 'ready',
+      requestId: 'r2'
+    });
+  });
+
   it('pauses a classified read failure with its identifier-only code', async () => {
     const test = await opened();
     test.reads.shift()?.reject(new SessionSourceError('not-found'));

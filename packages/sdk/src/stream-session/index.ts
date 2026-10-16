@@ -29,6 +29,6 @@ export type {
 } from './controller.js';
 export { createSessionController } from './controller.js';
 export type { SessionSourceFailure } from './errors.js';
-export { SessionSourceError } from './errors.js';
+export { isRetryableSourceFailure, SESSION_READ_RETRY_DELAYS_MS, SessionSourceError } from './errors.js';
 export type { SessionGroup, SessionGroupingError, SessionGroupingResult } from './grouping.js';
 export { groupStreamSessions, streamSessionKey, streamSourceKey } from './grouping.js';
