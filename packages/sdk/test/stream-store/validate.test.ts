@@ -63,11 +63,11 @@ const rendererValid: unknown[] = [
 ];
 
 describe('validateHostMessage', () => {
-  it.skip('accepts every well-formed host message and returns an equal value', () => {
+  it('accepts every well-formed host message and returns an equal value', () => {
     for (const message of hostValid) expect(validateHostMessage(message)).toEqual({ ok: true, message });
   });
 
-  it.skip('rejects unknown fields at every nesting level', () => {
+  it('rejects unknown fields at every nesting level', () => {
     for (const message of hostValid) {
       expect(validateHostMessage({ ...(message as object), extra: true }).ok).toBe(false);
     }
@@ -78,13 +78,13 @@ describe('validateHostMessage', () => {
     expect(validateHostMessage({ ...snap, meta: { ...snap.meta, extra: 1 } }).ok).toBe(false);
   });
 
-  it.skip('rejects non-objects, arrays, and unknown types including the removed claim message', () => {
+  it('rejects non-objects, arrays, and unknown types including the removed claim message', () => {
     for (const value of [null, undefined, 1, 'x', [], { type: 'stream:line' }, { type: 'claim', filenames: [] }]) {
       expect(validateHostMessage(value).ok).toBe(false);
     }
   });
 
-  it.skip('rejects incoherent snapshot coordinates and metadata', () => {
+  it('rejects incoherent snapshot coordinates and metadata', () => {
     const snap = snapshot({ requestId: 'r1', lines: ['a', 'b'] });
     const bad = [
       { ...snap, totalLineCount: 3 },
@@ -100,7 +100,7 @@ describe('validateHostMessage', () => {
     for (const message of bad) expect(validateHostMessage(message).ok).toBe(false);
   });
 
-  it.skip('bounds append batches and coordinates', () => {
+  it('bounds append batches and coordinates', () => {
     expect(validateHostMessage(append(1, [])).ok).toBe(false);
     expect(
       validateHostMessage(
@@ -123,7 +123,7 @@ describe('validateHostMessage', () => {
     expect(validateHostMessage(append(Number.POSITIVE_INFINITY, ['x'])).ok).toBe(false);
   });
 
-  it.skip('rejects malformed identities, versions, bindings, and tokens', () => {
+  it('rejects malformed identities, versions, bindings, and tokens', () => {
     const base = append(1, ['x']);
     const bad = [
       { ...base, generation: '' },
@@ -139,7 +139,7 @@ describe('validateHostMessage', () => {
     for (const message of bad) expect(validateHostMessage(message).ok).toBe(false);
   });
 
-  it.skip('rejects malformed descriptors, revisions, enums, and theme payloads', () => {
+  it('rejects malformed descriptors, revisions, enums, and theme payloads', () => {
     const bad = [
       { type: 'session:update', generation, revision: 0, descriptor: descriptor(mainMember) },
       { type: 'session:update', generation, revision: 1.5, descriptor: descriptor(mainMember) },
@@ -165,7 +165,7 @@ describe('validateHostMessage', () => {
     for (const message of bad) expect(validateHostMessage(message).ok).toBe(false);
   });
 
-  it.skip('returns identifier-only rejection reasons without echoing content', () => {
+  it('returns identifier-only rejection reasons without echoing content', () => {
     const result = validateHostMessage({ ...append(1, ['secret-native-line']), extra: 'secret-extra' });
     expect(result.ok).toBe(false);
     if (!result.ok) {
@@ -176,11 +176,11 @@ describe('validateHostMessage', () => {
 });
 
 describe('validateRendererMessage', () => {
-  it.skip('accepts every well-formed renderer message and returns an equal value', () => {
+  it('accepts every well-formed renderer message and returns an equal value', () => {
     for (const message of rendererValid) expect(validateRendererMessage(message)).toEqual({ ok: true, message });
   });
 
-  it.skip('rejects unknown fields, unknown types, and the removed claim message', () => {
+  it('rejects unknown fields, unknown types, and the removed claim message', () => {
     for (const message of rendererValid) {
       expect(validateRendererMessage({ ...(message as object), extra: true }).ok).toBe(false);
     }
@@ -197,7 +197,7 @@ describe('validateRendererMessage', () => {
     ).toBe(false);
   });
 
-  it.skip('enforces layout numeric bounds', () => {
+  it('enforces layout numeric bounds', () => {
     const size = { type: 'layout:size', generation, token: 't', revision: 1, height: 10 };
     for (const height of [0, -1, 1.5, MAX_LAYOUT_HEIGHT + 1, Number.NaN, Number.POSITIVE_INFINITY, '10']) {
       expect(validateRendererMessage({ ...size, height }).ok).toBe(false);
@@ -218,7 +218,7 @@ describe('validateRendererMessage', () => {
     }
   });
 
-  it.skip('rejects malformed subscription and action fields', () => {
+  it('rejects malformed subscription and action fields', () => {
     const bad = [
       { type: 'source:subscribe', generation, requestId: 'r1', source: main, history: 'range' },
       { type: 'source:subscribe', generation, requestId: '', source: main, history: 'full' },

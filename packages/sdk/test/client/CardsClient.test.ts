@@ -1,9 +1,48 @@
+/**
+ * Request routing, encoding, and response handling for the HTTP cards client.
+ * @summary CardsClient HTTP operations
+ */
 import { PLANS_PREFIX } from '@cards.management/sdk/card-repo-layout';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CardsClient } from '../../src/client/cardsClient.js';
 import { ApiError } from '../../src/client/types/errors.js';
-import type { EnvironmentsResponse, StreamMeta, VariableGroupsResponse } from '../../src/protocol/index.js';
+import type {
+  EnvironmentsResponse,
+  StreamMeta,
+  StreamSourceSnapshot,
+  VariableGroupsResponse
+} from '../../src/protocol/index.js';
 import { TestHttpClient } from '../../src/testing/index.js';
+
+/**
+ * Builds a coherent source snapshot answering a stream read.
+ * @param lines - Returned trailing lines.
+ * @param totalLineCount - Complete line count of the source read.
+ * @returns Snapshot whose coordinates end at the source's last line.
+ */
+function sourceSnapshot(lines: string[], totalLineCount: number): StreamSourceSnapshot {
+  return {
+    source: { cardId: 'card-1', streamType: 'claude-session', relPath: 'session.log' },
+    version: { serverEpoch: 'server-1', sourceEpoch: 'source-1' },
+    binding: { sessionId: 'session-1', role: 'main' },
+    meta: {
+      version: 1,
+      relPath: 'session.log',
+      streamType: 'claude-session',
+      runtime: 'claude-code',
+      sessionId: 'session-1',
+      role: 'main',
+      sourcePath: '/tmp/session.log',
+      startedAt: '2024-01-01T00:00:00Z',
+      createdAt: '2024-01-01T00:00:00Z',
+      isActive: false,
+      lineCount: totalLineCount
+    },
+    lines,
+    firstLineNumber: totalLineCount - lines.length + 1,
+    totalLineCount
+  };
+}
 
 /**
  * Exercises cards client behavior in the client area through focused scenarios.
@@ -526,16 +565,7 @@ describe('CardsClient', () => {
     it('getStream calls GET /cards/:cardId/streams/:streamType/*relPath', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
-      const mockStream = {
-        meta: {
-          relPath: 'session.log',
-          streamType: 'claude-session',
-          status: 'completed',
-          createdAt: '2024-01-01T00:00:00Z',
-          lineCount: 2
-        },
-        lines: ['line 1', 'line 2']
-      };
+      const mockStream = sourceSnapshot(['line 1', 'line 2'], 2);
 
       httpClient.responses.set('http://localhost:3000/cards/card-1/streams/claude-session/session.log', mockStream);
 
@@ -551,10 +581,7 @@ describe('CardsClient', () => {
     it('getStream appends ?tail=N when a tail is provided', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
-      const mockStream = {
-        meta: { relPath: 'session.log', streamType: 'claude-session', lineCount: 2460 },
-        lines: ['line 2459', 'line 2460']
-      };
+      const mockStream = sourceSnapshot(['line 2459', 'line 2460'], 2460);
       httpClient.responses.set(
         'http://localhost:3000/cards/card-1/streams/claude-session/session.log?tail=50',
         mockStream
@@ -566,19 +593,20 @@ describe('CardsClient', () => {
         method: 'GET',
         url: expect.stringContaining('tail=50')
       });
-      // meta.lineCount still reports the full stream even though only the tail
-      // was returned.
-      expect(result.meta.lineCount).toBe(2460);
+      // The snapshot still reports the full stream even though only the tail
+      // was returned, and its coordinates place the tail at the end.
+      expect(result.totalLineCount).toBe(2460);
+      expect(result.firstLineNumber).toBe(2459);
       expect(result.lines).toHaveLength(2);
     });
 
     it('getStream omits the tail query param when no tail is provided', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
-      httpClient.responses.set('http://localhost:3000/cards/card-1/streams/claude-session/session.log', {
-        meta: {},
-        lines: []
-      });
+      httpClient.responses.set(
+        'http://localhost:3000/cards/card-1/streams/claude-session/session.log',
+        sourceSnapshot([], 0)
+      );
 
       await client.getStream('card-1', 'claude-session', 'session.log');
 
@@ -588,10 +616,10 @@ describe('CardsClient', () => {
     it('getStream encodes filename in URL', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
-      httpClient.responses.set('http://localhost:3000/cards/card-1/streams/claude-session/file%20with%20spaces.log', {
-        meta: {},
-        lines: []
-      });
+      httpClient.responses.set(
+        'http://localhost:3000/cards/card-1/streams/claude-session/file%20with%20spaces.log',
+        sourceSnapshot([], 0)
+      );
 
       await client.getStream('card-1', 'claude-session', 'file with spaces.log');
 
@@ -604,10 +632,10 @@ describe('CardsClient', () => {
     it('getStream encodes streamType in URL', async () => {
       const httpClient = new TestHttpClient();
       const client = new CardsClient(options, httpClient);
-      httpClient.responses.set('http://localhost:3000/cards/card-1/streams/type%2Fwith%2Fslashes/session.log', {
-        meta: {},
-        lines: []
-      });
+      httpClient.responses.set(
+        'http://localhost:3000/cards/card-1/streams/type%2Fwith%2Fslashes/session.log',
+        sourceSnapshot([], 0)
+      );
 
       await client.getStream('card-1', 'type/with/slashes', 'session.log');
 

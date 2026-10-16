@@ -60,7 +60,7 @@ function ready(n: number, mode: 'compact' | 'expanded' = 'expanded') {
 }
 
 describe('stream store initialization', () => {
-  it.skip('exposes the bound session, generation, revision, and descriptor members as sources', () => {
+  it('exposes the bound session, generation, revision, and descriptor members as sources', () => {
     const h = harness();
     const state = h.store.getState();
     expect(state.session).toEqual(session);
@@ -71,7 +71,7 @@ describe('stream store initialization', () => {
     expect(view(h, child)).toMatchObject({ member: childMember, status: 'unsubscribed', requestId: null });
   });
 
-  it.skip('auto-subscribes the main in tail mode for compact and full mode for expanded', () => {
+  it('auto-subscribes the main in tail mode for compact and full mode for expanded', () => {
     const compact = harness({ mode: 'compact' });
     expect(compact.subscribes()).toEqual([
       { type: 'source:subscribe', generation, requestId: 'req-1', source: main, history: 'tail' }
@@ -81,12 +81,12 @@ describe('stream store initialization', () => {
     expect(expanded.subscribes()[0]?.history).toBe('full');
   });
 
-  it.skip('does not auto-subscribe any member when the session has no unique main', () => {
+  it('does not auto-subscribe any member when the session has no unique main', () => {
     const h = harness({ descriptor: descriptor(childMember) });
     expect(h.sent).toEqual([]);
   });
 
-  it.skip('rejects initialization whose descriptor names another session or foreign members', () => {
+  it('rejects initialization whose descriptor names another session or foreign members', () => {
     const create = (init: Parameters<typeof createStreamStore>[0]['init']) => () =>
       createStreamStore({ init, post: () => undefined, listen: () => () => undefined });
     const base = { session, generation, revision: 1, mode: 'compact' as const };
@@ -105,7 +105,7 @@ describe('stream store initialization', () => {
 });
 
 describe('snapshot correlation', () => {
-  it.skip('establishes authority from the current request and reports unloaded earlier content for a tail', () => {
+  it('establishes authority from the current request and reports unloaded earlier content for a tail', () => {
     const h = harness();
     h.deliver(snapshot({ requestId: h.lastRequestId(), first: 51, lines: ['l51', 'l52'] }));
     expect(view(h)).toMatchObject({
@@ -119,7 +119,7 @@ describe('snapshot correlation', () => {
     });
   });
 
-  it.skip('drops snapshots with a superseded request ID or another generation', () => {
+  it('drops snapshots with a superseded request ID or another generation', () => {
     const h = harness();
     h.deliver(snapshot({ requestId: 'req-unknown', lines: ['x'] }));
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['x'], generation: 'gen-0' }));
@@ -128,7 +128,7 @@ describe('snapshot correlation', () => {
     expect(h.diagnostics.map((event) => event.code)).toContain('stale-response');
   });
 
-  it.skip('rejects a snapshot whose binding disagrees with current membership', () => {
+  it('rejects a snapshot whose binding disagrees with current membership', () => {
     const h = harness();
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['x'], binding: { sessionId: 's2', role: 'main' } }));
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['x'], binding: { sessionId: 's1', role: 'subagent' } }));
@@ -136,7 +136,7 @@ describe('snapshot correlation', () => {
     expect(view(h).lines).toEqual([]);
   });
 
-  it.skip('records a typed source error for the current request', () => {
+  it('records a typed source error for the current request', () => {
     const h = harness();
     h.deliver({ type: 'source:error', generation, requestId: h.lastRequestId(), source: main, error: 'not-found' });
     expect(view(h)).toMatchObject({ status: 'paused', error: 'not-found' });
@@ -144,33 +144,33 @@ describe('snapshot correlation', () => {
 });
 
 describe('live merge within one source version', () => {
-  it.skip('appends the expected next coordinates and drops identical duplicates', () => {
+  it('appends the expected next coordinates and drops identical duplicates', () => {
     const h = ready(3);
     h.deliver(append(4, ['l4', 'l5']));
     h.deliver(append(3, ['l3', 'l4']));
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4', 'l5'], totalLineCount: 5 });
   });
 
-  it.skip('appends the unseen suffix of a partially overlapping batch', () => {
+  it('appends the unseen suffix of a partially overlapping batch', () => {
     const h = ready(3);
     h.deliver(append(2, ['l2', 'l3', 'l4']));
     expect(view(h).lines).toEqual(['l1', 'l2', 'l3', 'l4']);
   });
 
-  it.skip('treats a same-version snapshot ending at N after live N+1 as overlap, not truncation', () => {
+  it('treats a same-version snapshot ending at N after live N+1 as overlap, not truncation', () => {
     const h = ready(3);
     h.deliver(append(4, ['l4']));
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3'] }));
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4'], totalLineCount: 4, status: 'ready' });
   });
 
-  it.skip('extends coverage from a same-version snapshot that reaches further than local content', () => {
+  it('extends coverage from a same-version snapshot that reaches further than local content', () => {
     const h = ready(2);
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3', 'l4'] }));
     expect(view(h).lines).toEqual(['l1', 'l2', 'l3', 'l4']);
   });
 
-  it.skip('never infers reset from a shorter delayed same-version snapshot', () => {
+  it('never infers reset from a shorter delayed same-version snapshot', () => {
     const h = ready(5);
     h.deliver(snapshot({ requestId: h.lastRequestId(), first: 4, lines: ['l4', 'l5'] }));
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2'] }));
@@ -178,7 +178,7 @@ describe('live merge within one source version', () => {
     expect(view(h).authority?.version).toEqual(v1);
   });
 
-  it.skip('fills a forward gap through exactly one in-flight refetch and applies the buffered suffix', () => {
+  it('fills a forward gap through exactly one in-flight refetch and applies the buffered suffix', () => {
     const h = ready(3);
     const before = h.subscribes().length;
     h.deliver(append(6, ['l6']));
@@ -189,7 +189,7 @@ describe('live merge within one source version', () => {
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'], status: 'ready' });
   });
 
-  it.skip('treats same-version conflicting bytes as an inconsistency and refetches', () => {
+  it('treats same-version conflicting bytes as an inconsistency and refetches', () => {
     const h = ready(3);
     const before = h.subscribes().length;
     h.deliver(append(3, ['other']));
@@ -198,14 +198,14 @@ describe('live merge within one source version', () => {
     expect(h.diagnostics.map((event) => event.code)).toContain('inconsistent-source');
   });
 
-  it.skip('pauses with an explicit inconsistency when the refetched same version still conflicts', () => {
+  it('pauses with an explicit inconsistency when the refetched same version still conflicts', () => {
     const h = ready(3);
     h.deliver(append(3, ['other']));
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'other'] }));
     expect(view(h)).toMatchObject({ status: 'paused', error: 'inconsistent-source', lines: ['l1', 'l2', 'l3'] });
   });
 
-  it.skip('retains only the trailing window for tail-history sources while live lines arrive', () => {
+  it('retains only the trailing window for tail-history sources while live lines arrive', () => {
     const h = harness({ mode: 'compact' });
     h.deliver(
       snapshot({
@@ -224,7 +224,7 @@ describe('live merge within one source version', () => {
 });
 
 describe('source versions', () => {
-  it.skip('pauses a source on an unseen version instead of accepting it from arrival order', () => {
+  it('pauses a source on an unseen version instead of accepting it from arrival order', () => {
     const h = ready(3);
     const before = h.subscribes().length;
     h.deliver(append(1, ['new1'], { version: v2 }));
@@ -232,7 +232,7 @@ describe('source versions', () => {
     expect(h.subscribes()).toHaveLength(before + 1);
   });
 
-  it.skip('atomically replaces content with a fresh full snapshot of the new version and drops old-version traffic', () => {
+  it('atomically replaces content with a fresh full snapshot of the new version and drops old-version traffic', () => {
     const h = ready(3);
     h.deliver(append(1, ['new1'], { version: v2 }));
     h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, lines: ['new1'] }));
@@ -242,14 +242,14 @@ describe('source versions', () => {
     expect(view(h)).toMatchObject({ lines: ['new1'], authority: { version: v2 } });
   });
 
-  it.skip('rejects a partial snapshot of an unseen version when replacing an established one', () => {
+  it('rejects a partial snapshot of an unseen version when replacing an established one', () => {
     const h = ready(3);
     h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, first: 2, lines: ['b', 'c'] }));
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], authority: { version: v1 } });
     expect(view(h).status).not.toBe('ready');
   });
 
-  it.skip('invalidation retires the version, re-requests with a fresh request ID, and rejects late old responses', () => {
+  it('invalidation retires the version, re-requests with a fresh request ID, and rejects late old responses', () => {
     const h = ready(3);
     const old = h.lastRequestId();
     h.deliver({
@@ -270,7 +270,7 @@ describe('source versions', () => {
     expect(view(h)).toMatchObject({ lines: ['n2'], firstLineNumber: 2, authority: { version: v2 }, status: 'ready' });
   });
 
-  it.skip('ignores invalidation of a version it never accepted when another is current', () => {
+  it('ignores invalidation of a version it never accepted when another is current', () => {
     const h = ready(2);
     h.deliver({
       type: 'source:invalidated',
@@ -283,7 +283,7 @@ describe('source versions', () => {
     expect(view(h)).toMatchObject({ status: 'ready', authority: { version: v1 } });
   });
 
-  it.skip('refuses delayed old-epoch traffic after a server-restart invalidation and reconnect', () => {
+  it('refuses delayed old-epoch traffic after a server-restart invalidation and reconnect', () => {
     const h = ready(2);
     h.deliver({ type: 'connection:state', generation, state: 'disconnected' });
     h.deliver({
@@ -303,7 +303,7 @@ describe('source versions', () => {
 });
 
 describe('routing binding', () => {
-  it.skip('never applies content whose binding names another session or role and invalidates the source', () => {
+  it('never applies content whose binding names another session or role and invalidates the source', () => {
     const h = ready(2);
     h.deliver(append(3, ['leak'], { binding: { sessionId: 's2', role: 'main' } }));
     expect(view(h).lines).toEqual(['l1', 'l2']);
@@ -311,7 +311,7 @@ describe('routing binding', () => {
     expect(h.diagnostics.map((event) => event.code)).toContain('rejected-message');
   });
 
-  it.skip('drops content for identical paths outside the bound card or provider', () => {
+  it('drops content for identical paths outside the bound card or provider', () => {
     const h = ready(2);
     h.deliver(append(3, ['other-card'], { source: { ...main, cardId: 'card-2' } }));
     h.deliver(append(3, ['other-provider'], { source: { ...main, streamType: 'codex-session' } }));
@@ -319,7 +319,7 @@ describe('routing binding', () => {
     expect(h.store.getState().sources.size).toBe(2);
   });
 
-  it.skip('drops content for sources that are not current members', () => {
+  it('drops content for sources that are not current members', () => {
     const h = ready(2);
     const stranger = { ...main, relPath: 'stranger.jsonl' };
     h.deliver(append(1, ['x'], { source: stranger }));
@@ -328,7 +328,7 @@ describe('routing binding', () => {
 });
 
 describe('membership updates', () => {
-  it.skip('accepts only strictly increasing descriptor revisions', () => {
+  it('accepts only strictly increasing descriptor revisions', () => {
     const h = harness();
     h.deliver({ type: 'session:update', generation, revision: 3, descriptor: descriptor(mainMember) });
     h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(mainMember, childMember) });
@@ -336,7 +336,7 @@ describe('membership updates', () => {
     expect(h.store.getState().descriptor.members).toEqual([mainMember]);
   });
 
-  it.skip('retains removed member content as unavailable history and rejects its late responses', () => {
+  it('retains removed member content as unavailable history and rejects its late responses', () => {
     const h = ready(2);
     h.store.subscribeSource(child, 'tail');
     const childRequest = h.lastRequestId(child);
@@ -348,7 +348,7 @@ describe('membership updates', () => {
     expect(view(h, child)).toMatchObject({ status: 'unavailable', lines: ['c1'] });
   });
 
-  it.skip('starts new source work on readdition instead of reviving an old response', () => {
+  it('starts new source work on readdition instead of reviving an old response', () => {
     const h = ready(2);
     h.store.subscribeSource(child, 'full');
     const oldRequest = h.lastRequestId(child);
@@ -364,7 +364,7 @@ describe('membership updates', () => {
     expect(view(h, child)).toMatchObject({ lines: ['fresh'], status: 'ready' });
   });
 
-  it.skip('invalidates a member whose role or agent identity changes in a newer descriptor', () => {
+  it('invalidates a member whose role or agent identity changes in a newer descriptor', () => {
     const h = ready(2);
     const moved = { source: main, role: 'auxiliary' as const, agentId: 'aux' };
     h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(moved, childMember) });
@@ -373,7 +373,7 @@ describe('membership updates', () => {
     expect(view(h).lines).toEqual(['l1', 'l2']);
   });
 
-  it.skip('rejects a descriptor for another session or with foreign members', () => {
+  it('rejects a descriptor for another session or with foreign members', () => {
     const h = harness();
     h.deliver({
       type: 'session:update',
@@ -392,7 +392,7 @@ describe('membership updates', () => {
 });
 
 describe('subscriptions', () => {
-  it.skip('refuses to request sources outside current membership', () => {
+  it('refuses to request sources outside current membership', () => {
     const h = harness();
     const before = h.sent.length;
     h.store.subscribeSource({ ...main, cardId: 'card-2' }, 'full');
@@ -401,14 +401,14 @@ describe('subscriptions', () => {
     expect(h.diagnostics.map((event) => event.code)).toContain('rejected-message');
   });
 
-  it.skip('coalesces duplicate requests per source and mode', () => {
+  it('coalesces duplicate requests per source and mode', () => {
     const h = harness({ mode: 'compact' });
     h.store.subscribeSource(main, 'tail');
     h.store.subscribeSource(main, 'tail');
     expect(h.subscribes()).toHaveLength(1);
   });
 
-  it.skip('upgrades an in-flight tail to full whose eventual tail response cannot downgrade coverage', () => {
+  it('upgrades an in-flight tail to full whose eventual tail response cannot downgrade coverage', () => {
     const h = harness({ mode: 'compact' });
     const tailRequest = h.lastRequestId();
     h.store.subscribeSource(main, 'full');
@@ -421,7 +421,7 @@ describe('subscriptions', () => {
     expect(view(h)).toMatchObject({ history: 'full', earlierUnloaded: false, firstLineNumber: 1 });
   });
 
-  it.skip('requests full history for a ready tail source and merges earlier lines', () => {
+  it('requests full history for a ready tail source and merges earlier lines', () => {
     const h = harness({ mode: 'compact' });
     h.deliver(snapshot({ requestId: h.lastRequestId(), first: 3, lines: ['l3', 'l4'] }));
     h.store.subscribeSource(main, 'full');
@@ -429,7 +429,7 @@ describe('subscriptions', () => {
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4'], earlierUnloaded: false, history: 'full' });
   });
 
-  it.skip('unsubscribe cancels the pending request and stops live delivery', () => {
+  it('unsubscribe cancels the pending request and stops live delivery', () => {
     const h = ready(2);
     const request = h.lastRequestId();
     h.store.unsubscribeSource(main);
@@ -441,7 +441,7 @@ describe('subscriptions', () => {
 });
 
 describe('connection and resynchronization', () => {
-  it.skip('marks subscribed sources resynchronizing while disconnected and refetches each on reconnect', () => {
+  it('marks subscribed sources resynchronizing while disconnected and refetches each on reconnect', () => {
     const h = ready(2);
     h.store.subscribeSource(child, 'tail');
     h.deliver({ type: 'connection:state', generation, state: 'disconnected' });
@@ -458,15 +458,19 @@ describe('connection and resynchronization', () => {
     expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1', 'l2', 'l3'] });
   });
 
-  it.skip('buffers live events during loading and applies those matching the established version', () => {
+  it('buffers live events during loading, applies the established version, and refetches for an unseen one', () => {
     const h = harness({ mode: 'expanded' });
     h.deliver(append(3, ['l3']));
     h.deliver(append(1, ['zz'], { version: v2 }));
+    const before = h.subscribes().length;
     h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2'] }));
-    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'ready' });
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'resynchronizing' });
+    expect(h.subscribes()).toHaveLength(before + 1);
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, lines: ['zz'] }));
+    expect(view(h)).toMatchObject({ lines: ['zz'], status: 'ready' });
   });
 
-  it.skip('discards only the transient buffer on event-count overflow and refetches', () => {
+  it('discards only the transient buffer on event-count overflow and refetches', () => {
     const h = harness({ mode: 'expanded' });
     for (let index = 0; index <= MAX_PENDING_EVENTS; index++) h.deliver(append(index + 2, [`l${index + 2}`]));
     expect(h.diagnostics.map((event) => event.code)).toContain('resync-overflow');
@@ -477,7 +481,7 @@ describe('connection and resynchronization', () => {
     expect(h.lastRequestId()).not.toBe(request);
   });
 
-  it.skip('bounds buffered bytes per session', () => {
+  it('bounds buffered bytes per session', () => {
     const h = harness({ mode: 'expanded' });
     const large = 'x'.repeat(Math.ceil(MAX_PENDING_BYTES / 2));
     h.deliver(append(2, [large]));
@@ -486,7 +490,7 @@ describe('connection and resynchronization', () => {
     expect(h.diagnostics.map((event) => event.code)).toContain('resync-overflow');
   });
 
-  it.skip('explicit retry resumes paused sources and asks the host to resynchronize membership', () => {
+  it('explicit retry resumes paused sources and asks the host to resynchronize membership', () => {
     const h = harness();
     h.deliver({ type: 'source:error', generation, requestId: h.lastRequestId(), source: main, error: 'load-error' });
     h.store.retry();
@@ -497,7 +501,7 @@ describe('connection and resynchronization', () => {
 });
 
 describe('lifecycle', () => {
-  it.skip('updates activity on ended without assuming deletion', () => {
+  it('updates activity on ended without assuming deletion', () => {
     const h = ready(2);
     h.deliver({
       type: 'source:lifecycle',
@@ -521,7 +525,7 @@ describe('lifecycle', () => {
     expect(view(h).meta?.isActive).toBe(true);
   });
 
-  it.skip('repairs a lifecycle-announced line count beyond local content', () => {
+  it('repairs a lifecycle-announced line count beyond local content', () => {
     const h = ready(2);
     const before = h.subscribes().length;
     h.deliver({
@@ -539,13 +543,13 @@ describe('lifecycle', () => {
 });
 
 describe('theme, layout, actions, and disposal', () => {
-  it.skip('applies validated theme changes', () => {
+  it('applies validated theme changes', () => {
     const h = harness();
     h.deliver({ type: 'theme:change', generation, themeKind: 2, cssVariables: { '--vscode-foreground': '#fff' } });
     expect(h.themes).toEqual([{ themeKind: 2, cssVariables: { '--vscode-foreground': '#fff' } }]);
   });
 
-  it.skip('stamps layout messages with the current handshake token and drops them before any handshake', () => {
+  it('stamps layout messages with the current handshake token and drops them before any handshake', () => {
     const h = harness();
     const before = h.sent.length;
     h.store.postLayout({ type: 'layout:ready' });
@@ -562,7 +566,7 @@ describe('theme, layout, actions, and disposal', () => {
     ]);
   });
 
-  it.skip('refuses to post invalid layout payloads', () => {
+  it('refuses to post invalid layout payloads', () => {
     const h = harness();
     h.deliver({ type: 'layout:handshake', generation, token: 'load-1' });
     const before = h.sent.length;
@@ -571,7 +575,7 @@ describe('theme, layout, actions, and disposal', () => {
     expect(h.sent).toHaveLength(before);
   });
 
-  it.skip('posts generation-correlated close, openFile, and showDiff actions', () => {
+  it('posts generation-correlated close, openFile, and showDiff actions', () => {
     const h = harness();
     h.store.close();
     h.store.openFile('src/a.ts', 3);
@@ -583,7 +587,7 @@ describe('theme, layout, actions, and disposal', () => {
     ]);
   });
 
-  it.skip('ignores malformed host messages with an identifier-only diagnostic', () => {
+  it('ignores malformed host messages with an identifier-only diagnostic', () => {
     const h = ready(1);
     h.deliver({
       type: 'source:append',
@@ -601,7 +605,7 @@ describe('theme, layout, actions, and disposal', () => {
     expect(JSON.stringify(h.diagnostics)).not.toContain('"x"');
   });
 
-  it.skip('dispose removes the listener and suppresses all later traffic', () => {
+  it('dispose removes the listener and suppresses all later traffic', () => {
     const h = ready(1);
     h.store.dispose();
     expect(h.listeners()).toBe(0);
@@ -611,7 +615,7 @@ describe('theme, layout, actions, and disposal', () => {
     expect(h.sent).toHaveLength(before);
   });
 
-  it.skip('publishes immutable state snapshots per change', () => {
+  it('publishes immutable state snapshots per change', () => {
     const h = ready(1);
     const first = h.store.getState();
     h.deliver(append(2, ['l2']));
@@ -619,7 +623,7 @@ describe('theme, layout, actions, and disposal', () => {
     expect(h.store.getState()).not.toBe(first);
   });
 
-  it.skip('keeps source metadata from the accepted snapshot', () => {
+  it('keeps source metadata from the accepted snapshot', () => {
     const h = ready(2);
     expect(view(h).meta).toEqual(meta(main, mainBinding, 2));
     expect(childBinding.role).toBe('subagent');

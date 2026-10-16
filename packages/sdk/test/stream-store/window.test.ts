@@ -22,7 +22,7 @@ afterAll(() => {
 });
 
 describe('getWindowStreamStore', () => {
-  it.skip('memoizes one store bound to __STREAM_INIT__ and posts the main subscription to the parent', async () => {
+  it('memoizes one store bound to __STREAM_INIT__ and posts the main subscription to the parent', async () => {
     const { getWindowStreamStore } = await import('../../src/stream-store/store.js');
     const store = getWindowStreamStore();
     expect(getWindowStreamStore()).toBe(store);
@@ -33,7 +33,7 @@ describe('getWindowStreamStore', () => {
     );
   });
 
-  it.skip('applies messages only from the parent window', async () => {
+  it('applies messages only from the parent window', async () => {
     const { getWindowStreamStore } = await import('../../src/stream-store/store.js');
     const store = getWindowStreamStore();
     const requestId = store
@@ -51,7 +51,7 @@ describe('getWindowStreamStore', () => {
     ]);
   });
 
-  it.skip('applies theme changes to the document root', async () => {
+  it('applies theme changes to the document root', async () => {
     const { getWindowStreamStore } = await import('../../src/stream-store/store.js');
     getWindowStreamStore();
     window.dispatchEvent(
