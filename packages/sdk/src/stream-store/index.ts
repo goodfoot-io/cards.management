@@ -13,6 +13,7 @@ export type {
   CloseMessage,
   ConnectionStateMessage,
   HostToRendererMessage,
+  LayoutAnchorMessage,
   LayoutHandshakeMessage,
   LayoutPayload,
   LayoutReadyMessage,

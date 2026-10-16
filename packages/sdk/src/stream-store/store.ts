@@ -176,6 +176,8 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
   let bufferedEvents = 0;
   let bufferedBytes = 0;
   let disposed = false;
+  /** Key of the main already auto-subscribed; a main is auto-subscribed at most once. */
+  let autoMain: string | null = null;
 
   const store = createStore<StreamStoreState>()(() => ({
     session,
@@ -689,7 +691,20 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       return;
     }
     applyMembership(descriptor.members);
+    autoSubscribeMain(descriptor.main);
     publish({ revision, descriptor: structuredClone(descriptor) });
+  }
+
+  /**
+   * Subscribes a newly designated main once, in the display mode's history coverage.
+   * @param source - Descriptor main, or null when the session has no unique main.
+   */
+  function autoSubscribeMain(source: StreamSourceRef | null): void {
+    if (!source || sourceKey(source) === autoMain) return;
+    const work = works.get(sourceKey(source));
+    if (!work?.member) return;
+    autoMain = sourceKey(source);
+    if (!work.wanted) request(work, init.mode === 'compact' ? 'tail' : 'full');
   }
 
   /**
@@ -809,8 +824,7 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
 
   for (const member of init.descriptor.members) works.set(sourceKey(member.source), createWork(member));
   const removeListener = options.listen(receive);
-  const main = init.descriptor.main ? works.get(sourceKey(init.descriptor.main)) : undefined;
-  if (main) request(main, init.mode === 'compact' ? 'tail' : 'full');
+  autoSubscribeMain(init.descriptor.main);
   publish();
 
   return {

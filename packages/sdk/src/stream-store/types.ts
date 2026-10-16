@@ -288,6 +288,23 @@ export interface LayoutScrollMessage {
   command: LayoutScrollCommand;
 }
 
+/**
+ * Displacement of the renderer's anchored leaf across one layout revision.
+ * Sent before that revision's `layout:size`; the host compensates outer scroll
+ * by `delta` when it applies the size, so the anchored row stays in place.
+ */
+export interface LayoutAnchorMessage {
+  type: 'layout:anchor';
+  generation: string;
+  token: string;
+  /** Layout revision whose geometry change moved the anchor. */
+  revision: number;
+  /** Stable renderer leaf key (row or disclosure control) the renderer anchored. */
+  key: string;
+  /** Finite CSS-pixel movement of the anchor's top, at most {@link MAX_LAYOUT_HEIGHT} in magnitude. */
+  delta: number;
+}
+
 /** Messages sent from the renderer to the host. */
 export type RendererToHostMessage =
   | SourceSubscribeMessage
@@ -298,10 +315,11 @@ export type RendererToHostMessage =
   | ShowDiffMessage
   | LayoutReadyMessage
   | LayoutSizeMessage
-  | LayoutScrollMessage;
+  | LayoutScrollMessage
+  | LayoutAnchorMessage;
 
 /** Layout bridge subset of {@link RendererToHostMessage}. */
-export type LayoutRendererMessage = LayoutReadyMessage | LayoutSizeMessage | LayoutScrollMessage;
+export type LayoutRendererMessage = LayoutReadyMessage | LayoutSizeMessage | LayoutScrollMessage | LayoutAnchorMessage;
 
 /** Exact-shape validation outcome; `reason` is an identifier-only rejection code. */
 export type MessageValidation<T> = { ok: true; message: T } | { ok: false; reason: string };
@@ -415,4 +433,5 @@ export interface StreamRendererStore {
 export type LayoutPayload =
   | { type: 'layout:ready' }
   | { type: 'layout:size'; revision: number; height: number }
-  | { type: 'layout:scroll'; command: LayoutScrollCommand };
+  | { type: 'layout:scroll'; command: LayoutScrollCommand }
+  | { type: 'layout:anchor'; revision: number; key: string; delta: number };

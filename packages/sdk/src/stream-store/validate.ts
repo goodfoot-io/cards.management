@@ -451,6 +451,20 @@ function renderer(value: unknown): void {
       } else reject('invalid-scroll');
       return;
     }
+    case 'layout:anchor': {
+      const record = exact(value, ['type', 'generation', 'token', 'revision', 'key', 'delta'], [], 'invalid-message');
+      token(record.generation, 'invalid-generation');
+      token(record.token, 'invalid-token');
+      positive(record.revision, 'invalid-revision');
+      identifier(record.key, 'invalid-anchor', 1024);
+      if (
+        typeof record.delta !== 'number' ||
+        !Number.isFinite(record.delta) ||
+        Math.abs(record.delta) > MAX_LAYOUT_HEIGHT
+      )
+        reject('invalid-anchor');
+      return;
+    }
     default:
       reject('unknown-type');
   }

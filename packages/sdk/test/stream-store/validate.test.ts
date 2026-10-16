@@ -59,7 +59,8 @@ const rendererValid: unknown[] = [
   { type: 'layout:size', generation, token: 't', revision: 1, height: 1 },
   { type: 'layout:size', generation, token: 't', revision: 9, height: MAX_LAYOUT_HEIGHT },
   { type: 'layout:scroll', generation, token: 't', command: { kind: 'delta', deltaY: -MAX_SCROLL_DELTA } },
-  { type: 'layout:scroll', generation, token: 't', command: { kind: 'key', key: 'page-down' } }
+  { type: 'layout:scroll', generation, token: 't', command: { kind: 'key', key: 'page-down' } },
+  { type: 'layout:anchor', generation, token: 't', revision: 2, key: 'row-1', delta: -24.5 }
 ];
 
 describe('validateHostMessage', () => {
@@ -216,6 +217,15 @@ describe('validateRendererMessage', () => {
     ]) {
       expect(validateRendererMessage({ ...scroll, command }).ok).toBe(false);
     }
+    const anchor = { type: 'layout:anchor', generation, token: 't', revision: 1, key: 'row', delta: 0 };
+    for (const delta of [MAX_LAYOUT_HEIGHT + 1, -MAX_LAYOUT_HEIGHT - 1, Number.NaN, Number.POSITIVE_INFINITY, '1']) {
+      expect(validateRendererMessage({ ...anchor, delta }).ok).toBe(false);
+    }
+    for (const key of ['', 'x'.repeat(1025), 'a\nb', 7]) {
+      expect(validateRendererMessage({ ...anchor, key }).ok).toBe(false);
+    }
+    expect(validateRendererMessage({ ...anchor, revision: 0 }).ok).toBe(false);
+    expect(validateRendererMessage({ ...anchor, offset: 1 }).ok).toBe(false);
   });
 
   it('rejects malformed subscription and action fields', () => {

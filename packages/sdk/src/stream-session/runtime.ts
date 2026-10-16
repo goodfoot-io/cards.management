@@ -21,6 +21,7 @@ import type {
   SessionSourceRequest,
   SessionSourceState
 } from './controller.js';
+import { SessionSourceError } from './errors.js';
 import { groupStreamSessions, streamSessionKey, streamSourceKey } from './grouping.js';
 
 /** Private source reconciliation state, never exposed to consumers. */
@@ -319,10 +320,10 @@ export function createController(options: SessionControllerOptions): SessionCont
           }
           acceptSnapshot(work, snapshot, baseline, mode);
         })
-        .catch(() => {
+        .catch((error: unknown) => {
           if (disposed || work.serial !== operation || abort.signal.aborted) return;
           work.state.status = 'paused';
-          work.state.error = 'load-error';
+          work.state.error = error instanceof SessionSourceError ? error.code : 'load-error';
           diagnose('load-error', work);
           publish();
         })

@@ -86,6 +86,18 @@ describe('stream store initialization', () => {
     expect(h.sent).toEqual([]);
   });
 
+  it('auto-subscribes a main that appears late exactly once, without overriding an explicit unsubscribe', () => {
+    const h = harness({ mode: 'compact', descriptor: descriptor(childMember) });
+    h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(mainMember, childMember) });
+    expect(h.subscribes()).toEqual([
+      { type: 'source:subscribe', generation, requestId: 'req-1', source: main, history: 'tail' }
+    ]);
+    h.store.unsubscribeSource(main);
+    h.deliver({ type: 'session:update', generation, revision: 3, descriptor: descriptor(mainMember, childMember) });
+    expect(h.subscribes()).toHaveLength(1);
+    expect(view(h).status).toBe('unsubscribed');
+  });
+
   it('rejects initialization whose descriptor names another session or foreign members', () => {
     const create = (init: Parameters<typeof createStreamStore>[0]['init']) => () =>
       createStreamStore({ init, post: () => undefined, listen: () => () => undefined });
@@ -559,10 +571,12 @@ describe('theme, layout, actions, and disposal', () => {
     h.store.postLayout({ type: 'layout:size', revision: 1, height: 240 });
     h.deliver({ type: 'layout:handshake', generation, token: 'load-2' });
     h.store.postLayout({ type: 'layout:scroll', command: { kind: 'delta', deltaY: 40 } });
+    h.store.postLayout({ type: 'layout:anchor', revision: 2, key: 'row-1', delta: 12 });
     expect(h.sent.slice(before)).toEqual([
       { type: 'layout:ready', generation, token: 'load-1' },
       { type: 'layout:size', generation, token: 'load-1', revision: 1, height: 240 },
-      { type: 'layout:scroll', generation, token: 'load-2', command: { kind: 'delta', deltaY: 40 } }
+      { type: 'layout:scroll', generation, token: 'load-2', command: { kind: 'delta', deltaY: 40 } },
+      { type: 'layout:anchor', generation, token: 'load-2', revision: 2, key: 'row-1', delta: 12 }
     ]);
   });
 

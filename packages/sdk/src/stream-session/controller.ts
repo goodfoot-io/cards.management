@@ -34,7 +34,7 @@ export interface SessionSourceRequest {
 export interface SessionClient {
   /** Lists current metadata for the trusted card. */
   listStreams(cardId: string, signal: AbortSignal): Promise<StreamMeta[]>;
-  /** Reads coherent authority-bearing native history. */
+  /** Reads coherent authority-bearing native history; may reject with a classified {@link SessionSourceError}. */
   getStream(source: StreamSourceRef, mode: SessionHistoryMode, signal: AbortSignal): Promise<StreamSourceSnapshot>;
 }
 

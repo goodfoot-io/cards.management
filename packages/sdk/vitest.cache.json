@@ -147,6 +147,9 @@
       "public/packages/sdk/tsconfig.json"
     ],
     "public/packages/sdk/test/slot-lock.test.ts": [],
+    "public/packages/sdk/test/stream-bridge/cards.test.ts": [],
+    "public/packages/sdk/test/stream-bridge/host.test.ts": [],
+    "public/packages/sdk/test/stream-bridge/layout.test.ts": [],
     "public/packages/sdk/test/stream-session/controller.test.ts": [],
     "public/packages/sdk/test/stream-session/grouping.test.ts": [],
     "public/packages/sdk/test/stream-store/store.test.ts": [],

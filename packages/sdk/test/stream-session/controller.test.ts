@@ -9,6 +9,7 @@ import {
   type SessionController,
   type SessionControllerEvent,
   type SessionDiagnostic,
+  SessionSourceError,
   type SessionSourceEvent,
   streamSourceKey
 } from '../../src/stream-session/index.js';
@@ -597,6 +598,15 @@ describe('session controller contract', () => {
       requestId: 'r1'
     });
     expect(JSON.stringify(test.diagnostics)).not.toContain('native content');
+  });
+  it('pauses a classified read failure with its identifier-only code', async () => {
+    const test = await opened();
+    test.reads.shift()?.reject(new SessionSourceError('not-found'));
+    await flush();
+    expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({
+      status: 'paused',
+      error: 'not-found'
+    });
   });
   it.each([
     { firstLineNumber: 0 },
