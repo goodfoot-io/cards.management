@@ -11,7 +11,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { anchorKey } from '../../src/streams/lib/session/layout-bridge';
+import { anchorKey, PIN_RELEASE_FRAMES } from '../../src/streams/lib/session/layout-bridge';
 import { call, result } from '../fixtures/claude-projection';
 import { lines, prompt, reply, SESSION_ID } from '../fixtures/claude-session-members';
 
@@ -198,36 +198,59 @@ describe('Compact session layout bridge', () => {
     expect(await evaluate<number>('scrollY')).toBe(0);
   }, 30000);
 
-  it('keeps an activated disclosure control as the anchor when earlier rows load above it', async () => {
+  /**
+   * Opens the paged conversation, then activates the tool disclosure and loads earlier rows above
+   * it, either in one task (inside the pin's frame budget) or after the budget has elapsed.
+   * @param token - Handshake token for this page.
+   * @param together - Whether both activations happen before any frame runs.
+   * @returns Anchors posted for the insertion, the control's identity and its measured movement.
+   */
+  async function activateThenLoadEarlier(token: string, together: boolean) {
     await browser('set', 'viewport', '800', '4000');
     await browser('open', `${origin}/`);
     await browser('wait', '--text', 'Answer 40');
-    await evaluate(`window.host.handshake('token-2'); true`);
+    await evaluate(`window.host.handshake(${JSON.stringify(token)}); true`);
     await browser('find', 'role', 'button', 'click', '--name', 'Show conversation');
     await browser('wait', '--text', 'Question 31');
-    await browser('find', 'role', 'button', 'click', '--name', 'Bash');
-    await browser('wait', '--text', 'tool output');
     const before = (await sent()).length;
     const control = await evaluate<{ id: string; top: number }>(`(() => {
-      const disclosure = [...document.querySelectorAll('[data-session-disclosure]')].find(element => element.textContent.includes('tool output'));
-      return {id: disclosure.getAttribute('data-session-disclosure'), top: disclosure.querySelector(':scope > .session-disclosure-button').getBoundingClientRect().top};
+      const button = [...document.querySelectorAll('.session-disclosure-button')].find(element => element.textContent.startsWith('Bash'));
+      return {id: button.parentElement.getAttribute('data-session-disclosure'), top: button.getBoundingClientRect().top};
     })()`);
-    await browser('find', 'role', 'button', 'click', '--name', 'Show earlier');
+    const frames = together ? 0 : PIN_RELEASE_FRAMES + 3;
+    await evaluate(`(async () => {
+      const button = name => [...document.querySelectorAll('button')].find(element => element.textContent.startsWith(name));
+      button('Bash').click();
+      for (let frame = 0; frame < ${frames}; frame++) await new Promise(done => requestAnimationFrame(done));
+      button('Show earlier').click();
+      return true;
+    })()`);
     await browser('wait', '--text', 'Question 22');
     const after = (await sent()).slice(before);
-    const moved = await evaluate<number>(`(() => {
-      const disclosure = document.querySelector('[data-session-disclosure="' + CSS.escape(${JSON.stringify(control.id)}) + '"]');
-      return disclosure.querySelector(':scope > .session-disclosure-button').getBoundingClientRect().top;
-    })()`);
+    const moved = await evaluate<number>(
+      `document.querySelector('[data-session-disclosure="' + CSS.escape(${JSON.stringify(control.id)}) + '"] > .session-disclosure-button').getBoundingClientRect().top`
+    );
     const anchors = after.filter((message) => message.type === 'layout:anchor') as Array<
       Sent & { key: string; delta: number }
     >;
-    expect(anchors.map((message) => message.key)).toEqual([anchorKey(control.id)]);
-    expect(anchors[0]!.delta).toBe(Math.round(moved - control.top));
-    expect(anchors[0]!.delta).toBeGreaterThan(0);
-    const size = after.findIndex(
-      (message) => message.type === 'layout:size' && message.revision === anchors[0]!.revision
-    );
-    expect(size).toBeGreaterThan(after.indexOf(anchors[0]!));
+    for (const anchor of anchors) {
+      const size = after.findIndex((message) => message.type === 'layout:size' && message.revision === anchor.revision);
+      expect(size).toBeGreaterThan(after.indexOf(anchor));
+    }
+    return { anchors, key: anchorKey(control.id), delta: Math.round(moved - control.top) };
+  }
+
+  it('keeps an activated disclosure control as the anchor within its frame budget', async () => {
+    const { anchors, key, delta } = await activateThenLoadEarlier('token-2', true);
+    expect(delta).toBeGreaterThan(0);
+    expect(anchors.map((message) => [message.key, message.delta])).toEqual([[key, delta]]);
+  }, 30000);
+
+  it('releases the pin on the first revision after its frame budget and anchors on a visible leaf', async () => {
+    const { anchors, key, delta } = await activateThenLoadEarlier('token-3', false);
+    expect(delta).toBeGreaterThan(0);
+    // The visible leaf sits below the insertion too, so it moved by the same measured amount.
+    expect(anchors.at(-1)!.delta).toBe(delta);
+    expect(anchors.map((message) => message.key)).not.toContain(key);
   }, 30000);
 });
