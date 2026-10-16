@@ -86,9 +86,14 @@ export function SessionRenderer<Payloads extends object>({
     [model, adapter, compact, windows, setWindow]
   );
   useCloseEmptySession(model.state, compact);
+  // Ranges for sources that left the session are never reported back, so dead keys cannot accumulate.
   const viewState = useMemo(
-    () => ({ open: model.disclosures.open, full: model.full, windows }),
-    [model.disclosures.open, model.full, windows]
+    () => ({
+      open: model.disclosures.open,
+      full: new Set([...model.full].filter((key) => model.sources.has(key))),
+      windows: new Map([...windows].filter(([key]) => model.sources.has(key)))
+    }),
+    [model.disclosures.open, model.full, model.sources, windows]
   );
   useViewStateReporting(store, viewState);
   return (

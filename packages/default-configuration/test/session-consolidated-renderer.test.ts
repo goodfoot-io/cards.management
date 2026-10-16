@@ -232,6 +232,57 @@ describe('View state across renderer rebuilds', () => {
     expect(container.querySelector('.session-window')?.textContent).not.toContain('Investigate the failure');
     expect(container.textContent).toContain('Child A working');
   });
+  it('prunes restored ids once their source is fully loaded and keeps them while it is incomplete', async () => {
+    const generation = JSON.stringify(['server-1', 'source-1']);
+    const mainKey = JSON.stringify(['card-1', 'claude-code-session', MAIN]);
+    const childKey = JSON.stringify(['card-1', 'claude-code-session', CHILD]);
+    const goneKey = JSON.stringify(['card-1', 'claude-code-session', 'SESSION/subagents/agent-GONE.jsonl']);
+    const deadMain = JSON.stringify([mainKey, generation, 'tool', 'VANISHED']);
+    const pendingChild = JSON.stringify([childKey, generation, 'tool', 'EARLIER']);
+    const deadPlacement = JSON.stringify(['session-member', goneKey]);
+    const { host, container, settle } = await mount(claude, MEMBERS, {
+      viewState: {
+        open: [
+          [deadMain, true],
+          [pendingChild, true],
+          [deadPlacement, true]
+        ],
+        ranges: [
+          [JSON.stringify(['history', goneKey]), { first: 1, count: 1 }],
+          [JSON.stringify(['window', goneKey]), { first: 5, count: 20 }]
+        ]
+      }
+    });
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    const child = lines(
+      Array.from({ length: 60 }, (_, index) => sidechain('A', `Child step ${index + 1}`, `a${index}`))
+    );
+    await act(async () => host.snapshot(CHILD, child.slice(59), { first: 60 }));
+    await settle();
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    const partial = reported(host)!;
+    // The complete main cannot produce its vanished id and the departed member cannot return;
+    // the child's id may still be in its unloaded earlier history.
+    expect(host.subscribes(CHILD).at(-1)?.history).toBe('tail');
+    expect(partial.open.map(([id]) => id)).toEqual([pendingChild]);
+    // Ranges for the departed member are never reported back.
+    expect(partial.ranges).toEqual([]);
+
+    // Opening the member loads its full history, which settles the child's pending id.
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`${PLACEMENT} > .session-disclosure-button`)!.click()
+    );
+    expect(host.subscribes(CHILD).at(-1)?.history).toBe('full');
+    await act(async () => host.snapshot(CHILD, child));
+    await settle();
+    expect(host.store.getState().sources.get(childKey)?.earlierUnloaded).toBe(false);
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+    });
+    expect(reported(host)!.open).toEqual([[childPlacement, true]]);
+  });
 });
 
 describe('Session validity — rendered inspectably', () => {

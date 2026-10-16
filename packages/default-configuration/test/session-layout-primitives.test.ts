@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 /**
- * Pure session renderer primitives: bounded view-state encoding, absolute-coordinate folding,
- * and the outer-scroll command mapping of the card-detail layout bridge.
+ * Pure session renderer primitives: bounded view-state encoding, restored-id settlement,
+ * absolute-coordinate folding, and the outer-scroll command mapping of the layout bridge.
  * @summary Session view state, absolute fold and layout command contracts
  */
 import { MAX_SCROLL_DELTA, MAX_VIEW_STATE_KEY_LENGTH, validateViewState } from '@cards.management/sdk/stream-store';
@@ -9,6 +9,8 @@ import { describe, expect, it } from 'vitest';
 import { anchorKey, keyCommand, wheelCommand } from '../src/streams/lib/session/layout-bridge';
 import type { NativeTranscriptSource } from '../src/streams/lib/session/types';
 import { foldAbsolute } from '../src/streams/lib/session/use-absolute-fold';
+import { restoredIdAbsent } from '../src/streams/lib/session/use-session-model';
+import type { SessionSourceEntry } from '../src/streams/lib/session/use-transcript-source';
 import { decodeViewState, encodeViewState } from '../src/streams/lib/session/view-state';
 
 describe('view state encoding', () => {
@@ -55,6 +57,33 @@ describe('view state encoding', () => {
     });
     expect(decoded.full.size + decoded.windows.size).toBe(0);
     expect(decodeViewState(null).open.size).toBe(0);
+  });
+});
+
+describe('restored disclosure settlement', () => {
+  const entry = (status: string, earlierUnloaded: boolean, generation = 'g1', member = true): SessionSourceEntry =>
+    ({
+      key: 'k',
+      view: { status, earlierUnloaded, member: member ? { role: 'subagent' } : null },
+      source: { generation }
+    }) as unknown as SessionSourceEntry;
+  const id = (generation = 'g1') => JSON.stringify(['k', generation, 'tool', 'T']);
+
+  it('keeps ids pending only while their member source is incomplete in the same incarnation', () => {
+    expect(restoredIdAbsent(id(), new Map([['k', entry('ready', true)]]))).toBe(false);
+    expect(restoredIdAbsent(id(), new Map([['k', entry('loading', false)]]))).toBe(false);
+    expect(restoredIdAbsent(id(), new Map([['k', entry('ready', false)]]))).toBe(true);
+    expect(restoredIdAbsent(id('g0'), new Map([['k', entry('ready', true)]]))).toBe(true);
+    expect(restoredIdAbsent(id(), new Map([['k', entry('ready', true, 'g1', false)]]))).toBe(true);
+    expect(restoredIdAbsent(id(), new Map())).toBe(true);
+  });
+
+  it('settles placements by membership and unowned ids once every source is complete', () => {
+    const placement = JSON.stringify(['session-member', 'k']);
+    expect(restoredIdAbsent(placement, new Map([['k', entry('loading', true)]]))).toBe(false);
+    expect(restoredIdAbsent(placement, new Map())).toBe(true);
+    expect(restoredIdAbsent('opaque', new Map([['k', entry('ready', true)]]))).toBe(false);
+    expect(restoredIdAbsent('opaque', new Map([['k', entry('ready', false)]]))).toBe(true);
   });
 });
 

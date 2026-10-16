@@ -22,6 +22,13 @@ import type { SessionIdentity, SessionLayoutHooks } from './types';
 /** Line height used for line-mode wheel deltas, matching Chromium's scroll step. */
 const WHEEL_LINE_PX = 16;
 
+/**
+ * Animation frames an activated disclosure control stays the anchor. The disclosure's own
+ * relayout reports within them; the first layout revision after them anchors on visible leaves
+ * again, whether or not intersection observation has caught up.
+ */
+export const PIN_RELEASE_FRAMES = 3;
+
 /** Bridge dependencies; the DOM is passed in so tests drive a real document. */
 export interface LayoutBridgeOptions {
   /** Normal-flow content root whose border-box height is reported. */
@@ -146,8 +153,11 @@ export function createLayoutBridge(options: LayoutBridgeOptions): LayoutBridge {
   let disposed = false;
   let frame: number | null = null;
   let lastHeight = 0;
-  /** Disclosure control the reader just activated; it stays the anchor while visible. */
+  /** Disclosure control the reader just activated; it anchors until released. */
   let pinned: AnchorSnapshot | null = null;
+  /** Frames elapsed since the current pin, counted by a ticker that runs only while pinned. */
+  let pinnedFrames = 0;
+  let pinTicker: number | null = null;
   let snapshot: AnchorSnapshot[] = [];
 
   const intersection =
@@ -198,9 +208,33 @@ export function createLayoutBridge(options: LayoutBridgeOptions): LayoutBridge {
     return pinned ? [pinned, ...ordered] : ordered;
   };
 
+  /**
+   * Counts frames for the current pin; stops at the release budget or when the pin ends.
+   */
+  const tick = (): void => {
+    pinTicker = null;
+    if (!pinned || disposed) return;
+    pinnedFrames++;
+    if (pinnedFrames < PIN_RELEASE_FRAMES) pinTicker = view.requestAnimationFrame(tick);
+  };
+
+  /**
+   * Ends the pin so later revisions anchor on visible leaves and their neighbors.
+   */
+  const release = (): void => {
+    if (!pinned) return;
+    const control = pinned.element;
+    if (!visible.has(identities.get(control) ?? '')) intersection?.unobserve(control);
+    snapshot = snapshot.filter((entry) => entry !== pinned);
+    pinned = null;
+    if (pinTicker !== null) view.cancelAnimationFrame(pinTicker);
+    pinTicker = null;
+  };
+
   const report = (): void => {
     frame = null;
     if (disposed || !ready) return;
+    if (pinned && pinnedFrames >= PIN_RELEASE_FRAMES) release();
     const height = Math.max(1, Math.min(MAX_LAYOUT_HEIGHT, Math.ceil(root.getBoundingClientRect().height)));
     options.onHeight?.(height);
     if (height === lastHeight && revision > 0) {
@@ -265,8 +299,10 @@ export function createLayoutBridge(options: LayoutBridgeOptions): LayoutBridge {
         `[data-session-disclosure="${CSS.escape(id)}"] > .session-disclosure-button`
       );
       if (!control) return;
-      if (pinned) intersection?.unobserve(pinned.element);
+      release();
       pinned = { id, element: control, top: topOf(control) };
+      pinnedFrames = 0;
+      pinTicker = view.requestAnimationFrame(tick);
       snapshot = [pinned, ...snapshot.filter((entry) => entry.element !== control)];
       intersection?.observe(control);
     },
@@ -303,6 +339,7 @@ export function createLayoutBridge(options: LayoutBridgeOptions): LayoutBridge {
     dispose() {
       disposed = true;
       if (frame !== null) view.cancelAnimationFrame(frame);
+      if (pinTicker !== null) view.cancelAnimationFrame(pinTicker);
       resize?.disconnect();
       intersection?.disconnect();
       view.removeEventListener('wheel', onWheel);

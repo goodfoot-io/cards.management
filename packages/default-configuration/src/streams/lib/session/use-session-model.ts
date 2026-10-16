@@ -176,6 +176,42 @@ function childKeyOfPlacement(id: string): string | null {
 }
 
 /**
+ * Whether a source's projection covers its whole native history.
+ * @param entry - Store entry.
+ * @returns True once the source is ready from its first native line.
+ */
+function complete(entry: SessionSourceEntry): boolean {
+  return entry.view.status === 'ready' && !entry.view.earlierUnloaded;
+}
+
+/**
+ * Whether a restored disclosure id that no current projection produces can never reappear, so
+ * replayed view state cannot accumulate dead ids. An id stays pending only while the source that
+ * would produce it is still a member whose current incarnation is not fully loaded.
+ * @param id - Restored disclosure identity not produced by any current projection.
+ * @param entries - Current store entries by source key.
+ * @returns True when the id is definitively absent.
+ */
+export function restoredIdAbsent(id: string, entries: ReadonlyMap<string, SessionSourceEntry>): boolean {
+  const placed = childKeyOfPlacement(id);
+  if (placed !== null) return !entries.get(placed)?.view.member;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(id);
+  } catch {
+    parsed = null;
+  }
+  // Projection identities lead with their source key and generation.
+  if (Array.isArray(parsed) && typeof parsed[0] === 'string' && typeof parsed[1] === 'string') {
+    const entry = entries.get(parsed[0]);
+    if (!entry?.view.member || complete(entry)) return true;
+    return entry.view.status === 'ready' && entry.source.generation !== parsed[1];
+  }
+  // An id without a recognizable owner settles once every source is fully loaded.
+  return [...entries.values()].every(complete);
+}
+
+/**
  * Display title from accepted membership and native facts only; never invents an agent name.
  * @param entry - Store entry carrying the accepted membership.
  * @param header - Native header facts of the current projection.
@@ -322,7 +358,7 @@ function useDisclosureReconciliation<Payloads extends object>(
   restored: RestoredViewState
 ): void {
   const owners = useRef(new Map<string, string>());
-  // Restored leaves are not loaded yet after a rebuild; pruning waits until each first appears.
+  // Restored leaves may not be loaded yet after a rebuild; each stays until it appears or is definitively absent.
   const pending = useRef<Set<string> | null>(null);
   pending.current ??= new Set(restored.open.keys());
   useEffect(() => {
@@ -334,7 +370,8 @@ function useDisclosureReconciliation<Payloads extends object>(
     }
     for (const child of composition.children.values()) ids.add(child.placementId);
     const awaiting = pending.current!;
-    for (const id of ids) awaiting.delete(id);
+    const entries = new Map([...sources].map(([key, source]) => [key, source.entry]));
+    for (const id of awaiting) if (ids.has(id) || restoredIdAbsent(id, entries)) awaiting.delete(id);
     for (const id of awaiting) ids.add(id);
     const adopted = [...nextOwners].filter(([leaf, owner]) => owners.current.get(leaf) !== owner);
     owners.current = nextOwners;

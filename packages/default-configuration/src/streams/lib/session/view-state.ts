@@ -109,16 +109,29 @@ export function decodeViewState(state: StreamViewState | null): RestoredViewStat
  */
 export function useViewStateReporting(store: StreamRendererStore, input: ViewStateInput): void {
   const last = useRef<string | null>(null);
+  const scheduled = useRef<{ signature: string; timer: ReturnType<typeof setTimeout> } | null>(null);
   useEffect(() => {
     const state = encodeViewState(input);
     const signature = JSON.stringify(state);
+    // Unrelated rerenders (live appends) neither resend nor postpone an already scheduled report.
+    if (signature === scheduled.current?.signature) return;
+    if (scheduled.current) clearTimeout(scheduled.current.timer);
+    scheduled.current = null;
     if (signature === last.current) return;
     const timer = setTimeout(() => {
+      scheduled.current = null;
       // Fail closed: a state the host would reject is never sent.
       if (!validateViewState(state).ok) return;
       last.current = signature;
       store.postViewState(state);
     }, REPORT_DELAY_MS);
-    return () => clearTimeout(timer);
+    scheduled.current = { signature, timer };
   }, [store, input]);
+  useEffect(
+    () => () => {
+      if (scheduled.current) clearTimeout(scheduled.current.timer);
+      scheduled.current = null;
+    },
+    []
+  );
 }
