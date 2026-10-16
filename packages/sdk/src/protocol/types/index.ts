@@ -97,6 +97,7 @@ export type {
   DomainEvent,
   StreamEndedEvent,
   StreamErrorEvent,
+  StreamInvalidatedEvent,
   StreamLineEvent,
   StreamResumedEvent,
   StreamStartedEvent,

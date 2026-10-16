@@ -21,7 +21,7 @@ import type {
   CardSubscribeFailedMessage
 } from './journal.js';
 import type { CardStatus } from './status.js';
-import type { StreamMeta } from './stream.js';
+import type { StreamMeta, StreamSourceBinding, StreamSourceVersion } from './stream.js';
 import type { CommentTimelineItem, CommitDetails, CommitTimelineItem } from './timeline.js';
 
 // --- Card Events ---
@@ -188,6 +188,10 @@ export interface StreamStartedEvent {
   cardId: string;
   /** Full stream metadata snapshot at creation time. */
   meta: StreamMeta;
+  /** Authoritative source incarnation this publication belongs to. */
+  version: StreamSourceVersion;
+  /** Routing identity accepted with this publication; consumers route only by it. */
+  binding: StreamSourceBinding;
 }
 
 /**
@@ -206,6 +210,10 @@ export interface StreamResumedEvent {
   meta: StreamMeta;
   /** Number of lines the stream had before resume. */
   previousLineCount: number;
+  /** Authoritative source incarnation this publication belongs to. */
+  version: StreamSourceVersion;
+  /** Routing identity accepted with this publication; consumers route only by it. */
+  binding: StreamSourceBinding;
 }
 
 /**
@@ -229,6 +237,10 @@ export interface StreamLineEvent {
   lineNumber: number;
   /** Raw, unmodified NDJSON line as stored on disk. */
   line: string;
+  /** Authoritative source incarnation this publication belongs to. */
+  version: StreamSourceVersion;
+  /** Routing identity accepted with this publication; consumers route only by it. */
+  binding: StreamSourceBinding;
 }
 
 /**
@@ -248,6 +260,36 @@ export interface StreamEndedEvent {
   streamType: string;
   /** Total number of lines received before closure. */
   lineCount: number;
+  /** Authoritative source incarnation this publication belongs to. */
+  version: StreamSourceVersion;
+  /** Routing identity accepted with this publication; consumers route only by it. */
+  binding: StreamSourceBinding;
+}
+
+/**
+ * Broadcast before any publication from a successor incarnation of a source.
+ *
+ * Replacement, truncation, removal, routing-binding changes, and server
+ * restarts retire the identified version; consumers must stop routing content
+ * under it and fetch a fresh authoritative snapshot. Removal at the watcher is
+ * still followed by an ordinary `stream:ended`, so neither event alone implies
+ * successful completion.
+ */
+export interface StreamInvalidatedEvent {
+  /** Event type discriminator. */
+  type: 'stream:invalidated';
+  /** ID of the parent card. */
+  cardId: string;
+  /** Stream's source-relative path within its `streamType` directory. */
+  relPath: string;
+  /** Stream type key. */
+  streamType: string;
+  /** Retired incarnation, never the successor. */
+  version: StreamSourceVersion;
+  /** Routing identity that belonged to the retired incarnation. */
+  binding: StreamSourceBinding;
+  /** Why the incarnation is no longer eligible. */
+  reason: 'replaced' | 'removed' | 'binding-changed' | 'server-restarted';
 }
 
 /**
@@ -440,6 +482,7 @@ export type DomainEvent =
   | StreamResumedEvent
   | StreamLineEvent
   | StreamEndedEvent
+  | StreamInvalidatedEvent
   | StreamErrorEvent
   | CompareChangedEvent
   | CompareClearedEvent

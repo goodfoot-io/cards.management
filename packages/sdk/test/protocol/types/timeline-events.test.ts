@@ -234,6 +234,8 @@ describe('timeline event types', () => {
             return 'stream-line';
           case 'stream:ended':
             return 'stream-ended';
+          case 'stream:invalidated':
+            return 'stream-invalidated';
           case 'stream:error':
             return 'stream-error';
           case 'compare:changed':

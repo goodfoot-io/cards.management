@@ -15,6 +15,7 @@ import type {
   HttpClient,
   RemoveBranchResponse,
   StreamMeta,
+  StreamSourceSnapshot,
   TimelineItem,
   VariableGroupsResponse,
   WorktreeMaintenanceMode
@@ -1334,41 +1335,35 @@ export class CardsClient {
   }
 
   /**
-   * Retrieves a stream's metadata and raw lines.
+   * Retrieves one coherent, authority-bearing snapshot of a stream source.
    *
    * The `streamType` and each segment of `relPath` are URI-encoded
    * automatically; forward slashes in `relPath` remain literal path
-   * separators. For completed streams the returned `lines` array is the full
-   * content; for active streams it is a snapshot that may grow while the
-   * caller processes it.
+   * separators. The snapshot carries the server's source version
+   * (`{serverEpoch, sourceEpoch}`), the routing binding accepted with the same
+   * read, and explicit `firstLineNumber`/`totalLineCount` coordinates, so
+   * callers merge it with live events only within the same source version.
    *
-   * When `tail` is provided, only the last `tail` lines are returned; the
-   * `meta.lineCount` still reflects the full stream length so the caller can tell
-   * whether earlier content exists. Use this for compact previews that render
-   * only a handful of trailing lines, and omit it (or call again without it) to
-   * fetch the full transcript on expand.
+   * When `tail` is provided, only the last `tail` lines are returned;
+   * `totalLineCount` still reflects the full stream length so the caller can
+   * tell whether earlier content exists. Omit it to fetch full history.
    *
    * @param cardId - Identifier of the card that owns the requested stream.
    * @param streamType - Stream type key (e.g., `"claude-code-session"`).
    * @param relPath - Stream's source-relative path (forward slashes, may contain
    *   multiple segments, e.g. `"session-abc/subagents/foo.jsonl"`).
    * @param tail - When set to a positive integer, return only the last `tail` lines.
-   * @returns Metadata and content lines.
+   * @returns Coherent source snapshot with version, binding, and line coordinates.
    * @throws ApiError on 404 (unknown card or stream) or other server errors.
    * @throws NetworkError when the request fails to reach the server.
    */
-  async getStream(
-    cardId: string,
-    streamType: string,
-    relPath: string,
-    tail?: number
-  ): Promise<{ meta: StreamMeta; lines: string[] }> {
+  async getStream(cardId: string, streamType: string, relPath: string, tail?: number): Promise<StreamSourceSnapshot> {
     const encodedRelPath = relPath.split('/').map(encodeURIComponent).join('/');
     const url = this.buildUrl(
       `/cards/${encodeURIComponent(cardId)}/streams/${encodeURIComponent(streamType)}/${encodedRelPath}`,
       tail !== undefined ? { tail } : undefined
     );
-    return this.request(() => this.getHttpClient().get<{ meta: StreamMeta; lines: string[] }>(url));
+    return this.request(() => this.getHttpClient().get<StreamSourceSnapshot>(url));
   }
 
   // --- Compare Operations ---

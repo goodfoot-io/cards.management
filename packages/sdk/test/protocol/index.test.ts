@@ -117,7 +117,9 @@ describe('DomainEvent discriminated union', () => {
           createdAt: '2024-01-01',
           isActive: false
         },
-        previousLineCount: 5
+        previousLineCount: 5,
+        version: { serverEpoch: 'server-1', sourceEpoch: 'source-1' },
+        binding: { sessionId: 's', role: 'main' }
       }
     ];
     expect(events).toHaveLength(3);

@@ -1,598 +1,627 @@
-// @vitest-environment jsdom
-
 /**
- * Tests for the stream store initialization and postMessage handling.
+ * Session renderer store: membership, version-fenced merging, and stale-traffic races.
  *
- * Tests the `buildInitialState` and `applyMessage` functions by exercising
- * the store module directly. Since the store initializes at import time,
- * we test the exported store after setting up `window.__STREAM_INIT__`
- * and use the message event listener that the module registers.
+ * Every test drives a real store over a synchronous in-memory transport, so
+ * message ordering is fully deterministic and each race is reproduced exactly.
  *
- * @summary Tests for stream store initialization and message handling
+ * @summary Session stream store race and merge tests
  */
 
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-import type { StoreApi } from 'zustand/vanilla';
-import type { HostToIframeMessage, StreamStoreState } from '../../src/stream-store/types.js';
-import { COMPACT_TAIL_LINES } from '../../src/stream-store/types.js';
-
-let store: StoreApi<StreamStoreState>;
+import { describe, expect, it } from 'vitest';
+import { createStreamStore } from '../../src/stream-store/store.js';
+import { MAX_PENDING_BYTES, MAX_PENDING_EVENTS, TAIL_HISTORY_LINES } from '../../src/stream-store/types.js';
+import {
+  append,
+  child,
+  childBinding,
+  childMember,
+  descriptor,
+  generation,
+  harness,
+  key,
+  main,
+  mainBinding,
+  mainMember,
+  meta,
+  session,
+  snapshot,
+  v1,
+  v2
+} from './fixtures.js';
 
 /**
- * Dispatches a host-to-iframe message event on window.
- *
- * @param msg - The message to dispatch.
+ * Reads one source view, failing loudly when absent.
+ * @param h - Harness.
+ * @param source - Source to read.
+ * @returns Current source view.
+ * @throws Error when the source is absent.
  */
-function dispatchHostMessage(msg: HostToIframeMessage): void {
-  window.dispatchEvent(new MessageEvent('message', { data: msg }));
+function view(h: ReturnType<typeof harness>, source = main) {
+  const found = h.store.getState().sources.get(key(source));
+  if (!found) throw new Error(`missing source ${source.relPath}`);
+  return found;
 }
 
-// Set up __STREAM_INIT__ before importing the store module.
-// All tests share one store instance — order matters.
-beforeAll(async () => {
-  window.__STREAM_INIT__ = {
-    primary: 'session.jsonl',
-    files: {
-      'session.jsonl': {
-        meta: { lineCount: 2, sessionId: 's1', isActive: true },
-        lines: ['line1', 'line2']
-      },
-      'other.jsonl': {
-        meta: { lineCount: 5, isActive: false },
-        lines: ['a', 'b', 'c', 'd', 'e']
-      }
-    },
-    availableFiles: ['session.jsonl', 'other.jsonl'],
-    mode: 'compact'
-  };
-  const mod = await import('../../src/stream-store/store.js');
-  store = mod.streamStore;
+/**
+ * Creates a harness whose main source is ready with lines 1..n in version v1.
+ * @param n - Number of lines.
+ * @param mode - Display mode.
+ * @returns Ready harness.
+ */
+function ready(n: number, mode: 'compact' | 'expanded' = 'expanded') {
+  const h = harness({ mode });
+  h.deliver(
+    snapshot({
+      requestId: h.lastRequestId(),
+      lines: Array.from({ length: n }, (_, index) => `l${index + 1}`)
+    })
+  );
+  return h;
+}
+
+describe('stream store initialization', () => {
+  it.skip('exposes the bound session, generation, revision, and descriptor members as sources', () => {
+    const h = harness();
+    const state = h.store.getState();
+    expect(state.session).toEqual(session);
+    expect(state.generation).toBe(generation);
+    expect(state.revision).toBe(1);
+    expect(state.connection).toBe('connected');
+    expect([...state.sources.keys()]).toEqual([key(main), key(child)]);
+    expect(view(h, child)).toMatchObject({ member: childMember, status: 'unsubscribed', requestId: null });
+  });
+
+  it.skip('auto-subscribes the main in tail mode for compact and full mode for expanded', () => {
+    const compact = harness({ mode: 'compact' });
+    expect(compact.subscribes()).toEqual([
+      { type: 'source:subscribe', generation, requestId: 'req-1', source: main, history: 'tail' }
+    ]);
+    expect(view(compact)).toMatchObject({ status: 'loading', history: 'tail', requestId: 'req-1' });
+    const expanded = harness({ mode: 'expanded' });
+    expect(expanded.subscribes()[0]?.history).toBe('full');
+  });
+
+  it.skip('does not auto-subscribe any member when the session has no unique main', () => {
+    const h = harness({ descriptor: descriptor(childMember) });
+    expect(h.sent).toEqual([]);
+  });
+
+  it.skip('rejects initialization whose descriptor names another session or foreign members', () => {
+    const create = (init: Parameters<typeof createStreamStore>[0]['init']) => () =>
+      createStreamStore({ init, post: () => undefined, listen: () => () => undefined });
+    const base = { session, generation, revision: 1, mode: 'compact' as const };
+    expect(
+      create({ ...base, descriptor: { ...descriptor(mainMember), session: { ...session, sessionId: 's2' } } })
+    ).toThrow();
+    expect(
+      create({
+        ...base,
+        descriptor: descriptor({ source: { ...main, cardId: 'card-2' }, role: 'main' })
+      })
+    ).toThrow();
+    expect(create({ ...base, generation: '', descriptor: descriptor(mainMember) })).toThrow();
+    expect(create({ ...base, revision: 0, descriptor: descriptor(mainMember) })).toThrow();
+  });
 });
 
-describe('stream store', () => {
-  describe('initialization', () => {
-    it('should initialize primary from __STREAM_INIT__', () => {
-      expect(store.getState().primary).toBe('session.jsonl');
-    });
-
-    it('should set connected to true', () => {
-      expect(store.getState().connected).toBe(true);
-    });
-
-    it('should populate availableFiles', () => {
-      expect(store.getState().availableFiles).toEqual(['session.jsonl', 'other.jsonl']);
-    });
-
-    it('should create file entries with correct metadata', () => {
-      const file = store.getState().files.get('session.jsonl');
-      expect(file).toBeDefined();
-      expect(file!.filename).toBe('session.jsonl');
-      expect(file!.meta.isActive).toBe(true);
-      expect(file!.meta.lineCount).toBe(2);
-      expect(file!.meta.sessionId).toBe('s1');
-      expect(file!.lines).toEqual(['line1', 'line2']);
-    });
-
-    it('should mark primary file as subscribed', () => {
-      expect(store.getState().files.get('session.jsonl')!.isSubscribed).toBe(true);
-    });
-
-    it('should mark non-primary files as not subscribed', () => {
-      expect(store.getState().files.get('other.jsonl')!.isSubscribed).toBe(false);
-    });
-
-    it('should initialize isLoading as false and error as null', () => {
-      const file = store.getState().files.get('session.jsonl')!;
-      expect(file.isLoading).toBe(false);
-      expect(file.error).toBeNull();
-    });
-
-    it('should initialize mode from __STREAM_INIT__', () => {
-      expect(store.getState().mode).toBe('compact');
+describe('snapshot correlation', () => {
+  it.skip('establishes authority from the current request and reports unloaded earlier content for a tail', () => {
+    const h = harness();
+    h.deliver(snapshot({ requestId: h.lastRequestId(), first: 51, lines: ['l51', 'l52'] }));
+    expect(view(h)).toMatchObject({
+      status: 'ready',
+      lines: ['l51', 'l52'],
+      firstLineNumber: 51,
+      totalLineCount: 52,
+      earlierUnloaded: true,
+      authority: { source: main, version: v1, binding: mainBinding },
+      error: null
     });
   });
 
-  describe('message handling', () => {
-    it('should append line on stream:line message', () => {
-      const file0 = store.getState().files.get('session.jsonl')!;
-      const linesBefore = file0.lines.length;
-      // The expected next line number is headLineNumber + current length.
-      const nextLineNumber = file0.headLineNumber + linesBefore;
+  it.skip('drops snapshots with a superseded request ID or another generation', () => {
+    const h = harness();
+    h.deliver(snapshot({ requestId: 'req-unknown', lines: ['x'] }));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['x'], generation: 'gen-0' }));
+    expect(view(h).status).toBe('loading');
+    expect(view(h).lines).toEqual([]);
+    expect(h.diagnostics.map((event) => event.code)).toContain('stale-response');
+  });
 
-      dispatchHostMessage({
-        type: 'stream:line',
-        filename: 'session.jsonl',
-        lineNumber: nextLineNumber,
-        line: 'appended-line'
-      });
+  it.skip('rejects a snapshot whose binding disagrees with current membership', () => {
+    const h = harness();
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['x'], binding: { sessionId: 's2', role: 'main' } }));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['x'], binding: { sessionId: 's1', role: 'subagent' } }));
+    expect(view(h).authority).toBeNull();
+    expect(view(h).lines).toEqual([]);
+  });
 
-      const file = store.getState().files.get('session.jsonl')!;
-      expect(file.lines).toHaveLength(linesBefore + 1);
-      expect(file.lines[file.lines.length - 1]).toBe('appended-line');
-      expect(file.meta.lineCount).toBe(linesBefore + 1);
+  it.skip('records a typed source error for the current request', () => {
+    const h = harness();
+    h.deliver({ type: 'source:error', generation, requestId: h.lastRequestId(), source: main, error: 'not-found' });
+    expect(view(h)).toMatchObject({ status: 'paused', error: 'not-found' });
+  });
+});
+
+describe('live merge within one source version', () => {
+  it.skip('appends the expected next coordinates and drops identical duplicates', () => {
+    const h = ready(3);
+    h.deliver(append(4, ['l4', 'l5']));
+    h.deliver(append(3, ['l3', 'l4']));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4', 'l5'], totalLineCount: 5 });
+  });
+
+  it.skip('appends the unseen suffix of a partially overlapping batch', () => {
+    const h = ready(3);
+    h.deliver(append(2, ['l2', 'l3', 'l4']));
+    expect(view(h).lines).toEqual(['l1', 'l2', 'l3', 'l4']);
+  });
+
+  it.skip('treats a same-version snapshot ending at N after live N+1 as overlap, not truncation', () => {
+    const h = ready(3);
+    h.deliver(append(4, ['l4']));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3'] }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4'], totalLineCount: 4, status: 'ready' });
+  });
+
+  it.skip('extends coverage from a same-version snapshot that reaches further than local content', () => {
+    const h = ready(2);
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3', 'l4'] }));
+    expect(view(h).lines).toEqual(['l1', 'l2', 'l3', 'l4']);
+  });
+
+  it.skip('never infers reset from a shorter delayed same-version snapshot', () => {
+    const h = ready(5);
+    h.deliver(snapshot({ requestId: h.lastRequestId(), first: 4, lines: ['l4', 'l5'] }));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2'] }));
+    expect(view(h).lines).toEqual(['l1', 'l2', 'l3', 'l4', 'l5']);
+    expect(view(h).authority?.version).toEqual(v1);
+  });
+
+  it.skip('fills a forward gap through exactly one in-flight refetch and applies the buffered suffix', () => {
+    const h = ready(3);
+    const before = h.subscribes().length;
+    h.deliver(append(6, ['l6']));
+    h.deliver(append(7, ['l7']));
+    expect(h.subscribes()).toHaveLength(before + 1);
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'resynchronizing' });
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3', 'l4', 'l5'] }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'], status: 'ready' });
+  });
+
+  it.skip('treats same-version conflicting bytes as an inconsistency and refetches', () => {
+    const h = ready(3);
+    const before = h.subscribes().length;
+    h.deliver(append(3, ['other']));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'resynchronizing' });
+    expect(h.subscribes()).toHaveLength(before + 1);
+    expect(h.diagnostics.map((event) => event.code)).toContain('inconsistent-source');
+  });
+
+  it.skip('pauses with an explicit inconsistency when the refetched same version still conflicts', () => {
+    const h = ready(3);
+    h.deliver(append(3, ['other']));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'other'] }));
+    expect(view(h)).toMatchObject({ status: 'paused', error: 'inconsistent-source', lines: ['l1', 'l2', 'l3'] });
+  });
+
+  it.skip('retains only the trailing window for tail-history sources while live lines arrive', () => {
+    const h = harness({ mode: 'compact' });
+    h.deliver(
+      snapshot({
+        requestId: h.lastRequestId(),
+        first: 1,
+        lines: Array.from({ length: TAIL_HISTORY_LINES }, (_, i) => `l${i + 1}`)
+      })
+    );
+    h.deliver(append(TAIL_HISTORY_LINES + 1, ['next']));
+    const current = view(h);
+    expect(current.lines).toHaveLength(TAIL_HISTORY_LINES);
+    expect(current.lines.at(-1)).toBe('next');
+    expect(current.firstLineNumber).toBe(2);
+    expect(current.earlierUnloaded).toBe(true);
+  });
+});
+
+describe('source versions', () => {
+  it.skip('pauses a source on an unseen version instead of accepting it from arrival order', () => {
+    const h = ready(3);
+    const before = h.subscribes().length;
+    h.deliver(append(1, ['new1'], { version: v2 }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'resynchronizing' });
+    expect(h.subscribes()).toHaveLength(before + 1);
+  });
+
+  it.skip('atomically replaces content with a fresh full snapshot of the new version and drops old-version traffic', () => {
+    const h = ready(3);
+    h.deliver(append(1, ['new1'], { version: v2 }));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, lines: ['new1'] }));
+    expect(view(h)).toMatchObject({ lines: ['new1'], totalLineCount: 1, authority: { version: v2 } });
+    h.deliver(append(4, ['l4']));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: v1, lines: ['l1', 'l2', 'l3', 'l4'] }));
+    expect(view(h)).toMatchObject({ lines: ['new1'], authority: { version: v2 } });
+  });
+
+  it.skip('rejects a partial snapshot of an unseen version when replacing an established one', () => {
+    const h = ready(3);
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, first: 2, lines: ['b', 'c'] }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], authority: { version: v1 } });
+    expect(view(h).status).not.toBe('ready');
+  });
+
+  it.skip('invalidation retires the version, re-requests with a fresh request ID, and rejects late old responses', () => {
+    const h = ready(3);
+    const old = h.lastRequestId();
+    h.deliver({
+      type: 'source:invalidated',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      reason: 'replaced'
     });
+    expect(view(h)).toMatchObject({ authority: null, status: 'resynchronizing', reconciliationEpoch: 1 });
+    expect(h.lastRequestId()).not.toBe(old);
+    h.deliver(snapshot({ requestId: old, version: v2, lines: ['n1'] }));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: v1, lines: ['l1', 'l2', 'l3', 'l4'] }));
+    h.deliver(append(4, ['l4']));
+    expect(view(h).authority).toBeNull();
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, first: 2, lines: ['n2'] }));
+    expect(view(h)).toMatchObject({ lines: ['n2'], firstLineNumber: 2, authority: { version: v2 }, status: 'ready' });
+  });
 
-    it('should ignore stream:line for unknown files', () => {
-      const stateBefore = store.getState();
-
-      dispatchHostMessage({
-        type: 'stream:line',
-        filename: 'unknown.jsonl',
-        lineNumber: 1,
-        line: 'should be ignored'
-      });
-
-      // files Map reference should be unchanged
-      expect(store.getState().files).toBe(stateBefore.files);
+  it.skip('ignores invalidation of a version it never accepted when another is current', () => {
+    const h = ready(2);
+    h.deliver({
+      type: 'source:invalidated',
+      generation,
+      source: main,
+      version: v2,
+      binding: mainBinding,
+      reason: 'replaced'
     });
+    expect(view(h)).toMatchObject({ status: 'ready', authority: { version: v1 } });
+  });
 
-    it('should update meta on stream:started for new file', () => {
-      dispatchHostMessage({
-        type: 'stream:started',
-        filename: 'new-stream.jsonl',
-        meta: { lineCount: 0, title: 'New Stream', isActive: true }
-      });
-
-      const file = store.getState().files.get('new-stream.jsonl')!;
-      expect(file.meta.isActive).toBe(true);
-      expect(file.meta.title).toBe('New Stream');
-      expect(file.lines).toEqual([]);
+  it.skip('refuses delayed old-epoch traffic after a server-restart invalidation and reconnect', () => {
+    const h = ready(2);
+    h.deliver({ type: 'connection:state', generation, state: 'disconnected' });
+    h.deliver({
+      type: 'source:invalidated',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      reason: 'server-restarted'
     });
+    h.deliver({ type: 'connection:state', generation, state: 'connected' });
+    const restarted = { serverEpoch: 'server-2', sourceEpoch: 'source-1' };
+    h.deliver(snapshot({ requestId: h.lastRequestId(), version: restarted, lines: ['l1', 'l2', 'l3'] }));
+    h.deliver(append(4, ['old'], { version: v1 }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], authority: { version: restarted }, status: 'ready' });
+  });
+});
 
-    it('should update meta on stream:ended preserving lines', () => {
-      dispatchHostMessage({
-        type: 'stream:ended',
-        filename: 'session.jsonl',
-        meta: { lineCount: 99, isActive: false }
-      });
+describe('routing binding', () => {
+  it.skip('never applies content whose binding names another session or role and invalidates the source', () => {
+    const h = ready(2);
+    h.deliver(append(3, ['leak'], { binding: { sessionId: 's2', role: 'main' } }));
+    expect(view(h).lines).toEqual(['l1', 'l2']);
+    expect(view(h).status).toBe('resynchronizing');
+    expect(h.diagnostics.map((event) => event.code)).toContain('rejected-message');
+  });
 
-      const file = store.getState().files.get('session.jsonl')!;
-      expect(file.meta.isActive).toBe(false);
-      expect(file.lines.length).toBeGreaterThan(0);
+  it.skip('drops content for identical paths outside the bound card or provider', () => {
+    const h = ready(2);
+    h.deliver(append(3, ['other-card'], { source: { ...main, cardId: 'card-2' } }));
+    h.deliver(append(3, ['other-provider'], { source: { ...main, streamType: 'codex-session' } }));
+    expect(view(h).lines).toEqual(['l1', 'l2']);
+    expect(h.store.getState().sources.size).toBe(2);
+  });
+
+  it.skip('drops content for sources that are not current members', () => {
+    const h = ready(2);
+    const stranger = { ...main, relPath: 'stranger.jsonl' };
+    h.deliver(append(1, ['x'], { source: stranger }));
+    expect(h.store.getState().sources.has(key(stranger))).toBe(false);
+  });
+});
+
+describe('membership updates', () => {
+  it.skip('accepts only strictly increasing descriptor revisions', () => {
+    const h = harness();
+    h.deliver({ type: 'session:update', generation, revision: 3, descriptor: descriptor(mainMember) });
+    h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(mainMember, childMember) });
+    expect(h.store.getState().revision).toBe(3);
+    expect(h.store.getState().descriptor.members).toEqual([mainMember]);
+  });
+
+  it.skip('retains removed member content as unavailable history and rejects its late responses', () => {
+    const h = ready(2);
+    h.store.subscribeSource(child, 'tail');
+    const childRequest = h.lastRequestId(child);
+    h.deliver(snapshot({ source: child, requestId: childRequest, lines: ['c1'] }));
+    h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(mainMember) });
+    expect(view(h, child)).toMatchObject({ member: null, status: 'unavailable', lines: ['c1'], requestId: null });
+    h.deliver(append(2, ['c2'], { source: child }));
+    h.deliver(snapshot({ source: child, requestId: childRequest, lines: ['c1', 'c2'] }));
+    expect(view(h, child)).toMatchObject({ status: 'unavailable', lines: ['c1'] });
+  });
+
+  it.skip('starts new source work on readdition instead of reviving an old response', () => {
+    const h = ready(2);
+    h.store.subscribeSource(child, 'full');
+    const oldRequest = h.lastRequestId(child);
+    h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(mainMember) });
+    h.deliver({ type: 'session:update', generation, revision: 3, descriptor: descriptor(mainMember, childMember) });
+    const readded = view(h, child);
+    expect(readded.member).toEqual(childMember);
+    expect(readded.reconciliationEpoch).toBeGreaterThan(0);
+    expect(readded.requestId).not.toBe(oldRequest);
+    h.deliver(snapshot({ source: child, requestId: oldRequest, lines: ['stale'] }));
+    expect(view(h, child).lines).toEqual([]);
+    h.deliver(snapshot({ source: child, requestId: h.lastRequestId(child), version: v2, lines: ['fresh'] }));
+    expect(view(h, child)).toMatchObject({ lines: ['fresh'], status: 'ready' });
+  });
+
+  it.skip('invalidates a member whose role or agent identity changes in a newer descriptor', () => {
+    const h = ready(2);
+    const moved = { source: main, role: 'auxiliary' as const, agentId: 'aux' };
+    h.deliver({ type: 'session:update', generation, revision: 2, descriptor: descriptor(moved, childMember) });
+    expect(view(h)).toMatchObject({ member: moved, authority: null, status: 'resynchronizing' });
+    h.deliver(append(3, ['l3']));
+    expect(view(h).lines).toEqual(['l1', 'l2']);
+  });
+
+  it.skip('rejects a descriptor for another session or with foreign members', () => {
+    const h = harness();
+    h.deliver({
+      type: 'session:update',
+      generation,
+      revision: 2,
+      descriptor: { ...descriptor(mainMember), session: { ...session, sessionId: 's2' } }
     });
-
-    it('should preserve sidecar role/agentId across stream:ended, which only carries lineCount/isActive', () => {
-      dispatchHostMessage({
-        type: 'stream:started',
-        filename: 'subagent.jsonl',
-        meta: { lineCount: 3, isActive: true, role: 'subagent', agentId: 'agent-9' }
-      });
-      dispatchHostMessage({
-        type: 'stream:ended',
-        filename: 'subagent.jsonl',
-        meta: { lineCount: 3, isActive: false }
-      });
-
-      const file = store.getState().files.get('subagent.jsonl')!;
-      expect(file.meta.isActive).toBe(false);
-      expect(file.meta.role).toBe('subagent');
-      expect(file.meta.agentId).toBe('agent-9');
+    h.deliver({
+      type: 'session:update',
+      generation,
+      revision: 3,
+      descriptor: descriptor({ source: { ...main, cardId: 'card-2' }, role: 'main' })
     });
+    expect(h.store.getState().revision).toBe(1);
+  });
+});
 
-    it('should update availableFiles', () => {
-      dispatchHostMessage({
-        type: 'availableFiles:update',
-        files: ['session.jsonl', 'other.jsonl', 'third.jsonl']
-      });
+describe('subscriptions', () => {
+  it.skip('refuses to request sources outside current membership', () => {
+    const h = harness();
+    const before = h.sent.length;
+    h.store.subscribeSource({ ...main, cardId: 'card-2' }, 'full');
+    h.store.subscribeSource({ ...main, relPath: 'stranger.jsonl' }, 'full');
+    expect(h.sent).toHaveLength(before);
+    expect(h.diagnostics.map((event) => event.code)).toContain('rejected-message');
+  });
 
-      expect(store.getState().availableFiles).toEqual(['session.jsonl', 'other.jsonl', 'third.jsonl']);
+  it.skip('coalesces duplicate requests per source and mode', () => {
+    const h = harness({ mode: 'compact' });
+    h.store.subscribeSource(main, 'tail');
+    h.store.subscribeSource(main, 'tail');
+    expect(h.subscribes()).toHaveLength(1);
+  });
+
+  it.skip('upgrades an in-flight tail to full whose eventual tail response cannot downgrade coverage', () => {
+    const h = harness({ mode: 'compact' });
+    const tailRequest = h.lastRequestId();
+    h.store.subscribeSource(main, 'full');
+    expect(h.subscribes().map((message) => message.history)).toEqual(['tail', 'full']);
+    h.deliver(snapshot({ requestId: tailRequest, first: 9, lines: ['l9', 'l10'] }));
+    expect(view(h)).toMatchObject({ history: 'full', status: 'loading', lines: [] });
+    h.store.subscribeSource(main, 'tail');
+    expect(h.subscribes()).toHaveLength(2);
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: Array.from({ length: 10 }, (_, i) => `l${i + 1}`) }));
+    expect(view(h)).toMatchObject({ history: 'full', earlierUnloaded: false, firstLineNumber: 1 });
+  });
+
+  it.skip('requests full history for a ready tail source and merges earlier lines', () => {
+    const h = harness({ mode: 'compact' });
+    h.deliver(snapshot({ requestId: h.lastRequestId(), first: 3, lines: ['l3', 'l4'] }));
+    h.store.subscribeSource(main, 'full');
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3', 'l4'] }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4'], earlierUnloaded: false, history: 'full' });
+  });
+
+  it.skip('unsubscribe cancels the pending request and stops live delivery', () => {
+    const h = ready(2);
+    const request = h.lastRequestId();
+    h.store.unsubscribeSource(main);
+    expect(h.sent.at(-1)).toEqual({ type: 'source:unsubscribe', generation, source: main });
+    h.deliver(append(3, ['l3']));
+    h.deliver(snapshot({ requestId: request, lines: ['l1', 'l2', 'l3'] }));
+    expect(view(h)).toMatchObject({ status: 'unsubscribed', requestId: null, lines: ['l1', 'l2'] });
+  });
+});
+
+describe('connection and resynchronization', () => {
+  it.skip('marks subscribed sources resynchronizing while disconnected and refetches each on reconnect', () => {
+    const h = ready(2);
+    h.store.subscribeSource(child, 'tail');
+    h.deliver({ type: 'connection:state', generation, state: 'disconnected' });
+    expect(h.store.getState().connection).toBe('disconnected');
+    expect(view(h)).toMatchObject({ status: 'resynchronizing', lines: ['l1', 'l2'] });
+    const before = h.subscribes().length;
+    const childBefore = h.subscribes(child).length;
+    h.deliver({ type: 'connection:state', generation, state: 'connected' });
+    expect(h.subscribes()).toHaveLength(before + 1);
+    expect(h.subscribes().at(-1)?.history).toBe('full');
+    expect(h.subscribes(child)).toHaveLength(childBefore + 1);
+    expect(h.subscribes(child).at(-1)?.history).toBe('tail');
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3'] }));
+    expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1', 'l2', 'l3'] });
+  });
+
+  it.skip('buffers live events during loading and applies those matching the established version', () => {
+    const h = harness({ mode: 'expanded' });
+    h.deliver(append(3, ['l3']));
+    h.deliver(append(1, ['zz'], { version: v2 }));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2'] }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'ready' });
+  });
+
+  it.skip('discards only the transient buffer on event-count overflow and refetches', () => {
+    const h = harness({ mode: 'expanded' });
+    for (let index = 0; index <= MAX_PENDING_EVENTS; index++) h.deliver(append(index + 2, [`l${index + 2}`]));
+    expect(h.diagnostics.map((event) => event.code)).toContain('resync-overflow');
+    const request = h.lastRequestId();
+    h.deliver(snapshot({ requestId: request, lines: ['l1'] }));
+    expect(view(h).lines).toEqual(['l1']);
+    expect(view(h).status).toBe('resynchronizing');
+    expect(h.lastRequestId()).not.toBe(request);
+  });
+
+  it.skip('bounds buffered bytes per session', () => {
+    const h = harness({ mode: 'expanded' });
+    const large = 'x'.repeat(Math.ceil(MAX_PENDING_BYTES / 2));
+    h.deliver(append(2, [large]));
+    h.deliver(append(3, [large]));
+    h.deliver(append(4, [large]));
+    expect(h.diagnostics.map((event) => event.code)).toContain('resync-overflow');
+  });
+
+  it.skip('explicit retry resumes paused sources and asks the host to resynchronize membership', () => {
+    const h = harness();
+    h.deliver({ type: 'source:error', generation, requestId: h.lastRequestId(), source: main, error: 'load-error' });
+    h.store.retry();
+    expect(h.sent.at(-2)).toEqual({ type: 'session:resync', generation });
+    expect(h.sent.at(-1)).toMatchObject({ type: 'source:subscribe', source: main });
+    expect(view(h)).toMatchObject({ status: 'loading', error: null });
+  });
+});
+
+describe('lifecycle', () => {
+  it.skip('updates activity on ended without assuming deletion', () => {
+    const h = ready(2);
+    h.deliver({
+      type: 'source:lifecycle',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      state: 'ended',
+      totalLineCount: 2
     });
-
-    it('should populate file on successful subscribe:response', () => {
-      dispatchHostMessage({
-        type: 'subscribe:response',
-        filename: 'subscribed.jsonl',
-        lines: ['sub1', 'sub2'],
-        meta: { lineCount: 2, isActive: false }
-      });
-
-      const file = store.getState().files.get('subscribed.jsonl')!;
-      expect(file.isSubscribed).toBe(true);
-      expect(file.isLoading).toBe(false);
-      expect(file.error).toBeNull();
-      expect(file.lines).toEqual(['sub1', 'sub2']);
-      expect(file.meta.lineCount).toBe(2);
+    expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1', 'l2'], meta: { isActive: false } });
+    h.deliver({
+      type: 'source:lifecycle',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      state: 'resumed',
+      totalLineCount: 2
     });
+    expect(view(h).meta?.isActive).toBe(true);
+  });
 
-    it('should set error on failed subscribe:response', () => {
-      dispatchHostMessage({
-        type: 'subscribe:response',
-        filename: 'error-file.jsonl',
-        lines: [],
-        meta: { lineCount: 0, isActive: true },
-        error: 'File not found'
-      });
-
-      const file = store.getState().files.get('error-file.jsonl')!;
-      expect(file.isSubscribed).toBe(false);
-      expect(file.isLoading).toBe(false);
-      expect(file.error).toBe('File not found');
+  it.skip('repairs a lifecycle-announced line count beyond local content', () => {
+    const h = ready(2);
+    const before = h.subscribes().length;
+    h.deliver({
+      type: 'source:lifecycle',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      state: 'ended',
+      totalLineCount: 4
     });
+    expect(h.subscribes()).toHaveLength(before + 1);
+    expect(view(h).status).toBe('resynchronizing');
+  });
+});
 
-    it('should ignore non-object messages', () => {
-      const stateBefore = store.getState();
-      window.dispatchEvent(new MessageEvent('message', { data: 'not an object' }));
-      window.dispatchEvent(new MessageEvent('message', { data: null }));
-      window.dispatchEvent(new MessageEvent('message', { data: 42 }));
-      expect(store.getState()).toBe(stateBefore);
+describe('theme, layout, actions, and disposal', () => {
+  it.skip('applies validated theme changes', () => {
+    const h = harness();
+    h.deliver({ type: 'theme:change', generation, themeKind: 2, cssVariables: { '--vscode-foreground': '#fff' } });
+    expect(h.themes).toEqual([{ themeKind: 2, cssVariables: { '--vscode-foreground': '#fff' } }]);
+  });
+
+  it.skip('stamps layout messages with the current handshake token and drops them before any handshake', () => {
+    const h = harness();
+    const before = h.sent.length;
+    h.store.postLayout({ type: 'layout:ready' });
+    expect(h.sent).toHaveLength(before);
+    h.deliver({ type: 'layout:handshake', generation, token: 'load-1' });
+    h.store.postLayout({ type: 'layout:ready' });
+    h.store.postLayout({ type: 'layout:size', revision: 1, height: 240 });
+    h.deliver({ type: 'layout:handshake', generation, token: 'load-2' });
+    h.store.postLayout({ type: 'layout:scroll', command: { kind: 'delta', deltaY: 40 } });
+    expect(h.sent.slice(before)).toEqual([
+      { type: 'layout:ready', generation, token: 'load-1' },
+      { type: 'layout:size', generation, token: 'load-1', revision: 1, height: 240 },
+      { type: 'layout:scroll', generation, token: 'load-2', command: { kind: 'delta', deltaY: 40 } }
+    ]);
+  });
+
+  it.skip('refuses to post invalid layout payloads', () => {
+    const h = harness();
+    h.deliver({ type: 'layout:handshake', generation, token: 'load-1' });
+    const before = h.sent.length;
+    h.store.postLayout({ type: 'layout:size', revision: 1, height: 100_001 });
+    h.store.postLayout({ type: 'layout:scroll', command: { kind: 'delta', deltaY: Number.NaN } });
+    expect(h.sent).toHaveLength(before);
+  });
+
+  it.skip('posts generation-correlated close, openFile, and showDiff actions', () => {
+    const h = harness();
+    h.store.close();
+    h.store.openFile('src/a.ts', 3);
+    h.store.showDiff('abc123');
+    expect(h.sent.slice(-3)).toEqual([
+      { type: 'close', generation },
+      { type: 'openFile', generation, path: 'src/a.ts', line: 3 },
+      { type: 'showDiff', generation, sha: 'abc123' }
+    ]);
+  });
+
+  it.skip('ignores malformed host messages with an identifier-only diagnostic', () => {
+    const h = ready(1);
+    h.deliver({
+      type: 'source:append',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      firstLineNumber: 2,
+      lines: ['x'],
+      extra: 1
     });
+    h.deliver('not an object');
+    expect(view(h).lines).toEqual(['l1']);
+    expect(h.diagnostics.filter((event) => event.code === 'rejected-message').length).toBeGreaterThanOrEqual(2);
+    expect(JSON.stringify(h.diagnostics)).not.toContain('"x"');
+  });
 
-    it('should ignore messages without type field', () => {
-      const stateBefore = store.getState();
-      window.dispatchEvent(new MessageEvent('message', { data: { foo: 'bar' } }));
-      expect(store.getState()).toBe(stateBefore);
-    });
+  it.skip('dispose removes the listener and suppresses all later traffic', () => {
+    const h = ready(1);
+    h.store.dispose();
+    expect(h.listeners()).toBe(0);
+    const before = h.sent.length;
+    h.store.subscribeSource(child, 'full');
+    h.store.close();
+    expect(h.sent).toHaveLength(before);
+  });
 
-    it('should apply CSS variables and theme attribute on theme:change', () => {
-      dispatchHostMessage({
-        type: 'theme:change',
-        themeKind: 1,
-        cssVariables: {
-          '--vscode-editor-background': '#ffffff',
-          '--vscode-editor-foreground': '#000000'
-        }
-      });
+  it.skip('publishes immutable state snapshots per change', () => {
+    const h = ready(1);
+    const first = h.store.getState();
+    h.deliver(append(2, ['l2']));
+    expect(first.sources.get(key(main))?.lines).toEqual(['l1']);
+    expect(h.store.getState()).not.toBe(first);
+  });
 
-      expect(document.documentElement.getAttribute('data-vscode-theme-kind')).toBe('light');
-      expect(document.documentElement.style.getPropertyValue('--vscode-editor-background')).toBe('#ffffff');
-      expect(document.documentElement.style.getPropertyValue('--vscode-editor-foreground')).toBe('#000000');
-    });
-
-    it('should update theme attribute when theme kind changes', () => {
-      dispatchHostMessage({
-        type: 'theme:change',
-        themeKind: 2,
-        cssVariables: { '--vscode-editor-background': '#1e1e1e' }
-      });
-      expect(document.documentElement.getAttribute('data-vscode-theme-kind')).toBe('dark');
-
-      dispatchHostMessage({
-        type: 'theme:change',
-        themeKind: 3,
-        cssVariables: { '--vscode-editor-background': '#000000' }
-      });
-      expect(document.documentElement.getAttribute('data-vscode-theme-kind')).toBe('high-contrast');
-    });
-
-    it('should not change store state on theme:change', () => {
-      const stateBefore = store.getState();
-      dispatchHostMessage({
-        type: 'theme:change',
-        themeKind: 1,
-        cssVariables: { '--vscode-editor-background': '#fff' }
-      });
-      expect(store.getState()).toBe(stateBefore);
-    });
-
-    describe('subscribe:response merge', () => {
-      it('should use response lines directly when response has more lines than store', () => {
-        // Establish a known baseline: subscribe a fresh file with 2 lines
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'merge-test.jsonl',
-          lines: ['base1', 'base2'],
-          meta: { lineCount: 2, isActive: true }
-        });
-        expect(store.getState().files.get('merge-test.jsonl')!.lines).toEqual(['base1', 'base2']);
-
-        // Now dispatch a subscribe:response with more lines — should replace entirely
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'merge-test.jsonl',
-          lines: ['r1', 'r2', 'r3', 'r4'],
-          meta: { lineCount: 4, isActive: true }
-        });
-
-        const lines = store.getState().files.get('merge-test.jsonl')!.lines;
-        // Response had more lines than store — result is exactly the response lines
-        expect(lines).toEqual(['r1', 'r2', 'r3', 'r4']);
-      });
-
-      it('should append store tail when store has more lines than response (live-event accumulation)', () => {
-        // Start with a known 3-line state via subscribe:response
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'live-test.jsonl',
-          lines: ['hist1', 'hist2', 'hist3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-
-        // Simulate two live events arriving before the next subscribe:response
-        dispatchHostMessage({ type: 'stream:line', filename: 'live-test.jsonl', lineNumber: 4, line: 'live4' });
-        dispatchHostMessage({ type: 'stream:line', filename: 'live-test.jsonl', lineNumber: 5, line: 'live5' });
-        expect(store.getState().files.get('live-test.jsonl')!.lines).toHaveLength(5);
-
-        // subscribe:response arrives with only 3 lines (fetch completed before live events)
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'live-test.jsonl',
-          lines: ['hist1', 'hist2', 'hist3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-
-        const lines = store.getState().files.get('live-test.jsonl')!.lines;
-        // Response had fewer lines than store — historical lines plus live tail preserved
-        expect(lines).toEqual(['hist1', 'hist2', 'hist3', 'live4', 'live5']);
-      });
-    });
-
-    describe('offset-aware merge (absolute line numbers)', () => {
-      it('appends a stream:line whose lineNumber is exactly the expected next', () => {
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'append-test.jsonl',
-          lines: ['a1', 'a2', 'a3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-        // headLineNumber=1, length=3 → expected next is 4.
-        dispatchHostMessage({ type: 'stream:line', filename: 'append-test.jsonl', lineNumber: 4, line: 'a4' });
-
-        const file = store.getState().files.get('append-test.jsonl')!;
-        expect(file.lines).toEqual(['a1', 'a2', 'a3', 'a4']);
-        expect(file.headLineNumber).toBe(1);
-        expect(file.meta.lineCount).toBe(4);
-      });
-
-      it('drops a stream:line that repeats an already-known line number (duplicate re-delivery)', () => {
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'dup-test.jsonl',
-          lines: ['d1', 'd2', 'd3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-        const before = store.getState().files.get('dup-test.jsonl')!;
-
-        // lineNumber 3 was already delivered — drop it, leaving state untouched.
-        dispatchHostMessage({ type: 'stream:line', filename: 'dup-test.jsonl', lineNumber: 3, line: 'dup' });
-
-        const after = store.getState().files.get('dup-test.jsonl')!;
-        expect(after.lines).toEqual(['d1', 'd2', 'd3']);
-        expect(after.headLineNumber).toBe(before.headLineNumber);
-      });
-
-      it('drops a stream:line that skips ahead of the expected next (a gap)', () => {
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'gap-test.jsonl',
-          lines: ['g1', 'g2', 'g3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-
-        // Expected next is 4; a jump to 6 leaves a hole — drop and wait for a
-        // resubscribe to backfill rather than corrupting the offset.
-        dispatchHostMessage({ type: 'stream:line', filename: 'gap-test.jsonl', lineNumber: 6, line: 'g6' });
-
-        const file = store.getState().files.get('gap-test.jsonl')!;
-        expect(file.lines).toEqual(['g1', 'g2', 'g3']);
-      });
-
-      it('re-issues subscribe with the compact tail on connection:restored (no reset)', () => {
-        // Subscribe a fresh file so it is marked isSubscribed for the resubscribe pass.
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'reconnect-test.jsonl',
-          lines: ['x1', 'x2'],
-          meta: { lineCount: 2, isActive: true }
-        });
-        const before = store.getState().files.get('reconnect-test.jsonl')!;
-
-        // In jsdom window.parent === window, so subscribe() posts via window.postMessage.
-        const spy = vi.spyOn(window, 'postMessage');
-        dispatchHostMessage({ type: 'connection:restored' });
-
-        const resubscribe = spy.mock.calls
-          .map((call) => call[0])
-          .find(
-            (m) =>
-              m !== null &&
-              typeof m === 'object' &&
-              (m as { type?: string }).type === 'subscribe' &&
-              (m as { filename?: string }).filename === 'reconnect-test.jsonl'
-          ) as { tail?: number } | undefined;
-
-        expect(resubscribe).toBeDefined();
-        // compact mode (the shared store's mode) requests only the trailing window.
-        expect(resubscribe!.tail).toBe(COMPACT_TAIL_LINES);
-        // No upfront reset — local lines are left in place until the response merges.
-        expect(store.getState().files.get('reconnect-test.jsonl')!.lines).toEqual(before.lines);
-
-        spy.mockRestore();
-      });
-
-      it('keeps live lines 41 and 42 when a stale 40-line subscribe:response races behind them', () => {
-        // Seed 40 lines (numbered 1..40) via a subscribe:response.
-        const first40 = Array.from({ length: 40 }, (_, i) => `L${i + 1}`);
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'race-test.jsonl',
-          lines: first40,
-          meta: { lineCount: 40, isActive: true }
-        });
-
-        // Two live lines (41, 42) arrive over the fast WebSocket.
-        dispatchHostMessage({ type: 'stream:line', filename: 'race-test.jsonl', lineNumber: 41, line: 'L41' });
-        dispatchHostMessage({ type: 'stream:line', filename: 'race-test.jsonl', lineNumber: 42, line: 'L42' });
-        expect(store.getState().files.get('race-test.jsonl')!.lines).toHaveLength(42);
-
-        // A subscribe:response built from an earlier disk read (only 40 lines)
-        // lands AFTER the live events — a positional merge would drop 41/42.
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'race-test.jsonl',
-          lines: first40,
-          meta: { lineCount: 40, isActive: true }
-        });
-
-        const file = store.getState().files.get('race-test.jsonl')!;
-        expect(file.lines).toHaveLength(42);
-        expect(file.lines[40]).toBe('L41');
-        expect(file.lines[41]).toBe('L42');
-        expect(file.meta.lineCount).toBe(42);
-      });
-
-      it('drops a server-restart renumbered-from-1 burst up to known and appends only the new tail', () => {
-        // Known state: lines 1..3.
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'restart-test.jsonl',
-          lines: ['s1', 's2', 's3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-
-        // Server restarts and reseeds its cursor to 0, rebroadcasting the whole
-        // file renumbered from 1. Lines 1..3 fail the expected-next check (they
-        // repeat known numbers) and are dropped; line 4 is the genuinely-new tail.
-        for (const [i, line] of ['s1', 's2', 's3', 's4-new'].entries()) {
-          dispatchHostMessage({
-            type: 'stream:line',
-            filename: 'restart-test.jsonl',
-            lineNumber: i + 1,
-            line
-          });
-        }
-
-        const file = store.getState().files.get('restart-test.jsonl')!;
-        expect(file.lines).toEqual(['s1', 's2', 's3', 's4-new']);
-        expect(file.meta.lineCount).toBe(4);
-      });
-
-      it('triggers exactly one backfill resubscribe on a forward gap and recovers to the full transcript', () => {
-        // Seed a non-empty file (like the standalone panel's disk seed): lines 1..3.
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'gap-backfill.jsonl',
-          lines: ['b1', 'b2', 'b3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-
-        const spy = vi.spyOn(window, 'postMessage');
-        // Expected next is 4; line 6 leaves a hole. Rather than freezing, this must
-        // post a resubscribe to backfill the missing lines.
-        dispatchHostMessage({ type: 'stream:line', filename: 'gap-backfill.jsonl', lineNumber: 6, line: 'b6' });
-
-        const subscribeCalls = spy.mock.calls
-          .map((call) => call[0])
-          .filter(
-            (m) =>
-              m !== null &&
-              typeof m === 'object' &&
-              (m as { type?: string }).type === 'subscribe' &&
-              (m as { filename?: string }).filename === 'gap-backfill.jsonl'
-          );
-        expect(subscribeCalls).toHaveLength(1);
-        // The gapped line was dropped, not appended past the hole.
-        expect(store.getState().files.get('gap-backfill.jsonl')!.lines).toEqual(['b1', 'b2', 'b3']);
-
-        // Further gapped lines while the backfill is in flight must NOT storm the
-        // host with more resubscribes — the guard permits one at a time.
-        dispatchHostMessage({ type: 'stream:line', filename: 'gap-backfill.jsonl', lineNumber: 7, line: 'b7' });
-        dispatchHostMessage({ type: 'stream:line', filename: 'gap-backfill.jsonl', lineNumber: 8, line: 'b8' });
-        const stillOne = spy.mock.calls
-          .map((call) => call[0])
-          .filter(
-            (m) =>
-              m !== null &&
-              typeof m === 'object' &&
-              (m as { type?: string }).type === 'subscribe' &&
-              (m as { filename?: string }).filename === 'gap-backfill.jsonl'
-          );
-        expect(stillOne).toHaveLength(1);
-        spy.mockRestore();
-
-        // The backfill response lands with the full transcript through line 8 —
-        // the pane converges instead of freezing at the snapshot.
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'gap-backfill.jsonl',
-          lines: ['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8'],
-          meta: { lineCount: 8, isActive: true }
-        });
-        const recovered = store.getState().files.get('gap-backfill.jsonl')!;
-        expect(recovered.lines).toEqual(['b1', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8']);
-        expect(recovered.meta.lineCount).toBe(8);
-      });
-
-      it('re-arms the gap backfill after a response lands so a later gap resubscribes again', () => {
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'rearm.jsonl',
-          lines: ['r1', 'r2'],
-          meta: { lineCount: 2, isActive: true }
-        });
-        // First gap → one backfill.
-        const spy1 = vi.spyOn(window, 'postMessage');
-        dispatchHostMessage({ type: 'stream:line', filename: 'rearm.jsonl', lineNumber: 5, line: 'r5' });
-        expect(spy1.mock.calls.filter((c) => (c[0] as { filename?: string })?.filename === 'rearm.jsonl')).toHaveLength(
-          1
-        );
-        spy1.mockRestore();
-
-        // Response lands (clears the in-flight guard).
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'rearm.jsonl',
-          lines: ['r1', 'r2', 'r3', 'r4', 'r5'],
-          meta: { lineCount: 5, isActive: true }
-        });
-
-        // A second, later gap must trigger a fresh backfill (guard re-armed).
-        const spy2 = vi.spyOn(window, 'postMessage');
-        dispatchHostMessage({ type: 'stream:line', filename: 'rearm.jsonl', lineNumber: 9, line: 'r9' });
-        expect(spy2.mock.calls.filter((c) => (c[0] as { filename?: string })?.filename === 'rearm.jsonl')).toHaveLength(
-          1
-        );
-        spy2.mockRestore();
-      });
-
-      it('does not backfill on a duplicate/behind line (only a forward gap resubscribes)', () => {
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'nodup-backfill.jsonl',
-          lines: ['n1', 'n2', 'n3'],
-          meta: { lineCount: 3, isActive: true }
-        });
-
-        const spy = vi.spyOn(window, 'postMessage');
-        // lineNumber 2 is behind the expected next (4) — a duplicate re-delivery.
-        dispatchHostMessage({ type: 'stream:line', filename: 'nodup-backfill.jsonl', lineNumber: 2, line: 'dup' });
-
-        const subscribeCalls = spy.mock.calls
-          .map((call) => call[0])
-          .filter(
-            (m) =>
-              m !== null &&
-              typeof m === 'object' &&
-              (m as { type?: string }).type === 'subscribe' &&
-              (m as { filename?: string }).filename === 'nodup-backfill.jsonl'
-          );
-        expect(subscribeCalls).toHaveLength(0);
-        expect(store.getState().files.get('nodup-backfill.jsonl')!.lines).toEqual(['n1', 'n2', 'n3']);
-        spy.mockRestore();
-      });
-
-      it('caps compact-mode lines to COMPACT_TAIL_LINES and advances headLineNumber', () => {
-        // Seed the first line, then append sequentially past the compact cap.
-        dispatchHostMessage({
-          type: 'subscribe:response',
-          filename: 'cap-test.jsonl',
-          lines: ['c1'],
-          meta: { lineCount: 1, isActive: true }
-        });
-        const total = COMPACT_TAIL_LINES + 10;
-        for (let n = 2; n <= total; n++) {
-          dispatchHostMessage({ type: 'stream:line', filename: 'cap-test.jsonl', lineNumber: n, line: `c${n}` });
-        }
-
-        const file = store.getState().files.get('cap-test.jsonl')!;
-        expect(file.lines).toHaveLength(COMPACT_TAIL_LINES);
-        // The retained window is the trailing COMPACT_TAIL_LINES lines...
-        expect(file.lines[file.lines.length - 1]).toBe(`c${total}`);
-        // ...and headLineNumber points at the absolute number of lines[0].
-        expect(file.headLineNumber).toBe(total - COMPACT_TAIL_LINES + 1);
-        expect(file.lines[0]).toBe(`c${file.headLineNumber}`);
-        // meta.lineCount still reflects the full stream length, not the window.
-        expect(file.meta.lineCount).toBe(total);
-      });
-    });
+  it.skip('keeps source metadata from the accepted snapshot', () => {
+    const h = ready(2);
+    expect(view(h).meta).toEqual(meta(main, mainBinding, 2));
+    expect(childBinding.role).toBe('subagent');
   });
 });

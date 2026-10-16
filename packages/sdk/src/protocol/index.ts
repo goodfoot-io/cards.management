@@ -176,6 +176,7 @@ export type {
   StreamDefinition,
   StreamEndedEvent,
   StreamErrorEvent,
+  StreamInvalidatedEvent,
   StreamLineEvent,
   StreamMeta,
   StreamMetaFile,
