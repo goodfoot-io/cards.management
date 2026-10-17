@@ -191,10 +191,30 @@ describe('Claude Code — witnessed-delegation — expanded', () => {
 const GENERATED = 'Subagent transcript for card-1';
 /** Task text real teammate sidecars share: every teammate prompt opens with the same header. */
 const SHARED_TASK = '## Card Repository\n/home/node/.cards/car';
+/** Native agent ids of the 22 subagent sections the main-728 lead session rendered identically. */
 const TEAMMATES = [
   'agent-aconnection-fix-2-51fbfcd79224af0c',
+  'agent-aconnection-fix-cb4e91e6a511f81e',
+  'agent-aexperience-evaluator-6405ff07412837e4',
+  'agent-aextension-fix-4-28c31dcaa73e857b',
+  'agent-aextension-host-788bdc7e11790cf4',
+  'agent-afailure-mode-5c8564b0e49fe37c',
+  'agent-afinal-smoke-9a6cb0eea5798ea9',
+  'agent-alabels-fix-4-3058680e66b44d5e',
   'agent-arenderer-4b61184b7c832f61',
-  'agent-a37e08eab6309e87f'
+  'agent-asdk-fix-4-99cc2492e25e3542',
+  'agent-asdk-log-fix-b4ffbc9b059c5ae8',
+  'agent-asdk-resync-fix-7f1514a0de5d3bdb',
+  'agent-asdk-store-3886e8df97f131d4',
+  'agent-aserver-events-528e7f29db06f9b4',
+  'agent-aserver-live-fix-3-29b5a64f68059444',
+  'agent-aserver-watch-fix-2-b53d1b123e383c7d',
+  'agent-aserver-watch-fix-89dcad8abd5502d2',
+  'agent-aweb-host-55d10eb83eb600b4',
+  'agent-a37e08eab6309e87f',
+  'agent-a801df048e8e72024',
+  'agent-abd8c3b90eb3d0468',
+  'agent-ad1eeabfd152ea2a3'
 ];
 
 /**
@@ -209,7 +229,7 @@ function memberLabels(container: HTMLElement): string[] {
 }
 
 describe('Subagent section identity', () => {
-  it('labels teammates that share the generated sidecar title and task text by their native agent ids', async () => {
+  it('labels 22 teammates that share the generated title and boilerplate task text by agent id alone', async () => {
     const members: HostMember[] = [
       { relPath: MAIN, role: 'main' },
       ...TEAMMATES.map((agentId) => ({
@@ -231,17 +251,18 @@ describe('Subagent section identity', () => {
     await settle();
     const labels = memberLabels(container);
     expect(labels).toEqual(
-      TEAMMATES.map(
-        (agentId) =>
-          `Subagent: ${agentId} — ## Card Repository /home/node/.cards/car · ended · session member, no witnessed delegation`
-      )
+      TEAMMATES.map((agentId) => `Subagent: ${agentId} · ended · session member, no witnessed delegation`)
     );
     expect(new Set(labels).size).toBe(TEAMMATES.length);
     expect(container.textContent).not.toContain(GENERATED);
   });
 
-  it('labels witnessed Agent-tool delegations distinctly at their delegation rows', async () => {
-    const agents = ['A1', 'A2'];
+  it('keeps differing task text on witnessed Agent-tool delegations at their delegation rows', async () => {
+    const tasks: Record<string, string> = {
+      A1: 'Installed-extension smoke for card main-',
+      A2: 'You are running the installed-extension '
+    };
+    const agents = Object.keys(tasks);
     const members: HostMember[] = [
       { relPath: MAIN, role: 'main' },
       ...agents.map((agentId) => ({
@@ -249,7 +270,7 @@ describe('Subagent section identity', () => {
         role: 'subagent' as const,
         agentId,
         title: GENERATED,
-        taskContent: 'In /var/lib/coaxial/cards-worktrees/work'
+        taskContent: tasks[agentId]
       }))
     ];
     const { host, container, settle } = await mount(claude, members);
@@ -274,8 +295,36 @@ describe('Subagent section identity', () => {
     await settle();
     // Witnessed placements carry no placement suffix; the activity suffix is unchanged.
     expect(memberLabels(container)).toEqual([
-      'Subagent: A1 — In /var/lib/coaxial/cards-worktrees/work · running',
-      'Subagent: A2 — In /var/lib/coaxial/cards-worktrees/work · running'
+      'Subagent: A1 — Installed-extension smoke for card main- · running',
+      'Subagent: A2 — You are running the installed-extension · running'
+    ]);
+  });
+
+  it('drops only the task text siblings share, keeping it where it still distinguishes', async () => {
+    const tasks: Record<string, string> = {
+      'agent-D1': 'In /var/lib/coaxial/cards-worktrees/work',
+      'agent-D2': 'In /var/lib/coaxial/cards-worktrees/work',
+      'agent-D3': 'Final installed-extension smoke for card'
+    };
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      ...Object.entries(tasks).map(([agentId, taskContent]) => ({
+        relPath: `SESSION/subagents/${agentId}.jsonl`,
+        role: 'subagent' as const,
+        agentId,
+        title: GENERATED,
+        taskContent
+      }))
+    ];
+    const { host, container, settle } = await mount(claude, members);
+    await act(async () => host.snapshot(MAIN, lines([prompt('Start', 'p1')])));
+    for (const agentId of Object.keys(tasks))
+      await act(async () => host.snapshot(`SESSION/subagents/${agentId}.jsonl`, [], { isActive: true }));
+    await settle();
+    expect(memberLabels(container)).toEqual([
+      'Subagent: agent-D1 · running · session member, no witnessed delegation',
+      'Subagent: agent-D2 · running · session member, no witnessed delegation',
+      'Subagent: agent-D3 — Final installed-extension smoke for card · running · session member, no witnessed delegation'
     ]);
   });
 
@@ -315,7 +364,7 @@ describe('Subagent section identity', () => {
     ]);
   });
 
-  it('flattens and bounds long multi-line task text', async () => {
+  it('keeps the task text of a lone subagent, flattened and bounded', async () => {
     const task = `Line one\n\tline two ${'x'.repeat(80)}`;
     const members: HostMember[] = [
       { relPath: MAIN, role: 'main' },
@@ -370,7 +419,8 @@ describe('Subagent section identity', () => {
     const labels = memberLabels(container);
     expect(labels).toHaveLength(TEAMMATES.length);
     expect(new Set(labels).size).toBe(TEAMMATES.length);
-    for (const [index, agentId] of TEAMMATES.entries()) expect(labels[index]).toContain(`Subagent: ${agentId} — `);
+    for (const [index, agentId] of TEAMMATES.entries())
+      expect(labels[index]).toBe(`Subagent: ${agentId} · running · session member, no witnessed delegation`);
     expect(container.textContent).not.toContain(GENERATED);
   });
 });

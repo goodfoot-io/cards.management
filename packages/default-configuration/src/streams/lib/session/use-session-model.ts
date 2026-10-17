@@ -101,8 +101,9 @@ export function useSessionModel<Payloads extends object>(
       }
       projected.push({ entry, cache });
     }
+    const shared = sharedTasks(projected.map(({ entry }) => entry));
     const titles = distinctTitles(
-      projected.map(({ entry, cache }) => sourceTitle(entry, cache.projection!.header)),
+      projected.map(({ entry, cache }) => sourceTitle(entry, cache.projection!.header, shared)),
       projected.map(({ entry }) => entry)
     );
     const next = new Map<string, SessionSourceModel<Payloads>>();
@@ -224,12 +225,15 @@ const TASK_TITLE_LIMIT = 48;
 /**
  * Display title from accepted membership and native facts only; never invents an agent name.
  * A custom title wins; the card-scoped placeholder subagent title is not an identity and is
- * skipped. Without a title the native agent identity names the source, followed by its task text.
+ * skipped. Without a title the native agent identity names the source, followed by its task text
+ * only when that text tells it apart: task text a sibling shares (typically a boilerplate prompt
+ * prefix cut at the same width) is noise, not identity, and is left out.
  * @param entry - Store entry carrying the accepted membership.
  * @param header - Native header facts of the current projection.
+ * @param shared - Task summaries more than one source of the session carries.
  * @returns Human-readable title.
  */
-function sourceTitle(entry: SessionSourceEntry, header: SessionHeaderFacts): string {
+function sourceTitle(entry: SessionSourceEntry, header: SessionHeaderFacts, shared: ReadonlySet<string>): string {
   const member = entry.view.member;
   const meta = entry.view.meta;
   const cardId = entry.view.source.cardId;
@@ -239,7 +243,24 @@ function sourceTitle(entry: SessionSourceEntry, header: SessionHeaderFacts): str
   if (custom !== undefined) return custom;
   const identity = nativeIdentity(entry);
   const task = taskSummary(meta?.taskContent);
-  return task === null ? identity : `${identity} — ${task}`;
+  return task === null || shared.has(task) ? identity : `${identity} — ${task}`;
+}
+
+/**
+ * Task summaries that two or more sources of the session share, compared as displayed.
+ * @param entries - Store entries.
+ * @returns Shared summaries.
+ */
+function sharedTasks(entries: readonly SessionSourceEntry[]): ReadonlySet<string> {
+  const seen = new Set<string>();
+  const shared = new Set<string>();
+  for (const entry of entries) {
+    const task = taskSummary(entry.view.meta?.taskContent);
+    if (task === null) continue;
+    if (seen.has(task)) shared.add(task);
+    seen.add(task);
+  }
+  return shared;
 }
 
 /**
