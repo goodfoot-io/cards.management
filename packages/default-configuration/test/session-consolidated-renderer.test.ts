@@ -187,6 +187,194 @@ describe('Claude Code — witnessed-delegation — expanded', () => {
   });
 });
 
+/** The card-scoped title transcript sync stamped on every subagent sidecar of `card-1`. */
+const GENERATED = 'Subagent transcript for card-1';
+/** Task text real teammate sidecars share: every teammate prompt opens with the same header. */
+const SHARED_TASK = '## Card Repository\n/home/node/.cards/car';
+const TEAMMATES = [
+  'agent-aconnection-fix-2-51fbfcd79224af0c',
+  'agent-arenderer-4b61184b7c832f61',
+  'agent-a37e08eab6309e87f'
+];
+
+/**
+ * Accessible names of the session-member disclosures, in document order.
+ * @param container - Rendered root.
+ * @returns Button names (the chevron is aria-hidden and textless).
+ */
+function memberLabels(container: HTMLElement): string[] {
+  return [...container.querySelectorAll<HTMLButtonElement>(`${PLACEMENT} > .session-disclosure-button`)].map(
+    (button) => button.textContent ?? ''
+  );
+}
+
+describe('Subagent section identity', () => {
+  it('labels teammates that share the generated sidecar title and task text by their native agent ids', async () => {
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      ...TEAMMATES.map((agentId) => ({
+        relPath: `SESSION/subagents/${agentId}.jsonl`,
+        role: 'subagent' as const,
+        agentId,
+        title: GENERATED,
+        taskContent: SHARED_TASK
+      }))
+    ];
+    const { host, container, settle } = await mount(claude, members);
+    await act(async () => host.snapshot(MAIN, lines([prompt('Coordinate the team', 'p1')]), { isActive: false }));
+    for (const agentId of TEAMMATES)
+      await act(async () =>
+        host.snapshot(`SESSION/subagents/${agentId}.jsonl`, lines([sidechain(agentId, 'Working', `${agentId}-1`)]), {
+          isActive: false
+        })
+      );
+    await settle();
+    const labels = memberLabels(container);
+    expect(labels).toEqual(
+      TEAMMATES.map(
+        (agentId) =>
+          `Subagent: ${agentId} — ## Card Repository /home/node/.cards/car · ended · session member, no witnessed delegation`
+      )
+    );
+    expect(new Set(labels).size).toBe(TEAMMATES.length);
+    expect(container.textContent).not.toContain(GENERATED);
+  });
+
+  it('labels witnessed Agent-tool delegations distinctly at their delegation rows', async () => {
+    const agents = ['A1', 'A2'];
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      ...agents.map((agentId) => ({
+        relPath: `SESSION/subagents/agent-${agentId}.jsonl`,
+        role: 'subagent' as const,
+        agentId,
+        title: GENERATED,
+        taskContent: 'In /var/lib/coaxial/cards-worktrees/work'
+      }))
+    ];
+    const { host, container, settle } = await mount(claude, members);
+    await act(async () =>
+      host.snapshot(
+        MAIN,
+        lines([
+          delegate('TOOL-1', 'call-1'),
+          delegated('TOOL-1', 'A1', 'result-1'),
+          delegate('TOOL-2', 'call-2'),
+          delegated('TOOL-2', 'A2', 'result-2')
+        ])
+      )
+    );
+    for (const agentId of agents)
+      await act(async () =>
+        host.snapshot(
+          `SESSION/subagents/agent-${agentId}.jsonl`,
+          lines([sidechain(agentId, 'Working', `${agentId}-1`)])
+        )
+      );
+    await settle();
+    // Witnessed placements carry no placement suffix; the activity suffix is unchanged.
+    expect(memberLabels(container)).toEqual([
+      'Subagent: A1 — In /var/lib/coaxial/cards-worktrees/work · running',
+      'Subagent: A2 — In /var/lib/coaxial/cards-worktrees/work · running'
+    ]);
+  });
+
+  it('falls back to the bare agent id when a subagent has no task text', async () => {
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      { relPath: 'SESSION/subagents/agent-B1.jsonl', role: 'subagent', agentId: 'agent-B1', title: GENERATED },
+      { relPath: 'SESSION/subagents/agent-B2.jsonl', role: 'subagent', agentId: 'agent-B2', title: GENERATED }
+    ];
+    const { host, container, settle } = await mount(claude, members);
+    await act(async () => host.snapshot(MAIN, lines([prompt('Start', 'p1')])));
+    await act(async () => host.snapshot('SESSION/subagents/agent-B1.jsonl', [], { isActive: true }));
+    await act(async () => host.snapshot('SESSION/subagents/agent-B2.jsonl', [], { isActive: true }));
+    await settle();
+    expect(memberLabels(container)).toEqual([
+      'Subagent: agent-B1 · running · session member, no witnessed delegation',
+      'Subagent: agent-B2 · running · session member, no witnessed delegation'
+    ]);
+  });
+
+  it('keeps a genuinely custom title and disambiguates custom titles two subagents share', async () => {
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      { relPath: 'SESSION/subagents/agent-C1.jsonl', role: 'subagent', agentId: 'agent-C1', title: 'Fix the snapshot' },
+      { relPath: 'SESSION/subagents/agent-C2.jsonl', role: 'subagent', agentId: 'agent-C2', title: 'Review' },
+      { relPath: 'SESSION/subagents/agent-C3.jsonl', role: 'subagent', agentId: 'agent-C3', title: 'Review' }
+    ];
+    const { host, container, settle } = await mount(claude, members);
+    await act(async () => host.snapshot(MAIN, lines([prompt('Start', 'p1')])));
+    for (const id of ['C1', 'C2', 'C3'])
+      await act(async () => host.snapshot(`SESSION/subagents/agent-${id}.jsonl`, [], { isActive: true }));
+    await settle();
+    expect(memberLabels(container)).toEqual([
+      'Subagent: Fix the snapshot · running · session member, no witnessed delegation',
+      'Subagent: Review (agent-C2) · running · session member, no witnessed delegation',
+      'Subagent: Review (agent-C3) · running · session member, no witnessed delegation'
+    ]);
+  });
+
+  it('flattens and bounds long multi-line task text', async () => {
+    const task = `Line one\n\tline two ${'x'.repeat(80)}`;
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      { relPath: CHILD, role: 'subagent', agentId: 'A', title: GENERATED, taskContent: task }
+    ];
+    const { host, container, settle } = await mount(claude, members);
+    await act(async () => host.snapshot(MAIN, lines([prompt('Start', 'p1')])));
+    await act(async () => host.snapshot(CHILD, [], { isActive: true }));
+    await settle();
+    const [label] = memberLabels(container);
+    expect(label).toBe(
+      `Subagent: A — Line one line two ${'x'.repeat(48 - 'Line one line two '.length)}… · running · session member, no witnessed delegation`
+    );
+  });
+
+  it('labels Codex subagent sidecars with the generated title by their native identity', async () => {
+    const members: HostMember[] = [
+      { relPath: 'rollout.jsonl', role: 'main' },
+      { relPath: 'rollout/subagents/thread-1.jsonl', role: 'subagent', agentId: 'thread-1', title: GENERATED },
+      { relPath: 'rollout/subagents/thread-2.jsonl', role: 'subagent', agentId: 'thread-2', title: GENERATED }
+    ];
+    const { host, container, settle } = await mount(codexSessionAdapter as SessionProviderAdapter<object>, members, {
+      streamType: 'codex-session',
+      runtime: 'codex'
+    });
+    await act(async () => host.snapshot('rollout.jsonl', [], { isActive: true }));
+    for (const relPath of ['rollout/subagents/thread-1.jsonl', 'rollout/subagents/thread-2.jsonl'])
+      await act(async () => host.snapshot(relPath, [], { isActive: true }));
+    await settle();
+    expect(memberLabels(container)).toEqual([
+      'Subagent: thread-1 · running · session member, no witnessed delegation',
+      'Subagent: thread-2 · running · session member, no witnessed delegation'
+    ]);
+  });
+
+  it('gives card-detail (compact) sections the same distinct labels', async () => {
+    const members: HostMember[] = [
+      { relPath: MAIN, role: 'main' },
+      ...TEAMMATES.map((agentId) => ({
+        relPath: `SESSION/subagents/${agentId}.jsonl`,
+        role: 'subagent' as const,
+        agentId,
+        title: GENERATED,
+        taskContent: SHARED_TASK
+      }))
+    ];
+    const { host, container, settle } = await mount(claude, members, { mode: 'compact' });
+    await act(async () => host.snapshot(MAIN, lines([prompt('Coordinate the team', 'p1')])));
+    for (const agentId of TEAMMATES)
+      await act(async () => host.snapshot(`SESSION/subagents/${agentId}.jsonl`, [], { isActive: true }));
+    await settle();
+    const labels = memberLabels(container);
+    expect(labels).toHaveLength(TEAMMATES.length);
+    expect(new Set(labels).size).toBe(TEAMMATES.length);
+    for (const [index, agentId] of TEAMMATES.entries()) expect(labels[index]).toContain(`Subagent: ${agentId} — `);
+    expect(container.textContent).not.toContain(GENERATED);
+  });
+});
+
 describe('Paused sources — Retry', () => {
   it('offers Retry on a paused main that asks the host to resynchronize and re-requests it', async () => {
     const { host, container, settle } = await mount(claude, [{ relPath: MAIN, role: 'main' }]);

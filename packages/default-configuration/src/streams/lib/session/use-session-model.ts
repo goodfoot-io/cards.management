@@ -10,7 +10,7 @@
  * @module streams/lib/session/use-session-model
  */
 
-import type { SessionMember } from '@cards.management/sdk/protocol';
+import { isGeneratedSubagentTitle, type SessionMember } from '@cards.management/sdk/protocol';
 import type { StreamStoreState } from '@cards.management/sdk/stream-store';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { SessionProviderAdapter } from './adapter';
@@ -81,7 +81,7 @@ export function useSessionModel<Payloads extends object>(
   const caches = useRef(new Map<string, ProjectionCache<Payloads>>());
 
   const sources = useMemo(() => {
-    const next = new Map<string, SessionSourceModel<Payloads>>();
+    const projected: { entry: SessionSourceEntry; cache: ProjectionCache<Payloads> }[] = [];
     for (const entry of snapshot.entries) {
       let cache = caches.current.get(entry.key);
       if (!cache) {
@@ -99,15 +99,22 @@ export function useSessionModel<Payloads extends object>(
         cache.linkage = entry.source.lines.length > 0 ? adapter.extractLinkage(entry.source) : null;
         cache.source = entry.source;
       }
-      const role = entry.view.member?.role ?? null;
+      projected.push({ entry, cache });
+    }
+    const titles = distinctTitles(
+      projected.map(({ entry, cache }) => sourceTitle(entry, cache.projection!.header)),
+      projected.map(({ entry }) => entry)
+    );
+    const next = new Map<string, SessionSourceModel<Payloads>>();
+    projected.forEach(({ entry, cache }, index) => {
       next.set(entry.key, {
         entry,
         projection: cache.projection!,
         linkage: cache.linkage,
-        role,
-        title: sourceTitle(entry, cache.projection!.header)
+        role: entry.view.member?.role ?? null,
+        title: titles[index]!
       });
-    }
+    });
     return next;
   }, [snapshot, adapter]);
 
@@ -211,8 +218,13 @@ export function restoredIdAbsent(id: string, entries: ReadonlyMap<string, Sessio
   return [...entries.values()].every(complete);
 }
 
+/** Longest task text, in code points, a title carries before it is cut with an ellipsis. */
+const TASK_TITLE_LIMIT = 48;
+
 /**
  * Display title from accepted membership and native facts only; never invents an agent name.
+ * A custom title wins; the card-scoped placeholder subagent title is not an identity and is
+ * skipped. Without a title the native agent identity names the source, followed by its task text.
  * @param entry - Store entry carrying the accepted membership.
  * @param header - Native header facts of the current projection.
  * @returns Human-readable title.
@@ -220,15 +232,56 @@ export function restoredIdAbsent(id: string, entries: ReadonlyMap<string, Sessio
 function sourceTitle(entry: SessionSourceEntry, header: SessionHeaderFacts): string {
   const member = entry.view.member;
   const meta = entry.view.meta;
-  return (
-    member?.title ??
-    meta?.title ??
-    header.title ??
-    member?.agentId ??
-    meta?.agentId ??
-    entry.view.source.relPath.split('/').at(-1) ??
-    entry.view.source.relPath
+  const cardId = entry.view.source.cardId;
+  const custom = [member?.title, meta?.title, header.title].find(
+    (title): title is string => title !== undefined && title.trim() !== '' && !isGeneratedSubagentTitle(title, cardId)
   );
+  if (custom !== undefined) return custom;
+  const identity = nativeIdentity(entry);
+  const task = taskSummary(meta?.taskContent);
+  return task === null ? identity : `${identity} — ${task}`;
+}
+
+/**
+ * Native identity of a source: its provider agent id, else its native filename.
+ * @param entry - Store entry.
+ * @returns Identity text.
+ */
+function nativeIdentity(entry: SessionSourceEntry): string {
+  const { member, meta, source } = entry.view;
+  return member?.agentId ?? meta?.agentId ?? source.relPath.split('/').at(-1) ?? source.relPath;
+}
+
+/**
+ * Single-line, bounded form of a source's native task text.
+ * @param text - Task text from the sidecar, if any.
+ * @returns Summary, or null when there is no task text.
+ */
+function taskSummary(text: string | undefined): string | null {
+  // Control characters (including line breaks) collapse with other whitespace into single spaces.
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping control characters is the point
+  const flat = text?.replace(/[\s\u0000-\u001f\u007f]+/g, ' ').trim();
+  if (!flat) return null;
+  const points = [...flat];
+  return points.length > TASK_TITLE_LIMIT ? `${points.slice(0, TASK_TITLE_LIMIT).join('').trimEnd()}…` : flat;
+}
+
+/**
+ * Makes titles unique within the session: a title shared by several sources gains each one's
+ * native identity, or its source path when the identity is already part of the title.
+ * @param titles - Candidate titles, index-aligned with `entries`.
+ * @param entries - Store entries.
+ * @returns Titles no two sources share.
+ */
+function distinctTitles(titles: readonly string[], entries: readonly SessionSourceEntry[]): string[] {
+  const counts = new Map<string, number>();
+  for (const title of titles) counts.set(title, (counts.get(title) ?? 0) + 1);
+  return titles.map((title, index) => {
+    if (counts.get(title) === 1) return title;
+    const entry = entries[index]!;
+    const identity = nativeIdentity(entry);
+    return title.includes(identity) ? `${title} (${entry.view.source.relPath})` : `${title} (${identity})`;
+  });
 }
 
 /**

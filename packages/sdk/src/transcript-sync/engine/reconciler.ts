@@ -294,10 +294,10 @@ async function writeSidecarIfAbsent(
   // change with it.
   const agentId = spec.role === 'subagent' ? basename(relPath, extname(relPath)) : undefined;
 
-  const title =
-    spec.role === 'subagent'
-      ? `Subagent transcript for ${manifest.cardId}`
-      : `${manifest.runtime} session for ${manifest.cardId}`;
+  // A subagent gets no generated title: any card-scoped text would be identical across every
+  // subagent of the card, and its native identity is already recorded as `agentId` (with the task
+  // prompt arriving later as `taskContent`), which is what renderers label it by.
+  const title = spec.role === 'subagent' ? undefined : `${manifest.runtime} session for ${manifest.cardId}`;
 
   const meta: StreamMetaFile = {
     version: 1,
@@ -307,7 +307,7 @@ async function writeSidecarIfAbsent(
     sessionId: manifest.sessionId,
     role: spec.role,
     ...(agentId !== undefined ? { agentId } : {}),
-    title,
+    ...(title !== undefined ? { title } : {}),
     sourcePath: srcPath,
     startedAt: new Date(now()).toISOString(),
     lineCount: 0

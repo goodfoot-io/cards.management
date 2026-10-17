@@ -378,6 +378,7 @@ export type {
   StreamSourceSnapshot,
   StreamSourceVersion
 } from './stream.js';
+export { isGeneratedSubagentTitle } from './stream.js';
 // --- Timeline Types ---
 export type {
   Comment,

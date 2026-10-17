@@ -386,6 +386,7 @@ export type {
   StreamSourceSnapshot,
   StreamSourceVersion
 } from './types/stream.js';
+export { isGeneratedSubagentTitle } from './types/stream.js';
 export {
   clearsCardDeletion,
   type InvalidBranchEntry,
