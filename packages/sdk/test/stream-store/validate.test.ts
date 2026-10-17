@@ -76,7 +76,9 @@ const rendererValid: unknown[] = [
       ],
       ranges: [['tool-1', { first: 3, count: 40 }]]
     }
-  }
+  },
+  { type: 'renderer:diagnostic', generation, code: 'rejected-message' },
+  { type: 'renderer:diagnostic', generation, code: 'source-paused', source: main, reason: 'resync-overflow', count: 7 }
 ];
 
 describe('validateHostMessage', () => {
@@ -276,6 +278,28 @@ describe('validateRendererMessage', () => {
       { type: 'close' }
     ];
     for (const message of bad) expect(validateRendererMessage(message).ok).toBe(false);
+  });
+
+  it('accepts only identifier-only renderer diagnostics without correlation or content', () => {
+    const base = { type: 'renderer:diagnostic', generation, code: 'source-paused' };
+    const bad = [
+      { ...base, code: 'resync-overflow' },
+      { ...base, code: 'unknown' },
+      { ...base, requestId: 'r1' },
+      { ...base, reason: '' },
+      { ...base, reason: 'Has Space' },
+      { ...base, reason: '{"type":"assistant"}' },
+      { ...base, reason: 'a'.repeat(65) },
+      { ...base, count: 0 },
+      { ...base, count: 1.5 },
+      { ...base, count: Number.MAX_SAFE_INTEGER + 1 },
+      { ...base, source: { ...main, relPath: '../x' } },
+      { ...base, source: undefined },
+      { type: 'renderer:diagnostic', code: 'source-paused' }
+    ];
+    for (const message of bad)
+      expect(validateRendererMessage(message), JSON.stringify(message)).toMatchObject({ ok: false });
+    expect(validateRendererMessage({ ...base, reason: 'a'.repeat(64) }).ok).toBe(true);
   });
 });
 

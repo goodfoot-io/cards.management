@@ -8,6 +8,7 @@
  * @module stream-store
  */
 
+export { createDiagnosticLimiter, type DiagnosticLimiter } from './limit.js';
 export { createStreamStore, getWindowStreamStore } from './store.js';
 export type {
   CloseMessage,
@@ -23,6 +24,7 @@ export type {
   LayoutSizeMessage,
   MessageValidation,
   OpenFileMessage,
+  RendererDiagnosticMessage,
   RendererToHostMessage,
   SessionResyncMessage,
   SessionUpdateMessage,
@@ -53,6 +55,7 @@ export type {
   ViewStateMessage
 } from './types.js';
 export {
+  DIAGNOSTIC_REASON_PATTERN,
   MAX_APPEND_LINES,
   MAX_LAYOUT_HEIGHT,
   MAX_SCROLL_DELTA,

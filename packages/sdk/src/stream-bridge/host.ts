@@ -6,6 +6,8 @@
  * incarnation is invalidated before any successor content. Renderer messages
  * are validated and checked against the host-bound session's exact membership;
  * renderer-supplied card or session fields never widen that scope.
+ * Renderer diagnostics are rate-limited again here and logged only with a
+ * source inside that membership.
  * @summary Session host bridge between the controller and one renderer
  * @module stream-bridge/host
  */
@@ -28,6 +30,7 @@ import {
   type SessionSourceState,
   streamSourceKey
 } from '../stream-session/index.js';
+import { createDiagnosticLimiter } from '../stream-store/limit.js';
 import {
   type CloseMessage,
   type HostToRendererMessage,
@@ -53,13 +56,16 @@ export type StreamHostSignal = ThemeChangeMessage | LayoutHandshakeMessage;
 
 /** Identifier-only bridge diagnostic; never carries native content. */
 export interface StreamBridgeDiagnostic {
-  /** Controller category, or a bridge-level rejection. */
-  code: SessionDiagnostic['code'] | 'rejected-message' | 'stale-generation';
+  /** Controller category, a bridge-level rejection, or a report from the renderer store. */
+  code: SessionDiagnostic['code'] | 'rejected-message' | 'stale-generation' | 'renderer-diagnostic';
   /** Relevant source, if known. */
   source?: StreamSourceRef;
   /** Correlated request, if known. */
   requestId?: string;
-  /** Kebab-case rejection reason, if any. */
+  /**
+   * Kebab-case rejection reason, if any. For `renderer-diagnostic` it is the renderer's code,
+   * followed by `:` and the renderer's reason when it gave one (`source-paused:resync-overflow`).
+   */
   reason?: string;
   /** Occurrences this line coalesces, when more than one. */
   count?: number;
@@ -242,6 +248,7 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
   let sentRevision = 0;
   let connected = true;
   let view: StreamViewState | null = null;
+  const limit = createDiagnosticLimiter();
   if (options.initialViewState !== undefined) {
     const checked = validateViewState(options.initialViewState);
     if (checked.ok) view = structuredClone(checked.message);
@@ -627,6 +634,19 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
           view = structuredClone(message.state);
           options.viewState?.(structuredClone(message.state));
           return;
+        case 'renderer:diagnostic': {
+          const scoped = message.source ? member(message.source) : undefined;
+          const detail = message.reason ? `${message.code}:${message.reason}` : message.code;
+          const count = limit(JSON.stringify([detail, scoped ? streamSourceKey(scoped) : '']), message.count ?? 1);
+          if (count === 0) return;
+          options.diagnostic?.({
+            code: 'renderer-diagnostic',
+            reason: detail,
+            ...(scoped ? { source: structuredClone(scoped) } : {}),
+            ...(count > 1 ? { count } : {})
+          });
+          return;
+        }
         default:
           options.layout?.(message);
       }

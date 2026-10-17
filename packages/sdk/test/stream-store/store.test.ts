@@ -763,3 +763,72 @@ describe('theme, layout, actions, and disposal', () => {
     expect(childBinding.role).toBe('subagent');
   });
 });
+
+describe('diagnostics forwarded to the host', () => {
+  /**
+   * Renderer diagnostics the store posted to the host.
+   * @param h - Harness.
+   * @returns Posted diagnostic messages in order.
+   */
+  const reports = (h: ReturnType<typeof harness>) => h.sent.filter((message) => message.type === 'renderer:diagnostic');
+
+  it('reports a store-originated pause with its visible error and no request correlation', () => {
+    const h = harness({ forwardDiagnostics: true });
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3'] }));
+    h.deliver(append(3, ['other']));
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'other'] }));
+    expect(view(h)).toMatchObject({ status: 'paused', error: 'inconsistent-source' });
+    expect(reports(h)).toEqual([
+      { type: 'renderer:diagnostic', generation, code: 'inconsistent-source', source: main },
+      { type: 'renderer:diagnostic', generation, code: 'inconsistent-source', source: main },
+      { type: 'renderer:diagnostic', generation, code: 'source-paused', source: main, reason: 'inconsistent-source' }
+    ]);
+    expect(JSON.stringify(reports(h))).not.toMatch(/other|req-/);
+  });
+
+  it('reports a host-ordered pause too, so every renderer pause reaches the host log', () => {
+    const h = harness({ forwardDiagnostics: true });
+    h.deliver({
+      type: 'source:error',
+      generation,
+      requestId: h.lastRequestId(),
+      source: main,
+      error: 'resync-overflow'
+    });
+    expect(view(h)).toMatchObject({ status: 'paused', error: 'resync-overflow' });
+    expect(reports(h)).toEqual([
+      { type: 'renderer:diagnostic', generation, code: 'source-paused', source: main, reason: 'resync-overflow' }
+    ]);
+  });
+
+  it('rate-limits each code, source, and reason to powers of two, carrying the coalesced count', () => {
+    const h = harness({ forwardDiagnostics: true });
+    for (let index = 0; index < 9; index++) h.deliver({ type: 'bogus', generation });
+    expect(h.diagnostics).toHaveLength(9);
+    expect(reports(h)).toEqual([
+      { type: 'renderer:diagnostic', generation, code: 'rejected-message', reason: 'unknown-type' },
+      { type: 'renderer:diagnostic', generation, code: 'rejected-message', reason: 'unknown-type' },
+      { type: 'renderer:diagnostic', generation, code: 'rejected-message', reason: 'unknown-type', count: 2 },
+      { type: 'renderer:diagnostic', generation, code: 'rejected-message', reason: 'unknown-type', count: 4 }
+    ]);
+    // A different reason is limited independently.
+    h.deliver({ type: 'source:snapshot' });
+    expect(reports(h).at(-1)).toEqual({
+      type: 'renderer:diagnostic',
+      generation,
+      code: 'rejected-message',
+      reason: 'invalid-message'
+    });
+  });
+
+  it('posts nothing to the host unless forwarding is enabled, and nothing after disposal', () => {
+    const quiet = harness();
+    quiet.deliver({ type: 'bogus', generation });
+    expect(quiet.diagnostics).toHaveLength(1);
+    expect(reports(quiet)).toHaveLength(0);
+    const h = harness({ forwardDiagnostics: true });
+    h.store.dispose();
+    h.deliver({ type: 'bogus', generation });
+    expect(reports(h)).toHaveLength(0);
+  });
+});

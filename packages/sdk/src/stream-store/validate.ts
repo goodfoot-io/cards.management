@@ -13,6 +13,7 @@
 
 import type { HostToRendererMessage, MessageValidation, RendererToHostMessage, StreamViewState } from './types.js';
 import {
+  DIAGNOSTIC_REASON_PATTERN,
   MAX_APPEND_LINES,
   MAX_LAYOUT_HEIGHT,
   MAX_SCROLL_DELTA,
@@ -35,6 +36,13 @@ const LOAD_ERRORS = [
   'inconsistent-source',
   'resync-overflow',
   'rejected-scope'
+];
+const RENDERER_DIAGNOSTICS = [
+  'rejected-message',
+  'stale-response',
+  'source-reset',
+  'inconsistent-source',
+  'source-paused'
 ];
 const INVALIDATION_REASONS = ['replaced', 'removed', 'binding-changed', 'server-restarted'];
 const SCROLL_KEYS = ['line-up', 'line-down', 'page-up', 'page-down', 'start', 'end'];
@@ -488,6 +496,16 @@ function renderer(value: unknown): void {
       const record = exact(value, ['type', 'generation', 'state'], [], 'invalid-message');
       token(record.generation, 'invalid-generation');
       viewState(record.state);
+      return;
+    }
+    case 'renderer:diagnostic': {
+      const record = exact(value, ['type', 'generation', 'code'], ['source', 'reason', 'count'], 'invalid-message');
+      token(record.generation, 'invalid-generation');
+      if (!RENDERER_DIAGNOSTICS.includes(record.code as string)) reject('invalid-diagnostic');
+      if ('source' in record) source(record.source);
+      if ('reason' in record && (typeof record.reason !== 'string' || !DIAGNOSTIC_REASON_PATTERN.test(record.reason)))
+        reject('invalid-diagnostic');
+      if ('count' in record) positive(record.count, 'invalid-diagnostic');
       return;
     }
     default:

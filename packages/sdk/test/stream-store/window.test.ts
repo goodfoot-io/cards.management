@@ -63,4 +63,24 @@ describe('getWindowStreamStore', () => {
     expect(document.documentElement.getAttribute('data-vscode-theme-kind')).toBe('light');
     expect(document.documentElement.style.getPropertyValue('--vscode-foreground')).toBe('red');
   });
+
+  it('reports a renderer pause to the parent as an identifier-only diagnostic', async () => {
+    const { getWindowStreamStore } = await import('../../src/stream-store/store.js');
+    const store = getWindowStreamStore();
+    const view = () => store.getState().sources.get(JSON.stringify([main.cardId, main.streamType, main.relPath]));
+    const requestId = view()?.requestId;
+    if (!requestId) throw new Error('main not subscribed');
+    // The suite setup restores spies after each test, so this test watches the parent itself.
+    const parentPost = vi.spyOn(window, 'postMessage');
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: { type: 'source:error', generation, requestId, source: main, error: 'resync-overflow' },
+        source: window.parent
+      })
+    );
+    expect(view()).toMatchObject({ status: 'paused', error: 'resync-overflow' });
+    expect(parentPost.mock.calls.map(([message]) => message)).toEqual([
+      { type: 'renderer:diagnostic', generation, code: 'source-paused', source: main, reason: 'resync-overflow' }
+    ]);
+  });
 });

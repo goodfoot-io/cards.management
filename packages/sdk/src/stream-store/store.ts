@@ -14,6 +14,10 @@
  * and any the store cannot place, are dropped; overflow recovery and its
  * backoff belong to the host's session controller alone.
  *
+ * Diagnostics stay identifier-only. With `forwardDiagnostics` the store also
+ * reports them to the host as rate-limited `renderer:diagnostic` messages, so
+ * a renderer-side pause is visible in the host's log.
+ *
  * @summary Zustand vanilla store for session renderer state
  * @module stream-store/store
  */
@@ -27,6 +31,7 @@ import type {
   StreamSourceRef,
   StreamSourceVersion
 } from '../protocol/types/stream.js';
+import { createDiagnosticLimiter } from './limit.js';
 import type {
   HostToRendererMessage,
   LayoutPayload,
@@ -47,7 +52,7 @@ import type {
   StreamStoreOptions,
   StreamStoreState
 } from './types.js';
-import { TAIL_HISTORY_LINES } from './types.js';
+import { DIAGNOSTIC_REASON_PATTERN, TAIL_HISTORY_LINES } from './types.js';
 import { validateHostMessage, validateRendererMessage, validateViewState } from './validate.js';
 
 declare global {
@@ -167,6 +172,7 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
   const works = new Map<string, SourceWork>();
   const dirty = new Set<SourceWork>();
   let disposed = false;
+  const limit = createDiagnosticLimiter();
   /** Key of the main already auto-subscribed; a main is auto-subscribed at most once. */
   let autoMain: string | null = null;
 
@@ -196,6 +202,30 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     extra: { requestId?: string; reason?: string } = {}
   ): void {
     options.diagnostic?.({ code, ...(work ? { source: { ...work.source } } : {}), ...extra });
+    if (options.forwardDiagnostics) report(code, work, extra.reason);
+  }
+
+  /**
+   * Posts a rate-limited diagnostic to the host. A report that fails validation is dropped
+   * silently, since diagnosing it would report again.
+   * @param code - Diagnostic category.
+   * @param work - Related source.
+   * @param reason - Rejection reason; omitted when it is not a kebab-case identifier.
+   */
+  function report(code: StreamStoreDiagnostic['code'], work?: SourceWork, reason?: string): void {
+    if (disposed) return;
+    const safe = reason !== undefined && DIAGNOSTIC_REASON_PATTERN.test(reason) ? reason : undefined;
+    const count = limit(JSON.stringify([code, work ? sourceKey(work.source) : '', safe ?? '']));
+    if (count === 0) return;
+    const message: RendererToHostMessage = {
+      type: 'renderer:diagnostic',
+      generation,
+      code,
+      ...(work ? { source: { ...work.source } } : {}),
+      ...(safe ? { reason: safe } : {}),
+      ...(count > 1 ? { count } : {})
+    };
+    if (validateRendererMessage(message).ok) options.post(message);
   }
 
   /**
@@ -332,6 +362,7 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
    * @param error - Visible failure.
    */
   function pause(work: SourceWork, error: StreamSourceLoadError): void {
+    diagnose('source-paused', work, { reason: error });
     work.status = 'paused';
     work.error = error;
     work.awaiting = false;
@@ -889,6 +920,7 @@ export function getWindowStreamStore(): StreamRendererStore {
   windowStore = createStreamStore({
     init,
     post: (message) => parent.postMessage(message, '*'),
+    forwardDiagnostics: true,
     listen: (listener) => {
       const handler = (event: MessageEvent): void => {
         if (event.source === parent) listener(event.data);

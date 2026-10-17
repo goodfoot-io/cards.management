@@ -106,6 +106,8 @@ interface Rig {
   open(mode?: StreamDisplayMode): StreamRendererStore;
   /** Delivers queued messages in both directions until quiescent. */
   pump(): Promise<void>;
+  /** Observes every host post as it is made and every renderer message as the host receives it. */
+  observe(listener: (from: 'host' | 'renderer', message: unknown) => void): void;
   view(source?: StreamSourceRef): StreamSourceView | undefined;
   store(): StreamRendererStore;
 }
@@ -133,6 +135,7 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
   let rendererListener: ((data: unknown) => void) | undefined;
   let renderer: StreamRendererStore | undefined;
   let requests = 0;
+  const observers: Array<(from: 'host' | 'renderer', message: unknown) => void> = [];
   const listFailures = new Map<(records: StreamMeta[]) => void, (reason: unknown) => void>();
   const cards: CardsStreamClient = {
     listStreams: () =>
@@ -174,6 +177,7 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
     post(message) {
       posted.push(message);
       toRenderer.push(message);
+      for (const observer of observers) observer('host', message);
     },
     ready: (init) => inits.push(init),
     action: (action) => actions.push(action),
@@ -220,7 +224,8 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
             rendererListener = undefined;
           };
         },
-        createRequestId: () => `req-${++requests}`
+        createRequestId: () => `req-${++requests}`,
+        forwardDiagnostics: true
       });
       bridge.attach();
       return renderer;
@@ -229,10 +234,15 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
       for (let round = 0; round < 50; round++) {
         await flush();
         if (toRenderer.length === 0 && toHost.length === 0) return;
-        while (toHost.length > 0) bridge.receive(toHost.shift());
+        while (toHost.length > 0) {
+          const message = toHost.shift();
+          for (const observer of observers) observer('renderer', message);
+          bridge.receive(message);
+        }
         while (toRenderer.length > 0) rendererListener?.(toRenderer.shift());
       }
     },
+    observe: (listener) => observers.push(listener),
     view(source = main) {
       return renderer?.getState().sources.get(JSON.stringify([source.cardId, source.streamType, source.relPath]));
     },
@@ -775,6 +785,8 @@ interface Server {
   settle(options?: { fire?: boolean }): Promise<void>;
   /** Number of reads answered so far. */
   served(): number;
+  /** Replaces a source with a new incarnation holding `next`, publishing the old one's invalidation. */
+  reset(source: StreamSourceRef, next: string[]): void;
 }
 
 /**
@@ -791,6 +803,8 @@ function serve(r: Rig, sources: Array<[StreamSourceRef, string[]]>): Server {
     if (!entry) throw new Error(`unknown source ${relPath}`);
     return entry;
   };
+  const versions = new Map<string, StreamSourceVersion>();
+  const versionOf = (relPath: string): StreamSourceVersion => versions.get(relPath) ?? v1;
   let served = 0;
   return {
     lines,
@@ -802,7 +816,7 @@ function serve(r: Rig, sources: Array<[StreamSourceRef, string[]]>): Server {
           r.emit({
             type: 'append',
             source,
-            version: v1,
+            version: versionOf(source.relPath),
             binding: bindingOf(source),
             lineNumber: target.length,
             line: target[target.length - 1] ?? ''
@@ -820,13 +834,22 @@ function serve(r: Rig, sources: Array<[StreamSourceRef, string[]]>): Server {
             const [source, all] = content(read.source.relPath);
             const first = read.tail === undefined ? 1 : Math.max(1, all.length - read.tail + 1);
             served++;
-            read.resolve(serverSnapshot(source, all.slice(first - 1), { first }));
+            read.resolve(
+              serverSnapshot(source, all.slice(first - 1), { first, version: versionOf(read.source.relPath) })
+            );
           } else if (options.fire && r.listeners() > 2) r.fire();
           else break;
         }
       }
     },
-    served: () => served
+    served: () => served,
+    reset(source, next) {
+      const old = versionOf(source.relPath);
+      versions.set(source.relPath, { serverEpoch: old.serverEpoch, sourceEpoch: `${old.sourceEpoch}-next` });
+      const target = content(source.relPath)[1];
+      target.splice(0, target.length, ...next);
+      r.emit({ type: 'invalidated', source, version: old, binding: bindingOf(source), reason: 'replaced' });
+    }
   };
 }
 
@@ -1302,5 +1325,205 @@ describe('overflow diagnostics are coalesced per recovery episode', () => {
     // Every overflow of the episode, including those absorbed by an in-flight read, is counted.
     expect(exhausted[0]?.count).toBeGreaterThan(SESSION_READ_RETRY_DELAYS_MS.length);
     expect(JSON.stringify(r.diagnostics)).not.toContain('jsonl:');
+  });
+});
+
+/**
+ * Watches the wire for the forwarding invariant the renderer relies on: the host sends a source
+ * append, lifecycle, or status only once it has answered the renderer's latest request for that
+ * source, as the host received it. A renderer request, an invalidation, a typed error, and a
+ * reconnection each leave the source unanswered until a correlated snapshot follows.
+ * @param r - Rig to observe from now on.
+ * @param ready - Sources whose current request the renderer already holds answered.
+ * @returns Live list of violations, plus how many content messages were checked.
+ */
+function guardForwarding(r: Rig, ready: StreamSourceRef[] = [main]): { violations: string[]; checked: () => number } {
+  const violations: string[] = [];
+  const state = new Map<string, { request: string | null; answered: boolean }>(
+    ready.map((source) => {
+      expect(r.view(source)).toMatchObject({ status: 'ready' });
+      return [source.relPath, { request: r.view(source)?.requestId ?? null, answered: true }];
+    })
+  );
+  let checked = 0;
+  r.observe((from, raw) => {
+    const message = raw as { type: string; source?: StreamSourceRef; requestId?: string; state?: string };
+    const key = message.source?.relPath ?? '';
+    const entry = state.get(key) ?? { request: null, answered: false };
+    state.set(key, entry);
+    if (from === 'renderer') {
+      if (message.type === 'source:subscribe') entry.request = message.requestId ?? null;
+      if (message.type === 'source:subscribe' || message.type === 'source:unsubscribe') entry.answered = false;
+      if (message.type === 'source:unsubscribe') entry.request = null;
+      return;
+    }
+    switch (message.type) {
+      case 'source:snapshot':
+        if (message.requestId === entry.request) entry.answered = true;
+        return;
+      case 'source:error':
+        if (message.requestId === entry.request) entry.answered = false;
+        return;
+      case 'source:invalidated':
+        entry.answered = false;
+        return;
+      case 'connection:state':
+        if (message.state === 'connected') for (const each of state.values()) each.answered = false;
+        return;
+      case 'source:append':
+      case 'source:lifecycle':
+      case 'source:status':
+        checked++;
+        if (!entry.answered) violations.push(`${message.type} ${key} before answering ${entry.request ?? 'nothing'}`);
+    }
+  });
+  return { violations, checked: () => checked };
+}
+
+/**
+ * Asserts the renderer holds exactly the server's whole transcript: no duplicate, gap, or lost line.
+ * @param r - Rig.
+ * @param server - Its server.
+ * @param source - Source to check.
+ */
+function holdsExactly(r: Rig, server: Server, source: StreamSourceRef = main): void {
+  expect(r.view(source)).toMatchObject({ status: 'ready', error: null, firstLineNumber: 1 });
+  expect(r.view(source)?.lines).toEqual(server.lines.get(source));
+}
+
+describe('the host never forwards source content for an unanswered request', () => {
+  it('drops an append posted before a re-request and converges on the covering snapshot', async () => {
+    const { r, server } = await served([[main, ['l1', 'l2']]]);
+    const guard = guardForwarding(r);
+    const seen = statusesOf(r);
+    // The host posts an append to the answered request; before it arrives the renderer re-requests.
+    server.write(main, 1);
+    r.store().subscribeSource(main, 'full');
+    await r.pump();
+    expect(r.view()).toMatchObject({ lines: ['l1', 'l2'] });
+    // More lines land while the re-request's read is in flight; none are forwarded.
+    const before = r.posted.length;
+    server.write(main, 2);
+    await r.pump();
+    expect(r.posted.slice(before).map((message) => message.type)).toEqual([]);
+    await server.settle();
+    holdsExactly(r, server);
+    expect(seen).not.toContain('paused');
+    server.write(main, 1);
+    await r.pump();
+    holdsExactly(r, server);
+    expect(guard.violations).toEqual([]);
+    expect(guard.checked()).toBeGreaterThan(0);
+  });
+
+  it('holds across a subagent subscription, reconnection, a source reset, and Retry while lines keep arriving', async () => {
+    const { r, server } = await served([
+      [main, ['l1']],
+      [child, ['c1']]
+    ]);
+    const guard = guardForwarding(r);
+    const writeBoth = (): void => {
+      server.write(main, 2);
+      server.write(child, 2);
+    };
+    // Subscribe: the child's first request is answered only after its read.
+    r.store().subscribeSource(child, 'full');
+    writeBoth();
+    await server.settle();
+    writeBoth();
+    await r.pump();
+    holdsExactly(r, server);
+    holdsExactly(r, server, child);
+
+    // Reconnection: every wanted source is re-requested and re-answered.
+    r.emit({ type: 'connection', connected: false });
+    writeBoth();
+    await r.pump();
+    r.emit({ type: 'connection', connected: true });
+    writeBoth();
+    await r.pump();
+    writeBoth();
+    await server.settle();
+    holdsExactly(r, server);
+    holdsExactly(r, server, child);
+
+    // Source reset: the old incarnation is invalidated before any successor content.
+    server.reset(main, ['n1', 'n2']);
+    writeBoth();
+    await r.pump();
+    writeBoth();
+    await server.settle();
+    holdsExactly(r, server);
+    holdsExactly(r, server, child);
+
+    // Retry: a paused source is re-requested and answered before live delivery resumes.
+    server.write(child, 1, true);
+    r.tick();
+    await r.pump();
+    r.lists.shift()?.(
+      [...server.lines].map(([source, all]) => meta(source, source === child ? childBinding : mainBinding, all.length))
+    );
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new ApiError('changed during read', 'STREAM_SOURCE_INCOHERENT'));
+      await r.pump();
+      writeBoth();
+      r.fire();
+      await r.pump();
+    }
+    expect(r.view(child)).toMatchObject({ status: 'paused', error: 'inconsistent-source' });
+    r.store().retry();
+    writeBoth();
+    await server.settle();
+    writeBoth();
+    await server.settle();
+    holdsExactly(r, server);
+    holdsExactly(r, server, child);
+
+    expect(guard.violations).toEqual([]);
+    expect(guard.checked()).toBeGreaterThan(20);
+  });
+});
+
+describe('renderer diagnostics reach the host log', () => {
+  it('logs a renderer pause as a renderer-diagnostic with its reason and source', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    r.diagnostics.length = 0;
+    await exhaustOverflow(r, server);
+    await r.pump();
+    expect(r.diagnostics.filter((event) => event.code === 'renderer-diagnostic')).toEqual([
+      { code: 'renderer-diagnostic', reason: 'source-paused:resync-overflow', source: main }
+    ]);
+    expect(JSON.stringify(r.diagnostics)).not.toContain('jsonl:');
+  });
+
+  it('rate-limits renderer reports again on the host, summing their counts, and scopes their sources', async () => {
+    const { r } = await served();
+    r.diagnostics.length = 0;
+    const report = { type: 'renderer:diagnostic', generation, code: 'rejected-message', reason: 'invalid-lines' };
+    for (let index = 0; index < 9; index++) r.bridge.receive({ ...report, count: 3 });
+    expect(r.diagnostics).toEqual([
+      { code: 'renderer-diagnostic', reason: 'rejected-message:invalid-lines', count: 3 },
+      { code: 'renderer-diagnostic', reason: 'rejected-message:invalid-lines', count: 3 },
+      { code: 'renderer-diagnostic', reason: 'rejected-message:invalid-lines', count: 6 },
+      { code: 'renderer-diagnostic', reason: 'rejected-message:invalid-lines', count: 12 }
+    ]);
+    r.diagnostics.length = 0;
+    // A source outside current membership is never logged.
+    r.bridge.receive({
+      type: 'renderer:diagnostic',
+      generation,
+      code: 'source-reset',
+      source: { ...main, relPath: 'other.jsonl' }
+    });
+    r.bridge.receive({ type: 'renderer:diagnostic', generation, code: 'source-reset', source: main });
+    r.bridge.receive({ type: 'renderer:diagnostic', generation: 'view-0', code: 'source-reset' });
+    r.bridge.receive({ ...report, reason: 'Native Line' });
+    expect(r.diagnostics).toEqual([
+      { code: 'renderer-diagnostic', reason: 'source-reset' },
+      { code: 'renderer-diagnostic', reason: 'source-reset', source: main },
+      { code: 'stale-generation' },
+      { code: 'rejected-message', reason: 'invalid-diagnostic' }
+    ]);
   });
 });

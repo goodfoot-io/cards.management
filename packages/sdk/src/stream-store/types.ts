@@ -341,6 +341,24 @@ export interface ViewStateMessage {
   state: StreamViewState;
 }
 
+/** Pattern every renderer diagnostic reason must match: kebab-case identifiers only. */
+export const DIAGNOSTIC_REASON_PATTERN = /^[a-z0-9-]{1,64}$/;
+
+/**
+ * Identifier-only renderer diagnostic for the host's log, rate-limited by the renderer.
+ * Never carries native content or request correlation.
+ */
+export interface RendererDiagnosticMessage {
+  type: 'renderer:diagnostic';
+  generation: string;
+  code: StreamStoreDiagnostic['code'];
+  source?: StreamSourceRef;
+  /** Kebab-case reason matching {@link DIAGNOSTIC_REASON_PATTERN}. */
+  reason?: string;
+  /** Occurrences this report coalesces, a positive safe integer; omitted for one. */
+  count?: number;
+}
+
 /** Messages sent from the renderer to the host. */
 export type RendererToHostMessage =
   | SourceSubscribeMessage
@@ -353,7 +371,8 @@ export type RendererToHostMessage =
   | LayoutSizeMessage
   | LayoutScrollMessage
   | LayoutAnchorMessage
-  | ViewStateMessage;
+  | ViewStateMessage
+  | RendererDiagnosticMessage;
 
 /** Layout bridge subset of {@link RendererToHostMessage}. */
 export type LayoutRendererMessage = LayoutReadyMessage | LayoutSizeMessage | LayoutScrollMessage | LayoutAnchorMessage;
@@ -420,9 +439,9 @@ export interface StreamStoreState {
   viewState: StreamViewState | null;
 }
 
-/** Identifier-only renderer diagnostics. */
+/** Identifier-only renderer diagnostics; `source-paused` carries the visible load error as its reason. */
 export interface StreamStoreDiagnostic {
-  code: 'rejected-message' | 'stale-response' | 'source-reset' | 'inconsistent-source';
+  code: 'rejected-message' | 'stale-response' | 'source-reset' | 'inconsistent-source' | 'source-paused';
   source?: StreamSourceRef;
   requestId?: string;
   reason?: string;
@@ -438,8 +457,13 @@ export interface StreamStoreOptions {
   listen(listener: (data: unknown) => void): () => void;
   /** Unique request identity factory; defaults to `crypto.randomUUID`. */
   createRequestId?(): string;
-  /** Optional identifier-only diagnostic sink. */
+  /** Optional identifier-only diagnostic sink; receives every diagnostic, unlimited. */
   diagnostic?(event: StreamStoreDiagnostic): void;
+  /**
+   * Also posts each diagnostic to the host as a {@link RendererDiagnosticMessage}, rate-limited per
+   * code, source, and reason, without request IDs.
+   */
+  forwardDiagnostics?: boolean;
   /** Applies a validated theme; omitted outside a DOM. */
   applyTheme?(themeKind: 1 | 2 | 3, cssVariables: Record<string, string>): void;
 }

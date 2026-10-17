@@ -165,10 +165,16 @@ export interface Harness {
  * @param options.mode - Display mode.
  * @param options.descriptor - Initial membership.
  * @param options.viewState - Restored view state.
+ * @param options.forwardDiagnostics - Whether the store also posts its diagnostics to the host.
  * @returns Harness with captured traffic.
  */
 export function harness(
-  options: { mode?: StreamDisplayMode; descriptor?: SessionDescriptor; viewState?: StreamViewState } = {}
+  options: {
+    mode?: StreamDisplayMode;
+    descriptor?: SessionDescriptor;
+    viewState?: StreamViewState;
+    forwardDiagnostics?: boolean;
+  } = {}
 ): Harness {
   const sent: RendererToHostMessage[] = [];
   const diagnostics: StreamStoreDiagnostic[] = [];
@@ -192,6 +198,7 @@ export function harness(
     },
     createRequestId: () => `req-${++counter}`,
     diagnostic: (event) => diagnostics.push(event),
+    ...(options.forwardDiagnostics ? { forwardDiagnostics: true } : {}),
     applyTheme: (themeKind, cssVariables) => themes.push({ themeKind, cssVariables })
   });
   const subscribes = (source: StreamSourceRef = main): SourceSubscribeMessage[] =>
