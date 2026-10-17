@@ -407,7 +407,13 @@ describe('live projection', () => {
     await r.pump();
     r.reads.shift()?.resolve(serverSnapshot(main, ['n1'], { version: v2 }));
     await r.pump();
-    const sourceMessages = r.posted.filter((message) => message.type !== 'session:update');
+    // The held v1 content may first be marked stale; content for v2 still follows its retirement.
+    expect(r.posted.filter((message) => message.type === 'source:status')).toEqual([
+      expect.objectContaining({ version: v1, state: 'resynchronizing' })
+    ]);
+    const sourceMessages = r.posted.filter(
+      (message) => message.type !== 'session:update' && message.type !== 'source:status'
+    );
     expect(sourceMessages[0]).toMatchObject({ type: 'source:invalidated', version: v1, reason: 'replaced' });
     expect(sourceMessages.at(-1)).toMatchObject({ type: 'source:snapshot', version: v2 });
     expect(r.view()).toMatchObject({ status: 'ready', lines: ['n1'] });
@@ -433,6 +439,33 @@ describe('failures, retry, and connection', () => {
     r.reads.at(-1)?.resolve(serverSnapshot(main, ['a']));
     await r.pump();
     expect(r.view()).toMatchObject({ status: 'ready', lines: ['a'], error: null });
+  });
+
+  it('reports host-side resynchronization of answered content as source:status and clears it on catch-up', async () => {
+    const r = rig();
+    r.lists.shift()?.([meta(main, mainBinding, 2)]);
+    await flush();
+    r.open();
+    await r.pump();
+    r.reads.shift()?.resolve(serverSnapshot(main, ['l1', 'l2']));
+    await r.pump();
+    expect(r.view()).toMatchObject({ status: 'ready', lines: ['l1', 'l2'] });
+    const statuses = () => r.posted.filter((message) => message.type === 'source:status');
+    expect(statuses()).toHaveLength(0);
+    // A live append beyond the next coordinate makes the controller re-read authoritatively.
+    r.emit({ type: 'append', source: main, version: v1, binding: mainBinding, lineNumber: 4, line: 'l4' });
+    await r.pump();
+    expect(statuses()).toEqual([
+      { type: 'source:status', generation, source: main, version: v1, binding: mainBinding, state: 'resynchronizing' }
+    ]);
+    // Retained content stays visible while it is marked stale.
+    expect(r.view()).toMatchObject({ status: 'resynchronizing', lines: ['l1', 'l2'] });
+    for (let round = 0; round < 3 && r.reads.length > 0; round++) {
+      r.reads.shift()?.resolve(serverSnapshot(main, ['l1', 'l2', 'l3', 'l4']));
+      await r.pump();
+    }
+    expect(statuses().map((message) => message.state)).toEqual(['resynchronizing', 'ready']);
+    expect(r.view()).toMatchObject({ status: 'ready', lines: ['l1', 'l2', 'l3', 'l4'] });
   });
 
   it('surfaces exhausted overflow recovery as a retryable resync-overflow pause', async () => {

@@ -593,6 +593,90 @@ describe('lifecycle', () => {
   });
 });
 
+describe('host status', () => {
+  const status = (state: 'resynchronizing' | 'ready', overrides: Record<string, unknown> = {}) => ({
+    type: 'source:status' as const,
+    generation,
+    source: main,
+    version: v1,
+    binding: mainBinding,
+    state,
+    ...overrides
+  });
+
+  it('marks retained content stale while the host resynchronizes and clears it on ready', () => {
+    const h = ready(2);
+    const before = h.sent.length;
+    h.deliver(status('resynchronizing'));
+    expect(view(h)).toMatchObject({ status: 'resynchronizing', lines: ['l1', 'l2'], error: null });
+    h.deliver(append(3, ['l3']));
+    expect(view(h)).toMatchObject({ status: 'resynchronizing', lines: ['l1', 'l2', 'l3'] });
+    h.deliver(status('ready'));
+    expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1', 'l2', 'l3'] });
+    // Status is informational: it never makes the renderer request anything.
+    expect(h.sent).toHaveLength(before);
+  });
+
+  it('drops a binding mismatch without rebinding', () => {
+    const h = ready(2);
+    const before = h.subscribes().length;
+    h.deliver(status('resynchronizing', { binding: childBinding }));
+    expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1', 'l2'] });
+    expect(h.subscribes()).toHaveLength(before);
+    expect(h.diagnostics.at(-1)).toMatchObject({ code: 'rejected-message', reason: 'binding-mismatch' });
+  });
+
+  it('drops a status for an unseen or retired version', () => {
+    const h = ready(2);
+    h.deliver(status('resynchronizing', { version: v2 }));
+    expect(view(h).status).toBe('ready');
+    expect(h.diagnostics.at(-1)).toMatchObject({ code: 'stale-response', reason: 'unseen-version' });
+    h.deliver({
+      type: 'source:invalidated',
+      generation,
+      source: main,
+      version: v1,
+      binding: mainBinding,
+      reason: 'replaced'
+    });
+    h.deliver(status('ready'));
+    expect(view(h).status).toBe('resynchronizing');
+    expect(h.diagnostics.at(-1)).toMatchObject({ code: 'stale-response' });
+  });
+
+  it('drops a status from a stale generation', () => {
+    const h = ready(2);
+    h.deliver(status('resynchronizing', { generation: 'gen-0' }));
+    expect(view(h).status).toBe('ready');
+  });
+
+  it("never overrides the store's own refetch, pause or disconnection", () => {
+    const h = ready(2);
+    h.deliver({ type: 'connection:state', generation, state: 'disconnected' });
+    h.deliver(status('ready'));
+    expect(view(h).status).toBe('resynchronizing');
+    h.deliver({ type: 'connection:state', generation, state: 'connected' });
+    // Reconnection re-requests the source; its own refetch owns the status until answered.
+    h.deliver(status('ready'));
+    expect(view(h).status).toBe('resynchronizing');
+    h.deliver({
+      type: 'source:error',
+      generation,
+      requestId: h.lastRequestId(),
+      source: main,
+      error: 'resync-overflow'
+    });
+    h.deliver(status('ready'));
+    expect(view(h).status).toBe('paused');
+  });
+
+  it('ignores a status for a source the renderer does not want', () => {
+    const h = ready(2);
+    h.deliver(status('resynchronizing', { source: child, binding: childBinding }));
+    expect(view(h, child).status).toBe('unsubscribed');
+  });
+});
+
 describe('theme, layout, actions, and disposal', () => {
   it('applies validated theme changes', () => {
     const h = harness();

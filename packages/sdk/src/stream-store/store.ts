@@ -28,6 +28,7 @@ import type {
   SourceInvalidatedMessage,
   SourceLifecycleMessage,
   SourceSnapshotMessage,
+  SourceStatusMessage,
   StreamHistoryMode,
   StreamInitData,
   StreamRendererStore,
@@ -651,6 +652,38 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
   }
 
   /**
+   * Applies the host's freshness for an answered source. It only toggles between `ready` and
+   * `resynchronizing` on the current authority, so it never overrides the store's own refetch,
+   * pause or connection state, and it never rebinds: a contradicting stamp is dropped.
+   * @param message - Host-side freshness stamped with its source version and binding.
+   */
+  function onStatus(message: SourceStatusMessage): void {
+    const work = works.get(sourceKey(message.source));
+    if (!work?.member || !work.wanted) {
+      diagnose('stale-response', work, { reason: 'not-member' });
+      return;
+    }
+    if (!bound(work, message.binding)) {
+      diagnose('rejected-message', work, { reason: 'binding-mismatch' });
+      return;
+    }
+    if (
+      work.retired.includes(versionKey(message.version)) ||
+      !work.authority ||
+      !sameVersion(work.authority.version, message.version)
+    ) {
+      diagnose('stale-response', work, { reason: 'unseen-version' });
+      return;
+    }
+    if (work.awaiting || store.getState().connection !== 'connected') return;
+    const from = message.state === 'ready' ? 'resynchronizing' : 'ready';
+    if (work.status !== from) return;
+    work.status = message.state;
+    touch(work);
+    publish();
+  }
+
+  /**
    * Retires an invalidated version before successor content.
    * @param message - Invalidation.
    */
@@ -798,6 +831,9 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
         return;
       case 'source:lifecycle':
         onLifecycle(message);
+        return;
+      case 'source:status':
+        onStatus(message);
         return;
       case 'source:invalidated':
         onInvalidated(message);

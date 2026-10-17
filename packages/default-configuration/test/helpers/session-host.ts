@@ -19,6 +19,7 @@ import {
   type SourceSubscribeMessage,
   type StreamDisplayMode,
   type StreamRendererStore,
+  type StreamSourceLoadError,
   type StreamViewState
 } from '@cards.management/sdk/stream-store';
 
@@ -56,6 +57,10 @@ export interface SessionHost {
   append(relPath: string, first: number, lines: readonly string[]): void;
   /** Delivers an activity transition at the source's complete line count. */
   lifecycle(relPath: string, state: 'started' | 'resumed' | 'ended', totalLineCount: number): void;
+  /** Delivers the host's freshness for an answered member. */
+  status(relPath: string, state: 'resynchronizing' | 'ready'): void;
+  /** Answers the latest subscribe for a member with a typed failure. */
+  error(relPath: string, error: StreamSourceLoadError): void;
   /** Delivers any host message. */
   deliver(message: HostToRendererMessage): void;
 }
@@ -175,6 +180,14 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
         state,
         totalLineCount
       });
+    },
+    status(relPath, state) {
+      deliver({ type: 'source:status', generation, source: ref(relPath), version, binding: binding(relPath), state });
+    },
+    error(relPath, error) {
+      const request = subscribes(relPath).at(-1);
+      if (!request) throw new Error(`No subscribe sent for ${relPath}`);
+      deliver({ type: 'source:error', generation, requestId: request.requestId, source: ref(relPath), error });
     },
     deliver
   };

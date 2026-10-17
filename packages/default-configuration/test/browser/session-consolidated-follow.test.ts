@@ -162,7 +162,7 @@ describe('Consolidated session follow', () => {
         ])
       );
       const safe = (value: unknown): string => JSON.stringify(value).replaceAll('<', '\\u003c');
-      const host = `window.sources=${safe(sources)};window.host={append(relPath,lines){const source=sources[relPath];const first=source.lines.length+1;source.lines.push(...lines);postMessage({type:'source:append',...source.authority,firstLineNumber:first,lines},'*')}};addEventListener('message',event=>{const message=event.data;if(message?.type!=='source:subscribe')return;const source=sources[message.source.relPath];postMessage({type:'source:snapshot',...source.authority,requestId:message.requestId,meta:{...source.meta,lineCount:source.lines.length},lines:source.lines,firstLineNumber:1,totalLineCount:source.lines.length},'*')});`;
+      const host = `window.sources=${safe(sources)};window.posted=[];window.requests={};window.host={append(relPath,lines){const source=sources[relPath];const first=source.lines.length+1;source.lines.push(...lines);postMessage({type:'source:append',...source.authority,firstLineNumber:first,lines},'*')},status(relPath,state){postMessage({type:'source:status',...sources[relPath].authority,state},'*')},error(relPath,error){postMessage({type:'source:error',generation:'gen-1',requestId:requests[relPath],source:sources[relPath].authority.source,error},'*')}};addEventListener('message',event=>{const message=event.data;if(message?.type==='session:resync')posted.push(message.type);if(message?.type!=='source:subscribe')return;requests[message.source.relPath]=message.requestId;const source=sources[message.source.relPath];postMessage({type:'source:snapshot',...source.authority,requestId:message.requestId,meta:{...source.meta,lineCount:source.lines.length},lines:source.lines,firstLineNumber:1,totalLineCount:source.lines.length},'*')});`;
       const bootstrap = `<script>window.__STREAM_INIT__=${safe(init)};window.rendererErrors=[];addEventListener('error',event=>rendererErrors.push(event.message));${host}</script>`;
       response.setHeader('Content-Type', 'text/html');
       response.end(html.replace('<head>', `<head>${bootstrap}`));
@@ -223,6 +223,64 @@ describe('Consolidated session follow', () => {
     expect(after.top).toBe(held.top);
     expect(after.gap).toBeGreaterThan(held.gap);
     expect(after.errors).toEqual([]);
+  }, 60000);
+
+  it('dims resynchronizing content in place and offers a keyboard-reachable Retry once paused', async () => {
+    await browser('set', 'viewport', '800', '600');
+    await browser('open', `${origin}/expanded`);
+    await browser('wait', '--text', 'Answer 30');
+    /**
+     * Reads the main content's staleness, opacity and the geometry a layout jump would move.
+     * @returns Staleness, computed opacity, scroll offset, scroll height and a row's position.
+     */
+    const read = (): Promise<{ stale: boolean; opacity: string; top: number; height: number; row: number }> =>
+      evaluate(`(async () => {
+        for (let frame = 0; frame < 6; frame++) await new Promise(done => requestAnimationFrame(done));
+        await new Promise(done => setTimeout(done, 200));
+        const content = document.querySelector('.session-source-content');
+        const viewport = document.querySelector('.session-viewport');
+        const row = [...document.querySelectorAll('.session-row')].find(element => element.textContent.includes('Answer 30'));
+        return {
+          stale: content.hasAttribute('data-stale'),
+          opacity: getComputedStyle(content).opacity,
+          top: viewport.scrollTop,
+          height: viewport.scrollHeight,
+          row: row.getBoundingClientRect().top
+        };
+      })()`);
+    const before = await read();
+    expect(before).toMatchObject({ stale: false, opacity: '1' });
+    await evaluate(`window.host.status(${JSON.stringify(MAIN)}, 'resynchronizing'); true`);
+    const stale = await read();
+    expect(stale).toEqual({ ...before, stale: true, opacity: '0.8' });
+    await evaluate(`window.host.status(${JSON.stringify(MAIN)}, 'ready'); true`);
+    expect(await read()).toEqual(before);
+
+    await evaluate(`window.host.error(${JSON.stringify(MAIN)}, 'resync-overflow'); true`);
+    await browser('wait', '.session-retry');
+    const retry = await evaluate<{ label: string; minHeight: string; cursor: string; focused: boolean }>(`(() => {
+      const button = document.querySelector('.session-retry');
+      button.focus();
+      const style = getComputedStyle(button);
+      return { label: button.getAttribute('aria-label'), minHeight: style.minHeight, cursor: style.cursor, focused: document.activeElement === button };
+    })()`);
+    // Themed like the window controls: a full-height pointer target (theme colours are host-supplied).
+    expect(retry).toMatchObject({ focused: true, minHeight: '24px', cursor: 'pointer' });
+    expect(retry.label).toMatch(/^Retry \S/);
+    await browser('press', 'Enter');
+    await browser('wait', '--text', 'Answer 30');
+    const after = await evaluate<{ posted: string[]; retry: boolean; error: boolean; errors: string[] }>(`(async () => {
+      for (let frame = 0; frame < 6; frame++) await new Promise(done => requestAnimationFrame(done));
+      return {
+        posted,
+        retry: !!document.querySelector('.session-retry'),
+        // The bundled renderer inlines its copy, so look only at rendered notices.
+        error: [...document.querySelectorAll('.session-notice')].some(notice => notice.textContent.includes('Live updates overflowed')),
+        errors: rendererErrors
+      };
+    })()`);
+    expect(after).toMatchObject({ retry: false, error: false, errors: [] });
+    expect(after.posted).toContain('session:resync');
   }, 60000);
 
   it('never auto-follows in card detail, where the host timeline owns scrolling', async () => {

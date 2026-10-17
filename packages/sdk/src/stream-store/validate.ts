@@ -344,6 +344,18 @@ function host(value: unknown): void {
       nonnegative(record.totalLineCount, 'invalid-coordinates');
       return;
     }
+    case 'source:status': {
+      const record = exact(
+        value,
+        ['type', 'generation', 'source', 'version', 'binding', 'state'],
+        [],
+        'invalid-message'
+      );
+      token(record.generation, 'invalid-generation');
+      authority(record);
+      if (!['resynchronizing', 'ready'].includes(record.state as string)) reject('invalid-state');
+      return;
+    }
     case 'source:invalidated': {
       const record = exact(
         value,

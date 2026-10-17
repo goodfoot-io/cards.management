@@ -56,12 +56,33 @@ describe('Compact session layout bridge', () => {
 
   /**
    * Recorded layout messages after two animation frames, so scheduled reports have flushed.
+   * The handshake answer crosses postMessage and a measurement, so a caller expecting a count
+   * waits (boundedly) for it rather than racing the bridge.
+   * @param minimum - Messages that must have been recorded before reading.
    * @returns Every layout message posted so far, in order.
    */
-  const sent = (): Promise<Sent[]> =>
-    evaluate<Sent[]>(
-      `new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(window.sent))))`
-    );
+  const sent = (minimum = 0): Promise<Sent[]> =>
+    evaluate<Sent[]>(`(async () => {
+      const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+      await frames();
+      for (let attempt = 0; attempt < 100 && window.sent.length < ${minimum}; attempt++) await frames();
+      return window.sent;
+    })()`);
+
+  /**
+   * Recorded layout messages once no new one has arrived for three consecutive frame pairs.
+   * @returns Every layout message posted so far, in order.
+   */
+  const quiet = (): Promise<Sent[]> =>
+    evaluate<Sent[]>(`(async () => {
+      const frames = () => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done)));
+      for (let attempt = 0, still = 0, count = -1; attempt < 100 && still < 3; attempt++) {
+        await frames();
+        still = window.sent.length === count ? still + 1 : 0;
+        count = window.sent.length;
+      }
+      return window.sent;
+    })()`);
 
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), 'cards-session-compact-layout-'));
@@ -141,7 +162,7 @@ describe('Compact session layout bridge', () => {
     await browser('open', `${origin}/`);
     await browser('wait', '--text', 'Answer 40');
     await evaluate(`window.host.handshake('token-1'); true`);
-    const initial = await sent();
+    const initial = await sent(2);
     expect(initial.slice(0, 2).map((message) => message.type)).toEqual(['layout:ready', 'layout:size']);
     const geometry = await evaluate<{
       content: number;
@@ -212,7 +233,8 @@ describe('Compact session layout bridge', () => {
     await evaluate(`window.host.handshake(${JSON.stringify(token)}); true`);
     await browser('find', 'role', 'button', 'click', '--name', 'Show conversation');
     await browser('wait', '--text', 'Question 31');
-    const before = (await sent()).length;
+    // Show conversation's own anchor and size reports flush frames after its rows render.
+    const before = (await quiet()).length;
     const control = await evaluate<{ id: string; top: number }>(`(() => {
       const button = [...document.querySelectorAll('.session-disclosure-button')].find(element => element.textContent.startsWith('Bash'));
       return {id: button.parentElement.getAttribute('data-session-disclosure'), top: button.getBoundingClientRect().top};

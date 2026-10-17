@@ -42,6 +42,8 @@ const hostValid: unknown[] = [
     state: 'ended',
     totalLineCount: 0
   },
+  { type: 'source:status', generation, source: main, version: v1, binding: mainBinding, state: 'resynchronizing' },
+  { type: 'source:status', generation, source: main, version: v1, binding: mainBinding, state: 'ready' },
   { type: 'source:invalidated', generation, source: main, version: v1, binding: mainBinding, reason: 'removed' },
   { type: 'connection:state', generation, state: 'resynchronizing' },
   { type: 'theme:change', generation, themeKind: 3, cssVariables: { '--a': 'b' } },
@@ -173,6 +175,20 @@ describe('validateHostMessage', () => {
       },
       { type: 'source:error', generation, requestId: 'r1', source: main, error: 'boom' },
       { type: 'source:invalidated', generation, source: main, version: v1, binding: mainBinding, reason: 'other' },
+      { type: 'source:status', generation, source: main, version: v1, binding: mainBinding, state: 'paused' },
+      { type: 'source:status', generation, source: main, version: v1, binding: mainBinding, state: 'loading' },
+      { type: 'source:status', generation, source: main, version: v1, binding: mainBinding },
+      { type: 'source:status', generation, source: main, version: v1, state: 'ready' },
+      { type: 'source:status', generation, source: main, binding: mainBinding, state: 'ready' },
+      { type: 'source:status', generation: '', source: main, version: v1, binding: mainBinding, state: 'ready' },
+      {
+        type: 'source:status',
+        generation,
+        source: main,
+        version: v1,
+        binding: { ...mainBinding, role: 'owner' },
+        state: 'ready'
+      },
       { type: 'connection:state', generation, state: 'running' },
       { type: 'theme:change', generation, themeKind: 4, cssVariables: {} },
       { type: 'theme:change', generation, themeKind: 1, cssVariables: { '--a': 1 } }

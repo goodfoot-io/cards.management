@@ -32,6 +32,7 @@ export type {
   SourceInvalidatedMessage,
   SourceLifecycleMessage,
   SourceSnapshotMessage,
+  SourceStatusMessage,
   SourceSubscribeMessage,
   SourceUnsubscribeMessage,
   StreamConnectionState,

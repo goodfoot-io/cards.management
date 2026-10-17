@@ -193,6 +193,16 @@ export interface SourceLifecycleMessage extends StreamSourceAuthorityStamp {
   totalLineCount: number;
 }
 
+/**
+ * Host-side freshness of an answered source: `resynchronizing` while the host re-reads after
+ * discarding live updates (retained content may be behind), `ready` once it has caught up.
+ */
+export interface SourceStatusMessage extends StreamSourceAuthorityStamp {
+  type: 'source:status';
+  generation: string;
+  state: 'resynchronizing' | 'ready';
+}
+
 /** Retires the stamped version before any successor content. */
 export interface SourceInvalidatedMessage extends StreamSourceAuthorityStamp {
   type: 'source:invalidated';
@@ -230,6 +240,7 @@ export type HostToRendererMessage =
   | SourceErrorMessage
   | SourceAppendMessage
   | SourceLifecycleMessage
+  | SourceStatusMessage
   | SourceInvalidatedMessage
   | ConnectionStateMessage
   | ThemeChangeMessage

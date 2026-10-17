@@ -187,6 +187,102 @@ describe('Claude Code — witnessed-delegation — expanded', () => {
   });
 });
 
+describe('Paused sources — Retry', () => {
+  it('offers Retry on a paused main that asks the host to resynchronize and re-requests it', async () => {
+    const { host, container, settle } = await mount(claude, [{ relPath: MAIN, role: 'main' }]);
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await settle();
+    expect(container.querySelector('.session-retry')).toBeNull();
+    await act(async () => host.store.subscribeSource(host.ref(MAIN), 'full'));
+    await act(async () => host.error(MAIN, 'resync-overflow'));
+    await settle();
+    expect(container.textContent).toContain('Live updates overflowed; resynchronization required.');
+    // Content shown before the pause is retained.
+    expect(container.textContent).toContain('All done here.');
+    const retry = container.querySelector<HTMLButtonElement>('.session-retry');
+    expect(retry?.tagName).toBe('BUTTON');
+    expect(retry?.getAttribute('aria-label')).toMatch(/^Retry .+/);
+    const requests = host.subscribes(MAIN).length;
+    await act(async () => retry!.click());
+    await settle();
+    expect(host.sent.some((message) => message.type === 'session:resync')).toBe(true);
+    expect(host.subscribes(MAIN)).toHaveLength(requests + 1);
+    expect(container.querySelector('.session-retry')).toBeNull();
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await settle();
+    expect(container.textContent).not.toContain('Live updates overflowed');
+  });
+
+  it('offers Retry on a paused subagent, labelled with its source title', async () => {
+    const { host, container, settle } = await mount(claude, MEMBERS);
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await settle();
+    const button = container.querySelector<HTMLButtonElement>(`${PLACEMENT} > .session-disclosure-button`);
+    await act(async () => button!.click());
+    await settle();
+    await act(async () => host.error(CHILD, 'load-error'));
+    await settle();
+    const child = container.querySelector('.session-child');
+    expect(child?.textContent).toContain('Source failed to load.');
+    const retry = child?.querySelector<HTMLButtonElement>('.session-retry');
+    const label = retry?.getAttribute('aria-label') ?? '';
+    expect(label).toMatch(/^Retry \S/);
+    // The action names the same source title its disclosure announces.
+    expect(button!.textContent).toContain(`Subagent: ${label.slice('Retry '.length)}`);
+    await act(async () => retry!.click());
+    await settle();
+    expect(host.sent.at(-1)?.type).toBe('source:subscribe');
+    expect(host.sent.some((message) => message.type === 'session:resync')).toBe(true);
+  });
+
+  it('shows no Retry for a source that is merely unavailable', async () => {
+    const { host, container, settle } = await mount(claude, [{ relPath: MAIN, role: 'main' }]);
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await settle();
+    expect(container.querySelector('.session-source-error')).toBeNull();
+  });
+});
+
+describe('Stale content while the host resynchronizes', () => {
+  it('dims retained main content in place and clears it on ready', async () => {
+    const { host, container, settle } = await mount(claude, [{ relPath: MAIN, role: 'main' }]);
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await settle();
+    const content = container.querySelector('.session-source-content');
+    expect(content?.hasAttribute('data-stale')).toBe(false);
+    await act(async () => host.status(MAIN, 'resynchronizing'));
+    await settle();
+    expect(container.querySelector('.session-source-content')).toBe(content);
+    expect(content?.hasAttribute('data-stale')).toBe(true);
+    expect(content?.getAttribute('aria-busy')).toBe('true');
+    expect(container.textContent).toContain('All done here.');
+    expect(container.textContent).not.toContain('Loading transcript');
+    await act(async () => host.status(MAIN, 'ready'));
+    await settle();
+    expect(content?.hasAttribute('data-stale')).toBe(false);
+    expect(content?.hasAttribute('aria-busy')).toBe(false);
+  });
+
+  it('marks only the resynchronizing subagent stale', async () => {
+    const { host, container, settle } = await mount(claude, MEMBERS);
+    await act(async () => host.snapshot(MAIN, MAIN_LINES));
+    await settle();
+    await act(async () => host.snapshot(CHILD, lines([sidechain('A', 'Child A working', 'a1')])));
+    await settle();
+    await act(async () =>
+      container.querySelector<HTMLButtonElement>(`${PLACEMENT} > .session-disclosure-button`)!.click()
+    );
+    await settle();
+    await act(async () => host.snapshot(CHILD, lines([sidechain('A', 'Child A working', 'a1')])));
+    await settle();
+    await act(async () => host.status(CHILD, 'resynchronizing'));
+    await settle();
+    expect(container.querySelector('.session-child')?.hasAttribute('data-stale')).toBe(true);
+    expect(container.querySelector('.session-child')?.textContent).toContain('Child A working');
+    expect(container.querySelectorAll('[data-stale]')).toHaveLength(1);
+  });
+});
+
 describe('View state across renderer rebuilds', () => {
   const childPlacement = JSON.stringify(['session-member', JSON.stringify(['card-1', 'claude-code-session', CHILD])]);
   const reported = (host: SessionHost): StreamViewState | undefined =>

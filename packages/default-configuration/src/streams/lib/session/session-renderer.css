@@ -97,3 +97,48 @@ body.mode-compact #stream-root {
   background: transparent;
   outline: 1px dashed var(--vscode-contrastActiveBorder);
 }
+
+/* A source's failure notice with its Retry action. */
+.session-source-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.session-retry {
+  font: inherit;
+  font-size: var(--stream-text-label, var(--vscode-font-size));
+  padding: 2px 8px;
+  min-height: 24px;
+  cursor: pointer;
+  color: var(--vscode-button-secondaryForeground);
+  background: var(--vscode-button-secondaryBackground);
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: var(--vscode-cornerRadius-small, 4px);
+}
+
+.session-retry:hover {
+  background: var(--vscode-button-secondaryHoverBackground);
+}
+
+.session-retry:focus-visible {
+  outline: 1px solid var(--stream-focus-border);
+  outline-offset: 2px;
+}
+
+/* Retained content the host is still resynchronizing: dimmed in place, never moved or hidden.
+   Opacity compounds, so a stale source nested in a stale source is not dimmed twice. */
+.session-source-content[data-stale] {
+  opacity: 0.8;
+}
+
+.session-source-content[data-stale] .session-source-content[data-stale] {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .session-source-content {
+    transition: opacity var(--stream-transition-fast);
+  }
+}

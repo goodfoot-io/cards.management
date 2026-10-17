@@ -127,6 +127,8 @@ interface Forwarded {
   last: number;
   /** Activity last reported to the renderer. */
   active: boolean | null;
+  /** Whether the renderer was last told its content is resynchronizing. */
+  stale: boolean;
 }
 
 /** Bound on remembered invalidation reasons awaiting projection. */
@@ -372,6 +374,7 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
     f.binding = copyBinding(authority.binding);
     f.last = total;
     f.active = current.meta.isActive;
+    f.stale = false;
   }
 
   /**
@@ -387,7 +390,8 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
   }
 
   /**
-   * Forwards growth of the renderer's incarnation as bounded appends and activity as lifecycle.
+   * Forwards growth of the renderer's incarnation as bounded appends, activity as lifecycle and
+   * freshness as status, each only when it changed.
    * @param f - Answered forwarding state; its cursor and activity advance in place.
    * @param version - Incarnation the renderer holds.
    * @param binding - Binding of that incarnation.
@@ -424,6 +428,18 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
         totalLineCount: f.last
       });
       f.active = current.meta.isActive;
+    }
+    const stale = current.status === 'resynchronizing';
+    if (stale !== f.stale) {
+      post({
+        type: 'source:status',
+        generation,
+        source: structuredClone(current.source),
+        version: { ...version },
+        binding: copyBinding(binding),
+        state: stale ? 'resynchronizing' : 'ready'
+      });
+      f.stale = stale;
     }
   }
 
@@ -524,7 +540,8 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
       version: null,
       binding: null,
       last: 0,
-      active: null
+      active: null,
+      stale: false
     };
     f.requestId = requestId;
     f.answered = false;

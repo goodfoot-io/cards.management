@@ -146,40 +146,82 @@ function SessionNotices(): ReactElement | null {
   const { model, adapter } = useRenderer();
   const { descriptor } = model.state;
   const main = model.composition.mainKey ? model.sources.get(model.composition.mainKey) : undefined;
-  const notices: { key: string; tone: 'error' | 'info'; text: string }[] = [];
+  const notices: ReactElement[] = [];
   if (descriptor.validity === 'missing-main')
-    notices.push({
-      key: 'validity',
-      tone: 'error',
-      text: 'No main transcript is available for this session; its members are listed below.'
-    });
+    notices.push(
+      <Notice key="validity" tone="error">
+        No main transcript is available for this session; its members are listed below.
+      </Notice>
+    );
   if (descriptor.validity === 'conflicting-main')
-    notices.push({
-      key: 'validity',
-      tone: 'error',
-      text: 'More than one source claims to be this session’s main transcript; each is listed below.'
-    });
-  if (main?.entry.source.error) notices.push({ key: 'main-error', tone: 'error', text: main.entry.source.error });
+    notices.push(
+      <Notice key="validity" tone="error">
+        More than one source claims to be this session’s main transcript; each is listed below.
+      </Notice>
+    );
+  if (main?.entry.source.error) notices.push(<SourceError key="main-error" source={main} />);
   const capability = main?.linkage?.capability;
   if (model.composition.sections.length > 0 && capability && capability !== 'witnessed-delegation')
-    notices.push({
-      key: 'capability',
-      tone: 'info',
-      text:
-        capability === 'main-only'
+    notices.push(
+      <Notice key="capability" tone="info">
+        {capability === 'main-only'
           ? `${adapter.agentName} transcripts record no delegation; other session members are listed separately.`
-          : `${adapter.agentName} transcripts reference other sessions without witnessed delegation; members are listed separately.`
-    });
+          : `${adapter.agentName} transcripts reference other sessions without witnessed delegation; members are listed separately.`}
+      </Notice>
+    );
   if (notices.length === 0) return null;
+  return <div className="session-notices">{notices}</div>;
+}
+
+/**
+ * One session-level notice.
+ * @param root0 - Notice props.
+ * @param root0.tone - Visual tone.
+ * @param root0.children - Notice text.
+ * @returns Notice paragraph.
+ */
+function Notice({ tone, children }: { tone: 'error' | 'info'; children: ReactNode }): ReactElement {
   return (
-    <div className="session-notices">
-      {notices.map((notice) => (
-        <p key={notice.key} className={`session-notice session-tone--${notice.tone}`} role="status">
-          {notice.text}
-        </p>
-      ))}
+    <p className={`session-notice session-tone--${tone}`} role="status">
+      {children}
+    </p>
+  );
+}
+
+/**
+ * A source's visible failure; a paused source offers Retry, which asks the host to resynchronize.
+ * @param root0 - Notice props.
+ * @param root0.source - Projected source with an error.
+ * @returns Error notice with its Retry action when the source is paused.
+ */
+function SourceError({ source }: { source: SessionSourceModel<object> }): ReactElement {
+  const store = useRendererStore();
+  return (
+    <div className="session-source-error">
+      <p className="session-notice session-tone--error" role="status">
+        {source.entry.source.error}
+      </p>
+      {source.entry.view.status === 'paused' ? (
+        <button
+          type="button"
+          className="session-retry"
+          aria-label={`Retry ${source.title}`}
+          onClick={() => store.retry()}
+        >
+          Retry
+        </button>
+      ) : null}
     </div>
   );
+}
+
+/**
+ * Whether a source shows retained content that the host is still resynchronizing.
+ * @param source - Projected source.
+ * @returns True while retained lines are not yet current.
+ */
+function isStale(source: SessionSourceModel<object> | undefined): boolean {
+  return source?.entry.view.status === 'resynchronizing' && source.entry.view.lines.length > 0;
 }
 
 /**
@@ -203,7 +245,11 @@ function ExpandedSession(): ReactElement {
     <div className="h-full flex flex-col min-h-0 overflow-hidden">
       {main ? <SessionHeader {...adapter.header(main.projection)} /> : null}
       <SessionNotices />
-      <div className="flex-1 min-h-0">
+      <div
+        className="flex-1 min-h-0 session-source-content"
+        data-stale={isStale(main) || undefined}
+        aria-busy={isStale(main) || undefined}
+      >
         <SessionViewport
           rows={main?.projection.rows ?? NO_ROWS}
           insertions={model.insertions.get(mainKey ?? '')}
@@ -283,6 +329,7 @@ function CompactSession(): ReactElement {
         layout={hooks}
         overHeight={overHeight}
         label="Conversation"
+        stale={isStale(main)}
       />
     </div>
   );
@@ -302,6 +349,7 @@ const NO_INSERTIONS: readonly SessionInsertion[] = [];
  * @param root0.layout - Layout bridge hooks.
  * @param root0.overHeight - Count of over-budget height reports, narrowing the window.
  * @param root0.label - Accessible section label.
+ * @param root0.stale - Whether retained content is still resynchronizing.
  * @returns Windowed content with its controls.
  */
 function WindowedSection({
@@ -311,7 +359,8 @@ function WindowedSection({
   disclosures,
   layout,
   overHeight,
-  label
+  label,
+  stale = false
 }: {
   sourceKey: string;
   source: SessionSourceModel<object> | undefined;
@@ -320,6 +369,7 @@ function WindowedSection({
   layout: SessionLayoutHooks;
   overHeight: number;
   label: string;
+  stale?: boolean;
 }): ReactElement {
   const { model, adapter, windows, setWindow } = useRenderer();
   const rows = source?.projection.rows ?? NO_ROWS;
@@ -364,7 +414,12 @@ function WindowedSection({
   };
   const loading = view?.history === 'full' && view.earlierUnloaded && view.status !== 'ready';
   return (
-    <section className="session-window" aria-label={label}>
+    <section
+      className="session-window session-source-content"
+      aria-label={label}
+      data-stale={stale || undefined}
+      aria-busy={stale || undefined}
+    >
       <div className="session-window-controls">
         <span className="session-muted session-window-range">{rangeLabel(range, rows.length, view)}</span>
         {earlier ? (
@@ -501,13 +556,14 @@ function ChildSection({ childKey, context }: { childKey: string; context: Sessio
   const insertions = model.insertions.get(childKey) ?? NO_INSERTIONS;
   const loadingEarlier = view.earlierUnloaded && view.history === 'full' && view.status !== 'ready';
   return (
-    <div className="session-child" data-session-child={childKey}>
+    <div
+      className="session-child session-source-content"
+      data-session-child={childKey}
+      data-stale={isStale(source) || undefined}
+      aria-busy={isStale(source) || undefined}
+    >
       <SessionHeader {...adapter.header(source.projection)} />
-      {source.entry.source.error ? (
-        <p className="session-notice session-tone--error" role="status">
-          {source.entry.source.error}
-        </p>
-      ) : null}
+      {source.entry.source.error ? <SourceError source={source} /> : null}
       {compact ? (
         <WindowedSection
           sourceKey={childKey}
