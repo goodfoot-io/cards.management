@@ -352,7 +352,7 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
   }
 
   /**
-   * Pauses a source visibly until explicit retry.
+   * Pauses a source visibly until explicit retry, reconnection, or a host answer to the paused request.
    * @param work - Source.
    * @param error - Visible failure.
    */
@@ -841,9 +841,16 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       case 'connection:state': {
         const previous = store.getState().connection;
         for (const work of works.values()) {
-          if (!work.member || !work.wanted || work.status === 'paused') continue;
-          if (message.state === 'connected' && previous !== 'connected') request(work, work.history);
-          else if (message.state !== 'connected') {
+          if (!work.member || !work.wanted) continue;
+          if (message.state === 'connected' && previous !== 'connected') {
+            // The host lifts every pause on reconnection and answers only fresh requests.
+            if (work.status === 'paused') {
+              work.overflows = 0;
+              work.gapRepairs = 0;
+              work.conflict = false;
+            }
+            request(work, work.history);
+          } else if (message.state !== 'connected' && work.status !== 'paused') {
             work.status = work.authority ? 'resynchronizing' : 'loading';
             touch(work);
           }

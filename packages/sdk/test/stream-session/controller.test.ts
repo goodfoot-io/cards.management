@@ -493,6 +493,48 @@ describe('session controller contract', () => {
     expect(test.backoffs).toHaveLength(0);
   });
 
+  it('reports one resync-overflow per buffer refill during a sustained burst while a single read stays in flight', async () => {
+    const test = await opened();
+    test.reads.shift()?.resolve(snapshot(['one']));
+    await flush();
+    test.emit(append(3, 'gap'));
+    // A 30,000-line burst behind one held read: every 1,001st event overflows the 1,000-event buffer.
+    for (let index = 0; index < 30_000; index++) test.emit(append(4 + index, 'burst'));
+    const overflows = test.diagnostics.filter((event) => event.code === 'resync-overflow');
+    expect(overflows).toHaveLength(Math.floor(30_001 / 1001));
+    // The diagnostics track event arrival, not reads: nothing restarts, retries, or backs off meanwhile.
+    expect(test.reads).toHaveLength(1);
+    expect(test.reads[0]?.signal.aborted).toBe(false);
+    expect(test.backoffs).toHaveLength(0);
+    expect(test.diagnostics.filter((event) => event.code === 'read-retry')).toHaveLength(0);
+  });
+
+  it('diagnoses a source-behind listing and an exhausted overflow recovery instead of going quiet', async () => {
+    const test = await opened();
+    test.reads.shift()?.resolve(snapshot(['one']));
+    await flush();
+    test.tick();
+    test.lists.shift()?.([{ ...meta, lineCount: 2 }]);
+    await flush();
+    expect(test.diagnostics.map((event) => event.code)).toContain('source-behind');
+    expect(test.reads.map((read) => read.mode)).toEqual(['tail']);
+    for (let round = 0; round <= SESSION_READ_RETRY_DELAYS_MS.length; round++) {
+      for (let index = 0; index < 1001; index++) test.emit(append(2 + round * 1001 + index, 'burst'));
+      const total = 1 + round * 1001;
+      test.reads
+        .shift()
+        ?.resolve(snapshot(Array.from({ length: total }, (_, index) => (index === 0 ? 'one' : 'burst'))));
+      await flush();
+      test.fire();
+      await flush();
+    }
+    expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({
+      status: 'paused',
+      error: 'resync-overflow'
+    });
+    expect(test.diagnostics.filter((event) => event.code === 'recovery-exhausted')).toHaveLength(1);
+  });
+
   it('rejects an old full response after removal and same-path readdition', async () => {
     const test = await opened();
     const old = test.reads.shift();

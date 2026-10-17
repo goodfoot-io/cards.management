@@ -97,6 +97,10 @@ interface Rig {
   emit(event: SessionControllerEvent): void;
   /** Runs every pending read-retry backoff. */
   fire(): void;
+  /** Runs the periodic membership refresh. */
+  tick(): void;
+  /** Fails the oldest pending listing like an unreachable server. */
+  failList(): void;
   listeners(): number;
   /** Creates the renderer from the bridge's initialization and attaches it. */
   open(mode?: StreamDisplayMode): StreamRendererStore;
@@ -129,8 +133,13 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
   let rendererListener: ((data: unknown) => void) | undefined;
   let renderer: StreamRendererStore | undefined;
   let requests = 0;
+  const listFailures = new Map<(records: StreamMeta[]) => void, (reason: unknown) => void>();
   const cards: CardsStreamClient = {
-    listStreams: () => new Promise((resolve) => lists.push(resolve)),
+    listStreams: () =>
+      new Promise((resolve, reject) => {
+        lists.push(resolve);
+        listFailures.set(resolve, reject);
+      }),
     getStream: (cardId, streamType, relPath, tail) =>
       new Promise((resolve, reject) => reads.push({ source: { cardId, streamType, relPath }, tail, resolve, reject }))
   };
@@ -191,6 +200,11 @@ function rig(mode: StreamDisplayMode = 'compact', initialViewState?: StreamViewS
           backoff.live = false;
           backoff.run();
         }
+    },
+    tick: () => timer?.(),
+    failList() {
+      const resolve = lists.shift();
+      if (resolve) listFailures.get(resolve)?.(new Error('unreachable'));
     },
     listeners: () =>
       Number(listener !== undefined) + Number(timer !== undefined) + backoffs.filter((backoff) => backoff.live).length,
@@ -748,5 +762,380 @@ describe('view state persistence', () => {
     ]);
     expect(r.views).toEqual([]);
     expect(r.bridge.getInit()).not.toHaveProperty('viewState');
+  });
+});
+
+/** Server-side transcripts that answer the rig's deferred listings and reads. */
+interface Server {
+  /** Native lines per source, appended to in place by the test. */
+  lines: Map<StreamSourceRef, string[]>;
+  /** Appends lines to a source and publishes each as the server would; `silent` skips the event. */
+  write(source: StreamSourceRef, count: number, silent?: boolean): void;
+  /** Answers pending listings and reads from current content, firing backoffs, until quiescent. */
+  settle(options?: { fire?: boolean }): Promise<void>;
+  /** Number of reads answered so far. */
+  served(): number;
+}
+
+/**
+ * Models the server for a rig: listings and reads always reflect the current transcripts.
+ * @param r - Rig whose deferred traffic the server answers.
+ * @param sources - Sources the session lists, with their initial lines.
+ * @returns Server controls.
+ */
+function serve(r: Rig, sources: Array<[StreamSourceRef, string[]]>): Server {
+  const lines = new Map(sources);
+  const bindingOf = (source: StreamSourceRef) => (source.relPath === child.relPath ? childBinding : mainBinding);
+  const content = (relPath: string): [StreamSourceRef, string[]] => {
+    const entry = [...lines].find(([source]) => source.relPath === relPath);
+    if (!entry) throw new Error(`unknown source ${relPath}`);
+    return entry;
+  };
+  let served = 0;
+  return {
+    lines,
+    write(source, count, silent = false) {
+      const target = content(source.relPath)[1];
+      for (let index = 0; index < count; index++) {
+        target.push(`${source.relPath}:${target.length + 1}`);
+        if (!silent)
+          r.emit({
+            type: 'append',
+            source,
+            version: v1,
+            binding: bindingOf(source),
+            lineNumber: target.length,
+            line: target[target.length - 1] ?? ''
+          });
+      }
+    },
+    async settle(options = {}) {
+      for (let round = 0; round < 40; round++) {
+        await r.pump();
+        const list = r.lists.shift();
+        if (list) list([...lines].map(([source, all]) => meta(source, bindingOf(source), all.length)));
+        else {
+          const read = r.reads.shift();
+          if (read) {
+            const [source, all] = content(read.source.relPath);
+            const first = read.tail === undefined ? 1 : Math.max(1, all.length - read.tail + 1);
+            served++;
+            read.resolve(serverSnapshot(source, all.slice(first - 1), { first }));
+          } else if (options.fire && r.listeners() > 2) r.fire();
+          else break;
+        }
+      }
+    },
+    served: () => served
+  };
+}
+
+/**
+ * Opens a rig over a modelled server with the main source answered and ready.
+ * @param sources - Listed sources and their initial lines.
+ * @returns Opened rig and its server.
+ */
+async function served(
+  sources: Array<[StreamSourceRef, string[]]> = [[main, ['l1', 'l2', 'l3']]]
+): Promise<{ r: Rig; server: Server }> {
+  const r = rig();
+  const server = serve(r, sources);
+  await server.settle();
+  r.open();
+  await r.pump();
+  await server.settle();
+  return { r, server };
+}
+
+/**
+ * Drives the main source into an exhausted overflow pause: every recovery read is outrun
+ * by more live appends than the controller may buffer.
+ * @param r - Rig with an open renderer.
+ * @param server - Its server.
+ */
+async function exhaustOverflow(r: Rig, server: Server): Promise<void> {
+  const lines = server.lines.get(main) ?? [];
+  // A forward gap makes the ready source re-read, so live appends outrun a read from the start.
+  server.write(main, 1, true);
+  server.write(main, 1);
+  await r.pump();
+  expect(r.reads).toHaveLength(1);
+  for (let round = 0; round < 20 && r.view()?.status !== 'paused'; round++) {
+    if (r.reads.length === 0) r.fire();
+    await r.pump();
+    const pending = r.reads.shift();
+    if (!pending) continue;
+    const snapshotLines = [...lines];
+    server.write(main, 1001);
+    const first = pending.tail === undefined ? 1 : Math.max(1, snapshotLines.length - pending.tail + 1);
+    pending.resolve(serverSnapshot(main, snapshotLines.slice(first - 1), { first }));
+    await r.pump();
+  }
+  expect(r.view()).toMatchObject({ status: 'paused', error: 'resync-overflow' });
+}
+
+/**
+ * Asserts the renderer shows the server's newest content for a source as ready.
+ * @param r - Rig.
+ * @param server - Its server.
+ * @param source - Source to check.
+ */
+function showsCurrent(r: Rig, server: Server, source: StreamSourceRef = main): void {
+  const all = server.lines.get(source) ?? [];
+  const view = r.view(source);
+  expect(view).toMatchObject({ status: 'ready', error: null, totalLineCount: all.length });
+  const shown = view?.lines ?? [];
+  expect(shown.length).toBeGreaterThan(0);
+  expect(shown).toEqual(all.slice(all.length - shown.length));
+}
+
+describe('membership refresh repairs a ready source behind the server', () => {
+  it('re-reads a line the server lists but never published, marking the view stale meanwhile', async () => {
+    const { r, server } = await served();
+    // The agent's last reply reaches the file but its live event is lost.
+    server.write(main, 1, true);
+    r.posted.length = 0;
+    r.tick();
+    await r.pump();
+    r.lists.shift()?.([meta(main, mainBinding, 4)]);
+    await r.pump();
+    expect(r.reads.map((read) => read.tail)).toEqual([TAIL_HISTORY_LINES]);
+    expect(r.view()).toMatchObject({ status: 'resynchronizing', lines: ['l1', 'l2', 'l3'] });
+    expect(r.diagnostics.map((event) => event.code)).toContain('source-behind');
+    await server.settle();
+    showsCurrent(r, server);
+    expect(r.view()?.lines).toEqual(['l1', 'l2', 'l3', 's1.jsonl:4']);
+    expect(r.posted.map((message) => message.type).filter((type) => type !== 'session:update')).toEqual([
+      'source:status',
+      'source:append',
+      'source:status'
+    ]);
+  });
+
+  it('does not re-read when the listing matches or trails the shown content', async () => {
+    const { r, server } = await served();
+    r.tick();
+    await server.settle();
+    expect(server.served()).toBe(1);
+    // A live append outruns the listing: the server's count is behind what is shown.
+    server.write(main, 1);
+    await r.pump();
+    r.tick();
+    await r.pump();
+    r.lists.shift()?.([meta(main, mainBinding, 3)]);
+    await r.pump();
+    expect(r.reads).toHaveLength(0);
+    showsCurrent(r, server);
+  });
+
+  it('routes a listed binding change through invalidation and a full re-read, not a catch-up', async () => {
+    const { r } = await served();
+    r.tick();
+    await r.pump();
+    r.lists.shift()?.([meta(main, { sessionId: 's1', role: 'auxiliary' }, 4)]);
+    await r.pump();
+    expect(r.reads.map((read) => read.tail)).toEqual([undefined]);
+    expect(r.diagnostics.map((event) => event.code)).not.toContain('source-behind');
+    expect(r.view()).toMatchObject({ status: 'resynchronizing', lines: ['l1', 'l2', 'l3'] });
+  });
+
+  it('retries a failed catch-up read within the bounded budget, then pauses with Retry', async () => {
+    const { r, server } = await served();
+    server.write(main, 1, true);
+    r.tick();
+    await r.pump();
+    r.lists.shift()?.([meta(main, mainBinding, 4)]);
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      expect(r.reads).toHaveLength(1);
+      r.reads.shift()?.reject(new ApiError('unavailable', 'STREAM_SOURCE_UNAVAILABLE'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
+    expect(r.reads).toHaveLength(0);
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'load-error', lines: ['l1', 'l2', 'l3'] });
+    r.posted.length = 0;
+    r.store().retry();
+    await server.settle();
+    showsCurrent(r, server);
+  });
+
+  it('chases each listed count once, so a server whose reads trail its listing causes no read storm', async () => {
+    const { r, server } = await served();
+    r.tick();
+    await r.pump();
+    // The listing claims a fourth line that the server's read does not yet return.
+    r.lists.shift()?.([meta(main, mainBinding, 4)]);
+    await r.pump();
+    await server.settle();
+    expect(server.served()).toBe(2);
+    expect(r.view()).toMatchObject({ status: 'ready', lines: ['l1', 'l2', 'l3'] });
+    for (let tick = 0; tick < 3; tick++) {
+      r.tick();
+      await r.pump();
+      r.lists.shift()?.([meta(main, mainBinding, 4)]);
+      await r.pump();
+      expect(r.reads).toHaveLength(0);
+    }
+    // A higher claim is chased again.
+    server.write(main, 2, true);
+    r.tick();
+    await server.settle();
+    expect(server.served()).toBe(3);
+    showsCurrent(r, server);
+  });
+});
+
+describe('host-lifted pauses resume the renderer without Retry', () => {
+  it('resumes an overflow-exhausted source on its next live lifecycle event', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    await exhaustOverflow(r, server);
+    expect(r.diagnostics.map((event) => event.code)).toContain('recovery-exhausted');
+    r.emit({ type: 'resumed', source: main, version: v1, binding: mainBinding, totalLineCount: 1 });
+    await server.settle({ fire: true });
+    showsCurrent(r, server);
+    // Live appends apply again.
+    server.write(main, 2);
+    await r.pump();
+    showsCurrent(r, server);
+  });
+
+  it('resumes an overflow-exhausted source on the periodic refresh once the server lists more lines', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    await exhaustOverflow(r, server);
+    r.tick();
+    await server.settle({ fire: true });
+    showsCurrent(r, server);
+  });
+
+  it('resumes an overflow-exhausted source on window focus', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    await exhaustOverflow(r, server);
+    r.emit({ type: 'refresh', cardId: session.cardId, reason: 'focus' });
+    await server.settle({ fire: true });
+    showsCurrent(r, server);
+  });
+
+  it('resumes a read-failure pause once the server recovers and advances, without polling an idle failure', async () => {
+    const r = rig();
+    const server = serve(r, [[main, ['l1']]]);
+    await server.settle();
+    r.open();
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new Error('socket hang up'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'load-error' });
+    // An unchanged listing is no evidence of recovery: no re-read.
+    r.tick();
+    await r.pump();
+    r.lists.shift()?.([meta(main, mainBinding, 1)]);
+    await r.pump();
+    expect(r.reads).toHaveLength(0);
+    expect(r.view()).toMatchObject({ status: 'paused' });
+    server.write(main, 1);
+    r.tick();
+    await server.settle();
+    showsCurrent(r, server);
+  });
+
+  it('resumes an unavailable-source pause on the next live start', async () => {
+    const r = rig();
+    const server = serve(r, [[main, ['l1']]]);
+    await server.settle();
+    r.open();
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new ApiError('unavailable', 'STREAM_SOURCE_UNAVAILABLE'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'load-error' });
+    r.emit({ type: 'started', source: main, version: v1, binding: mainBinding, totalLineCount: 1 });
+    await server.settle();
+    showsCurrent(r, server);
+  });
+
+  it('resumes a membership-failure pause on the next successful listing', async () => {
+    const { r, server } = await served();
+    r.tick();
+    await r.pump();
+    r.failList();
+    await r.pump();
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'membership-error' });
+    // Nothing changed on the server; the listing succeeding is the recovery.
+    r.tick();
+    await server.settle();
+    showsCurrent(r, server);
+  });
+
+  it('resumes paused sources after the connection drops and returns', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    await exhaustOverflow(r, server);
+    r.emit({ type: 'connection', connected: false });
+    await r.pump();
+    expect(r.view()).toMatchObject({ status: 'paused' });
+    r.emit({ type: 'connection', connected: true });
+    await server.settle({ fire: true });
+    expect(r.store().getState().connection).toBe('connected');
+    showsCurrent(r, server);
+  });
+
+  it('resumes a paused subagent section while the main section stays live', async () => {
+    const { r, server } = await served([
+      [main, ['l1', 'l2']],
+      [child, ['c1']]
+    ]);
+    r.store().subscribeSource(child, 'tail');
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new ApiError('changed during read', 'STREAM_SOURCE_INCOHERENT'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
+    expect(r.view(child)).toMatchObject({ status: 'paused', error: 'inconsistent-source' });
+    showsCurrent(r, server);
+    server.write(child, 2, true);
+    r.tick();
+    await server.settle();
+    showsCurrent(r, server, child);
+    showsCurrent(r, server);
+  });
+
+  it('keeps Retry working when recovery cannot proceed on its own, and repeated Retry is idempotent', async () => {
+    const r = rig();
+    const server = serve(r, [[main, ['l1']]]);
+    await server.settle();
+    r.open();
+    await r.pump();
+    for (let attempt = 0; attempt <= SESSION_READ_RETRY_DELAYS_MS.length; attempt++) {
+      r.reads.shift()?.reject(new ApiError('changed during read', 'STREAM_SOURCE_INCOHERENT'));
+      await r.pump();
+      r.fire();
+      await r.pump();
+    }
+    for (let tick = 0; tick < 3; tick++) {
+      r.tick();
+      await server.settle();
+    }
+    expect(server.served()).toBe(0);
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'inconsistent-source' });
+    r.store().retry();
+    r.store().retry();
+    await r.pump();
+    expect(r.lists.length).toBeLessThanOrEqual(1);
+    await server.settle();
+    expect(server.served()).toBe(1);
+    showsCurrent(r, server);
+    r.store().retry();
+    await server.settle();
+    expect(server.served()).toBe(1);
+    showsCurrent(r, server);
   });
 });

@@ -117,8 +117,10 @@ interface Forwarded {
   requestId: string | null;
   /** Whether `requestId` has been answered with a snapshot. */
   answered: boolean;
-  /** Request already answered with an error, so a pause is reported once. */
+  /** Request the renderer holds paused by an error; it is answered again once the host lifts the pause. */
   errorFor: string | null;
+  /** Failure last reported for `errorFor`, so each distinct pause is reported once. */
+  errorCode: StreamSourceLoadError | null;
   /** Incarnation of the content the renderer holds. */
   version: StreamSourceVersion | null;
   /** Binding of the content the renderer holds. */
@@ -378,14 +380,15 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
   }
 
   /**
-   * Reports a typed failure once for the renderer's current request.
+   * Reports each distinct typed failure once for the renderer's current request.
    * @param f - Forwarding state.
    * @param source - Exact source.
    * @param error - Renderer-visible failure.
    */
   function fail(f: Forwarded, source: StreamSourceRef, error: StreamSourceLoadError): void {
-    if (!f.requestId || f.errorFor === f.requestId) return;
+    if (!f.requestId || (f.errorFor === f.requestId && f.errorCode === error)) return;
     f.errorFor = f.requestId;
+    f.errorCode = error;
     post({ type: 'source:error', generation, requestId: f.requestId, source: structuredClone(source), error });
   }
 
@@ -502,13 +505,25 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
         }
       }
       if (!current) continue;
-      // A lifted pause re-arms reporting so the next distinct pause reaches the renderer.
-      if (current.status !== 'paused') f.errorFor = null;
       if (current.status === 'paused') {
         const error = current.error as StreamSourceLoadError | null;
         fail(f, current.source, error && LOAD_ERRORS.includes(error) ? error : 'load-error');
         continue;
       }
+      if (f.errorFor !== null && f.errorFor === f.requestId) {
+        // The renderer drops everything for a paused source, so a pause the controller lifted on
+        // its own is ended by answering the paused request again with current content once caught up.
+        if (current.status === 'ready' && current.available) {
+          answer(f, current);
+          if (f.answered) {
+            f.errorFor = null;
+            f.errorCode = null;
+          }
+        }
+        continue;
+      }
+      f.errorFor = null;
+      f.errorCode = null;
       if (!f.answered) {
         if (current.status === 'ready' && current.available) answer(f, current);
         continue;
@@ -537,6 +552,7 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
       requestId: null,
       answered: false,
       errorFor: null,
+      errorCode: null,
       version: null,
       binding: null,
       last: 0,
@@ -546,6 +562,7 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
     f.requestId = requestId;
     f.answered = false;
     f.errorFor = null;
+    f.errorCode = null;
     forwarded.set(key, f);
     controller.subscribe({ source: structuredClone(trusted), mode: history, requestId, generation });
     sync(controller.getState());
