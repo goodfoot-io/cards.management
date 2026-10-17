@@ -1139,3 +1139,168 @@ describe('host-lifted pauses resume the renderer without Retry', () => {
     showsCurrent(r, server);
   });
 });
+
+/**
+ * Records every status the renderer ever publishes for a source.
+ * @param r - Rig with an open renderer.
+ * @param source - Source to watch.
+ * @returns Statuses seen so far, in publication order.
+ */
+function statusesOf(r: Rig, source: StreamSourceRef = main): string[] {
+  const seen: string[] = [];
+  r.store().subscribe(() => {
+    const status = r.view(source)?.status;
+    if (status && seen.at(-1) !== status) seen.push(status);
+  });
+  return seen;
+}
+
+/**
+ * Encoded size of an append's lines, the axis the renderer once bounded.
+ * @param message - Host message.
+ * @returns UTF-8 bytes of its lines, or 0 for any other message.
+ */
+function appendBytes(message: HostToRendererMessage): number {
+  if (message.type !== 'source:append') return 0;
+  return message.lines.reduce((total, line) => total + new TextEncoder().encode(line).length, 0);
+}
+
+describe('the host alone owns overflow recovery; the renderer never pauses on a burst', () => {
+  it('keeps main and subagent sections live through two 1000-event windows that cross re-requests', async () => {
+    const { r, server } = await served([
+      [main, ['l1', 'l2']],
+      [child, ['c1']]
+    ]);
+    r.store().subscribeSource(child, 'tail');
+    await server.settle();
+    const mainSeen = statusesOf(r);
+    const childSeen = statusesOf(r, child);
+    // Both sections re-request while the host is still forwarding to their answered requests.
+    r.store().subscribeSource(main, 'full');
+    r.store().subscribeSource(child, 'full');
+    for (let index = 0; index < 1100; index++) {
+      server.write(main, 1);
+      server.write(child, 1);
+    }
+    expect(r.posted.filter((message) => message.type === 'source:append').length).toBeGreaterThan(2000);
+    await server.settle();
+    expect(mainSeen).not.toContain('paused');
+    expect(childSeen).not.toContain('paused');
+    showsCurrent(r, server);
+    showsCurrent(r, server, child);
+    expect(r.view()?.lines).toEqual(server.lines.get(main));
+    expect(r.view(child)?.lines).toEqual(server.lines.get(child));
+    // Live delivery continues on the answered requests.
+    server.write(main, 3);
+    server.write(child, 3);
+    await r.pump();
+    showsCurrent(r, server);
+    showsCurrent(r, server, child);
+  });
+
+  it('answers an awaiting renderer after a host catch-up of two appends over 1 MiB each, never pausing', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    const seen = statusesOf(r);
+    const lines = server.lines.get(main) ?? [];
+    const filler = 'x'.repeat(1100);
+    // The server grows by 2,000 large lines whose live events are lost.
+    for (let index = 0; index < 2000; index++) lines.push(`${lines.length + 1}:${filler}`);
+    // The renderer re-requests; its request is still in flight when the host catches up.
+    r.store().subscribeSource(main, 'full');
+    r.posted.length = 0;
+    r.tick();
+    await flush();
+    r.lists.shift()?.([meta(main, mainBinding, lines.length)]);
+    await flush();
+    expect(r.reads).toHaveLength(1);
+    r.reads.shift()?.resolve(serverSnapshot(main, [...lines]));
+    await flush();
+    const chunks = r.posted.filter((message) => message.type === 'source:append');
+    expect(chunks.length).toBeGreaterThanOrEqual(2);
+    for (const chunk of chunks) expect(appendBytes(chunk)).toBeGreaterThan(1_048_576);
+    await server.settle();
+    expect(seen).not.toContain('paused');
+    showsCurrent(r, server);
+    expect(r.view()?.lines).toEqual(lines);
+  });
+
+  it('carries a single line over 1 MiB to a live renderer and to one awaiting an answer', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    const seen = statusesOf(r);
+    const lines = server.lines.get(main) ?? [];
+    const huge = (): string => `${lines.length + 1}:${'y'.repeat(2 * 1_048_576)}`;
+    const publish = (): void => {
+      lines.push(huge());
+      r.emit({
+        type: 'append',
+        source: main,
+        version: v1,
+        binding: mainBinding,
+        lineNumber: lines.length,
+        line: lines.at(-1) ?? ''
+      });
+    };
+    publish();
+    await r.pump();
+    showsCurrent(r, server);
+    const before = r.posted.length;
+    r.store().subscribeSource(main, 'full');
+    publish();
+    publish();
+    await server.settle();
+    expect(seen).not.toContain('paused');
+    showsCurrent(r, server);
+    expect(r.view()?.lines).toEqual(lines);
+    // One request, one answer: no refetch was spent on the oversized lines.
+    expect(r.posted.slice(before).filter((message) => message.type === 'source:snapshot')).toHaveLength(1);
+  });
+});
+
+describe('overflow diagnostics are coalesced per recovery episode', () => {
+  it('logs one opening and one counted closing line per source for a 30,000-line burst across two sources', async () => {
+    const { r, server } = await served([
+      [main, ['l1']],
+      [child, ['c1']]
+    ]);
+    r.store().subscribeSource(child, 'tail');
+    await server.settle();
+    r.diagnostics.length = 0;
+    // A lost line opens a forward gap on each source, so both re-read while the burst arrives.
+    for (const source of [main, child]) {
+      server.write(source, 1, true);
+      server.write(source, 1);
+    }
+    await r.pump();
+    expect(r.reads).toHaveLength(2);
+    for (let index = 0; index < 15_000; index++) {
+      server.write(main, 1);
+      server.write(child, 1);
+    }
+    await server.settle({ fire: true });
+    showsCurrent(r, server);
+    showsCurrent(r, server, child);
+    for (const source of [main, child]) {
+      const lines = r.diagnostics.filter((event) => event.source?.relPath === source.relPath);
+      expect(lines.filter((event) => event.code === 'resync-overflow')).toHaveLength(1);
+      const closing = lines.filter((event) => event.code === 'resync-recovered');
+      expect(closing).toHaveLength(1);
+      expect(closing[0]?.count).toBeGreaterThanOrEqual(29);
+      expect(lines.filter((event) => event.code === 'recovery-exhausted')).toHaveLength(0);
+    }
+    expect(r.diagnostics.length).toBeLessThan(20);
+    // Identifiers only: no native line reaches the log.
+    expect(JSON.stringify(r.diagnostics)).not.toContain('jsonl:');
+  });
+
+  it('closes an exhausted episode with a counted line at the pause', async () => {
+    const { r, server } = await served([[main, ['l1']]]);
+    r.diagnostics.length = 0;
+    await exhaustOverflow(r, server);
+    expect(r.diagnostics.filter((event) => event.code === 'resync-overflow')).toHaveLength(1);
+    const exhausted = r.diagnostics.filter((event) => event.code === 'recovery-exhausted');
+    expect(exhausted).toEqual([expect.objectContaining({ source: main })]);
+    // Every overflow of the episode, including those absorbed by an in-flight read, is counted.
+    expect(exhausted[0]?.count).toBeGreaterThan(SESSION_READ_RETRY_DELAYS_MS.length);
+    expect(JSON.stringify(r.diagnostics)).not.toContain('jsonl:');
+  });
+});

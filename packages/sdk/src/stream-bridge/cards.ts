@@ -20,8 +20,27 @@ import { TAIL_HISTORY_LINES } from '../stream-store/types.js';
 export interface CardsStreamClient {
   /** Lists stream metadata for a card. */
   listStreams(cardId: string): Promise<StreamMeta[]>;
-  /** Reads one coherent source snapshot, optionally only its trailing lines. */
-  getStream(cardId: string, streamType: string, relPath: string, tail?: number): Promise<StreamSourceSnapshot>;
+  /**
+   * Reads one coherent source snapshot, optionally only its trailing lines. Aborting
+   * `options.signal` must cancel the request and any pending retry; with
+   * `retryOnNetworkError: false` the first network failure surfaces so the session
+   * controller's bounded backoff, not the client's, owns retry.
+   */
+  getStream(
+    cardId: string,
+    streamType: string,
+    relPath: string,
+    tail: number | undefined,
+    options: CardsStreamReadOptions
+  ): Promise<StreamSourceSnapshot>;
+}
+
+/** Per-read policy the session adapter passes to every {@link CardsStreamClient.getStream}. */
+export interface CardsStreamReadOptions {
+  /** Aborted when the controller supersedes or cancels the read. */
+  signal: AbortSignal;
+  /** Always false: the controller owns read retry. */
+  retryOnNetworkError: false;
 }
 
 /**
@@ -50,20 +69,22 @@ function classify(error: unknown): SessionSourceFailure {
 /**
  * Adapts a Cards client to the session controller. Tail reads request
  * {@link TAIL_HISTORY_LINES} trailing lines; full reads omit the tail. The
- * client cannot abort, so the controller's fencing suppresses stale results.
+ * controller's abort signal is passed through so a superseded read cancels its
+ * fetch and retries, and network retry is left to the controller's bounded backoff.
  * @param client - Authenticated Cards client.
  * @returns Session client whose read failures are classified {@link SessionSourceError}s.
  */
 export function createCardsSessionClient(client: CardsStreamClient): SessionClient {
   return {
     listStreams: (cardId) => client.listStreams(cardId),
-    async getStream(source, mode) {
+    async getStream(source, mode, signal) {
       try {
         return await client.getStream(
           source.cardId,
           source.streamType,
           source.relPath,
-          mode === 'tail' ? TAIL_HISTORY_LINES : undefined
+          mode === 'tail' ? TAIL_HISTORY_LINES : undefined,
+          { signal, retryOnNetworkError: false }
         );
       } catch (error) {
         throw new SessionSourceError(classify(error));

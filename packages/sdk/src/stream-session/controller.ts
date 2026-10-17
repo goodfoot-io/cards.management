@@ -131,7 +131,9 @@ export interface SessionDiagnostic {
     | 'read-retry'
     | 'source-reset'
     | 'resync-overflow'
+    | 'resync-recovered'
     | 'recovery-exhausted'
+    | 'read-aborted'
     | 'source-behind'
     | 'stale-response'
     | 'inconsistent-source';
@@ -141,6 +143,8 @@ export interface SessionDiagnostic {
   source?: StreamSourceRef;
   /** Correlated operation, if any. */
   requestId?: string;
+  /** Occurrences this line coalesces (overflows in a recovery episode, or rate-limited repeats); omitted for one. */
+  count?: number;
 }
 
 /** Dependencies and lifetime identity fixed when constructing one controller. */

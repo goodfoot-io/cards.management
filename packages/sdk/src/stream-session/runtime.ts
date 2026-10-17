@@ -29,8 +29,11 @@ import {
 } from './errors.js';
 import { groupStreamSessions, streamSessionKey, streamSourceKey } from './grouping.js';
 
-/** Upper bound on distinct sources tracked for scope-rejection rate limiting. */
-const MAX_SCOPE_REJECTION_KEYS = 64;
+/** Upper bound on distinct (code, source) keys tracked for diagnostic rate limiting. */
+const MAX_LIMITED_KEYS = 64;
+
+/** Diagnostics that can repeat without bound and are therefore rate-limited. */
+const LIMITED: ReadonlySet<SessionDiagnostic['code']> = new Set(['rejected-scope', 'read-aborted', 'resync-overflow']);
 
 /** Private source reconciliation state, never exposed to consumers. */
 interface SourceWork {
@@ -56,6 +59,8 @@ interface SourceWork {
   conflict: boolean;
   /** Overflow recovery reads scheduled since the source last converged. */
   overflows: number;
+  /** Overflows observed in the current recovery episode; 0 when no episode is open. */
+  episode: number;
   /** Highest live coordinate an overflow discarded that accepted content does not yet cover; 0 when none. */
   lost: number;
   /** Transient native publications awaiting a snapshot. */
@@ -180,7 +185,7 @@ export function createController(options: SessionControllerOptions): SessionCont
   let pending: SessionSourceEvent[] = [];
   let bufferedEvents = 0;
   let bufferedBytes = 0;
-  const scopeRejections = new Map<string, number>();
+  const limited = new Map<string, { seen: number; reported: number }>();
 
   /** Publishes defensive copies so consumers cannot mutate controller internals. */
   function publish(): void {
@@ -189,17 +194,22 @@ export function createController(options: SessionControllerOptions): SessionCont
   }
 
   /**
-   * Rate-limits scope rejections per source so a persistent anomaly cannot flood the log.
-   * Admits the 1st, 2nd, 4th, 8th... occurrence; the session is fixed per controller.
+   * Rate-limits a repeatable diagnostic per code and source so a persistent anomaly cannot
+   * flood the log. Admits the 1st, 2nd, 4th, 8th... occurrence; the session is fixed per controller.
+   * @param code - Diagnostic category.
    * @param work - Relevant source when known.
-   * @returns Whether this occurrence should be reported.
+   * @returns Occurrences since the last admitted one (including this), or 0 when suppressed.
    */
-  function admitScopeRejection(work?: SourceWork): boolean {
-    const key = work ? streamSourceKey(work.state.source) : '';
-    if (!scopeRejections.has(key) && scopeRejections.size >= MAX_SCOPE_REJECTION_KEYS) scopeRejections.clear();
-    const seen = (scopeRejections.get(key) ?? 0) + 1;
-    scopeRejections.set(key, seen);
-    return (seen & (seen - 1)) === 0;
+  function admit(code: SessionDiagnostic['code'], work?: SourceWork): number {
+    const key = JSON.stringify([code, work ? streamSourceKey(work.state.source) : '']);
+    if (!limited.has(key) && limited.size >= MAX_LIMITED_KEYS) limited.clear();
+    const entry = limited.get(key) ?? { seen: 0, reported: 0 };
+    entry.seen++;
+    limited.set(key, entry);
+    if ((entry.seen & (entry.seen - 1)) !== 0) return 0;
+    const occurrences = entry.seen - entry.reported;
+    entry.reported = entry.seen;
+    return occurrences;
   }
 
   /**
@@ -207,18 +217,35 @@ export function createController(options: SessionControllerOptions): SessionCont
    * @param code - Stable reason category.
    * @param work - Relevant source when known.
    * @param requestId - Correlated request when known.
+   * @param occurrences - Occurrences this line stands for, when it coalesces several.
    */
-  function diagnose(code: SessionDiagnostic['code'], work?: SourceWork, requestId?: string): void {
-    if (code === 'rejected-scope' && !admitScopeRejection(work)) return;
+  function diagnose(code: SessionDiagnostic['code'], work?: SourceWork, requestId?: string, occurrences = 1): void {
+    if (LIMITED.has(code)) {
+      const admitted = admit(code, work);
+      if (admitted === 0) return;
+      occurrences = Math.max(occurrences, admitted);
+    }
     const correlation = requestId ?? work?.state.requestId;
     options.diagnostic?.(
       structuredClone({
         code,
         session,
         ...(work ? { source: work.state.source } : {}),
-        ...(identifier(correlation) ? { requestId: correlation } : {})
+        ...(identifier(correlation) ? { requestId: correlation } : {}),
+        ...(occurrences > 1 ? { count: occurrences } : {})
       })
     );
+  }
+
+  /**
+   * Closes a source's overflow recovery episode with one line carrying its overflow count.
+   * @param work - Source whose episode ended.
+   * @param outcome - Converged after the loss, or paused with the recovery budget spent.
+   */
+  function endEpisode(work: SourceWork, outcome: 'resync-recovered' | 'recovery-exhausted'): void {
+    const overflows = work.episode;
+    work.episode = 0;
+    if (overflows > 0 || outcome === 'recovery-exhausted') diagnose(outcome, work, undefined, overflows);
   }
 
   /**
@@ -284,6 +311,7 @@ export function createController(options: SessionControllerOptions): SessionCont
     work.state.status = 'unavailable';
     work.reset = true;
     work.lost = 0;
+    work.episode = 0;
     work.catchUp = false;
     if (rejectVersion && work.state.authority) {
       work.rejectedVersion = work.state.authority.version;
@@ -354,6 +382,22 @@ export function createController(options: SessionControllerOptions): SessionCont
       work.claimed = Math.max(work.claimed, work.listed);
       work.state.status = work.state.authority ? 'resynchronizing' : 'loading';
       active++;
+      // An aborted read gives its slot back at once: a fetch that ignores the signal, or a
+      // server that never answers, must not hold one of the four slots its successor needs.
+      let held = true;
+      const release = (): void => {
+        if (!held) return;
+        held = false;
+        active--;
+        abort.signal.removeEventListener('abort', onAbort);
+      };
+      const onAbort = (): void => {
+        release();
+        if (disposed) return;
+        diagnose('read-aborted', work);
+        queueMicrotask(pump);
+      };
+      abort.signal.addEventListener('abort', onAbort, { once: true });
       const baseline: SourceRequestBaseline = {
         reconciliationEpoch: work.state.reconciliationEpoch,
         requestId: work.state.requestId,
@@ -385,7 +429,7 @@ export function createController(options: SessionControllerOptions): SessionCont
           readFailed(work, error instanceof SessionSourceError ? error.code : 'load-error');
         })
         .finally(() => {
-          active--;
+          release();
           if (work.serial === operation) {
             work.abort = undefined;
             work.activeMode = undefined;
@@ -527,6 +571,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       return;
     }
     work.lost = 0;
+    endEpisode(work, 'resync-recovered');
     const buffered = work.buffer;
     clearBuffer(work);
     for (const event of buffered) acceptEvent(event);
@@ -572,7 +617,8 @@ export function createController(options: SessionControllerOptions): SessionCont
         // appends again. Accepted content is retained, marked stale until a read covers the loss.
         item.state.status = item.state.authority ? 'resynchronizing' : 'loading';
         item.state.error = null;
-        diagnose('resync-overflow', item);
+        // One line opens the episode; its end reports how many overflows it absorbed.
+        if (item.episode++ === 0) diagnose('resync-overflow', item);
         if (!item.abort && !item.queued && !item.cancelRetry && !listing) recover(item);
       }
       if (affected.length) publish();
@@ -803,7 +849,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       work.state.error = 'resync-overflow';
       work.retryable = true;
       clearBuffer(work);
-      diagnose('recovery-exhausted', work);
+      endEpisode(work, 'recovery-exhausted');
       return;
     }
     work.overflows++;
@@ -917,6 +963,7 @@ export function createController(options: SessionControllerOptions): SessionCont
               reset: false,
               conflict: false,
               overflows: 0,
+              episode: 0,
               lost: 0,
               buffer: [],
               attempts: 0,
@@ -1088,6 +1135,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       stopRetry(work);
       work.attempts = 0;
       work.overflows = 0;
+      work.episode = 0;
       work.lost = 0;
       work.catchUp = false;
       work.retryable = false;

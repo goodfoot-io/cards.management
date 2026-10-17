@@ -27,6 +27,7 @@ export {
 export {
   CardsClient,
   type ExecutionProcessStatus,
+  type RequestCallOptions,
   type RootCommandCompletion,
   type RootCommandInputs,
   type RunRootCommandOptions

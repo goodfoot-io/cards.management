@@ -7,7 +7,7 @@
  * @module stream-bridge
  */
 
-export type { CardsStreamClient } from './cards.js';
+export type { CardsStreamClient, CardsStreamReadOptions } from './cards.js';
 export { createCardsSessionClient, sessionEventFromDomainEvent } from './cards.js';
 export type {
   StreamBridgeDiagnostic,

@@ -7,6 +7,13 @@
  * overlap/gap reconciliation on absolute line coordinates, and fences every
  * response by generation, request ID, and local reconciliation epoch.
  *
+ * The store holds no live-event buffer. The host forwards appends only for a
+ * request it has answered, and answers each request with the controller's
+ * current content, so any append that reaches an awaiting source was posted
+ * before the host saw the request and is covered by the answer. Such appends,
+ * and any the store cannot place, are dropped; overflow recovery and its
+ * backoff belong to the host's session controller alone.
+ *
  * @summary Zustand vanilla store for session renderer state
  * @module stream-store/store
  */
@@ -40,7 +47,7 @@ import type {
   StreamStoreOptions,
   StreamStoreState
 } from './types.js';
-import { MAX_PENDING_BYTES, MAX_PENDING_EVENTS, TAIL_HISTORY_LINES } from './types.js';
+import { TAIL_HISTORY_LINES } from './types.js';
 import { validateHostMessage, validateRendererMessage, validateViewState } from './validate.js';
 
 declare global {
@@ -89,14 +96,10 @@ interface SourceWork {
   retired: string[];
   /** Same-version conflict awaiting server revalidation. */
   conflict: boolean;
-  /** Transient buffer was discarded; refetch once the current answer lands. */
+  /** Local content became untrustworthy while awaiting; refetch once the current answer lands. */
   refetchAfterAnswer: boolean;
-  /** Consecutive overflows without a clean accept. */
-  overflows: number;
   /** Consecutive automatic gap repairs. */
   gapRepairs: number;
-  /** Live events awaiting authority or gap fill. */
-  buffer: SourceAppendMessage[];
   /** Published view, regenerated after mutation. */
   view: StreamSourceView | null;
 }
@@ -127,18 +130,6 @@ function versionKey(version: StreamSourceVersion): string {
  */
 function sameVersion(a: StreamSourceVersion, b: StreamSourceVersion): boolean {
   return a.serverEpoch === b.serverEpoch && a.sourceEpoch === b.sourceEpoch;
-}
-
-/**
- * Counts UTF-8 bytes of native lines for buffer accounting.
- * @param lines - Native lines.
- * @returns Encoded byte length.
- */
-function byteLength(lines: readonly string[]): number {
-  const encoder = new TextEncoder();
-  let total = 0;
-  for (const line of lines) total += encoder.encode(line).length;
-  return total;
 }
 
 /**
@@ -175,8 +166,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
   const createRequestId = options.createRequestId ?? (() => crypto.randomUUID());
   const works = new Map<string, SourceWork>();
   const dirty = new Set<SourceWork>();
-  let bufferedEvents = 0;
-  let bufferedBytes = 0;
   let disposed = false;
   /** Key of the main already auto-subscribed; a main is auto-subscribed at most once. */
   let autoMain: string | null = null;
@@ -289,23 +278,9 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       retired: [],
       conflict: false,
       refetchAfterAnswer: false,
-      overflows: 0,
       gapRepairs: 0,
-      buffer: [],
       view: null
     };
-  }
-
-  /**
-   * Discards a source's transient buffer and its accounting.
-   * @param work - Source whose buffer is cleared.
-   */
-  function clearBuffer(work: SourceWork): void {
-    for (const event of work.buffer) {
-      bufferedEvents--;
-      bufferedBytes -= byteLength(event.lines);
-    }
-    work.buffer = [];
   }
 
   /**
@@ -361,7 +336,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     work.error = error;
     work.awaiting = false;
     work.refetchAfterAnswer = false;
-    clearBuffer(work);
     touch(work);
   }
 
@@ -388,7 +362,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     diagnose('rejected-message', work, { reason: 'binding-mismatch' });
     work.authority = null;
     work.epoch++;
-    clearBuffer(work);
     if (work.wanted) request(work, work.history);
     work.status = 'resynchronizing';
     touch(work);
@@ -403,29 +376,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     const drop = work.lines.length - TAIL_HISTORY_LINES;
     work.lines = work.lines.slice(drop);
     work.first += drop;
-  }
-
-  /**
-   * Buffers a live event under per-session count and byte bounds.
-   * @param work - Source.
-   * @param event - Live append.
-   */
-  function buffer(work: SourceWork, event: SourceAppendMessage): void {
-    const bytes = byteLength(event.lines);
-    if (bufferedEvents + 1 > MAX_PENDING_EVENTS || bufferedBytes + bytes > MAX_PENDING_BYTES) {
-      const affected = [...works.values()].filter((item) => item.buffer.length > 0 || item === work);
-      for (const item of affected) {
-        clearBuffer(item);
-        item.overflows++;
-        diagnose('resync-overflow', item);
-        if (item.overflows > 1) pause(item, 'resync-overflow');
-        else refetch(item);
-      }
-      return;
-    }
-    bufferedEvents++;
-    bufferedBytes += bytes;
-    work.buffer.push(event);
   }
 
   /**
@@ -468,7 +418,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       return;
     }
     work.conflict = true;
-    clearBuffer(work);
     refetch(work);
   }
 
@@ -549,16 +498,8 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     work.status = 'ready';
     work.error = null;
     work.conflict = false;
-    const pending = work.buffer;
-    clearBuffer(work);
-    for (const event of pending) onAppend(event, false);
-    if (work.status === 'ready') {
-      if (work.refetchAfterAnswer) refetch(work);
-      else {
-        work.gapRepairs = 0;
-        work.overflows = 0;
-      }
-    }
+    if (work.refetchAfterAnswer) refetch(work);
+    else work.gapRepairs = 0;
     trim(work);
     if (work.lines.length === 0) work.first = work.total + 1;
     touch(work);
@@ -568,9 +509,8 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
   /**
    * Applies a validated live append.
    * @param message - Live lines stamped with their source version and binding.
-   * @param notify - Whether to publish after applying.
    */
-  function onAppend(message: SourceAppendMessage, notify = true): void {
+  function onAppend(message: SourceAppendMessage): void {
     const work = works.get(sourceKey(message.source));
     if (!work?.member) {
       diagnose('stale-response', work, { reason: 'not-member' });
@@ -579,7 +519,7 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     if (!work.wanted || work.status === 'paused') return;
     if (!bound(work, message.binding)) {
       rebind(work);
-      if (notify) publish();
+      publish();
       return;
     }
     if (work.retired.includes(versionKey(message.version))) {
@@ -587,23 +527,18 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       return;
     }
     const authority = work.authority;
-    if (!authority || work.awaiting) {
-      buffer(work, message);
-      if (notify) publish();
-      return;
-    }
+    // Posted before the host saw the current request; its answer covers these lines.
+    if (!authority || work.awaiting) return;
     if (!sameVersion(authority.version, message.version)) {
       diagnose('source-reset', work, { reason: 'unseen-version' });
-      buffer(work, message);
       refetch(work);
-      if (notify) publish();
+      publish();
       return;
     }
     const localNext = work.first + work.lines.length;
     if (message.firstLineNumber > localNext) {
-      buffer(work, message);
       gap(work);
-      if (notify) publish();
+      publish();
       return;
     }
     let incomingFirst = message.firstLineNumber;
@@ -616,14 +551,14 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     const outcome = mergeRange(work, incomingFirst, incoming);
     if (outcome === 'conflict') {
       conflict(work);
-      if (notify) publish();
+      publish();
       return;
     }
     work.total = Math.max(work.total, work.first + work.lines.length - 1);
     if (work.meta) work.meta.lineCount = work.total;
     trim(work);
     touch(work);
-    if (notify) publish();
+    publish();
   }
 
   /**
@@ -697,7 +632,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     work.authority = null;
     work.epoch++;
     work.conflict = false;
-    clearBuffer(work);
     if (work.member && work.wanted) {
       request(work, work.history);
       work.status = 'resynchronizing';
@@ -756,7 +690,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       work.awaiting = false;
       work.refetchAfterAnswer = false;
       work.epoch++;
-      clearBuffer(work);
       touch(work);
     }
     for (const [key, member] of current) {
@@ -774,9 +707,7 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
         work.authority = null;
         work.epoch++;
         work.conflict = false;
-        work.overflows = 0;
         work.gapRepairs = 0;
-        clearBuffer(work);
         if (work.wanted) {
           request(work, work.history);
           if (rebound) work.status = 'resynchronizing';
@@ -845,7 +776,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
           if (message.state === 'connected' && previous !== 'connected') {
             // The host lifts every pause on reconnection and answers only fresh requests.
             if (work.status === 'paused') {
-              work.overflows = 0;
               work.gapRepairs = 0;
               work.conflict = false;
             }
@@ -897,7 +827,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       work.refetchAfterAnswer = false;
       work.status = 'unsubscribed';
       work.epoch++;
-      clearBuffer(work);
       touch(work);
       post({ type: 'source:unsubscribe', generation, source: { ...work.source } });
       publish();
@@ -907,7 +836,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
       post({ type: 'session:resync', generation });
       for (const work of works.values()) {
         if (!work.member || !work.wanted || work.status !== 'paused') continue;
-        work.overflows = 0;
         work.gapRepairs = 0;
         work.conflict = false;
         request(work, work.history);
@@ -935,7 +863,6 @@ export function createStreamStore(options: StreamStoreOptions): StreamRendererSt
     },
     dispose() {
       if (disposed) return;
-      for (const work of works.values()) clearBuffer(work);
       disposed = true;
       removeListener();
     }

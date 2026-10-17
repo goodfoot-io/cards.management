@@ -111,6 +111,14 @@ const WORKSPACE_UNCERTAINTY_REASONS: ReadonlySet<string> = new Set([
 /** One root-command HTTP exchange: a status and parsed body, or no response at all. */
 type RootCommandExchange = { readonly status: number; readonly body: unknown } | null;
 
+/** Per-call cancellation and retry policy for one request. */
+export interface RequestCallOptions {
+  /** Cancels the in-flight attempt and any pending retry with {@link RequestCancelledError}. */
+  signal?: AbortSignal;
+  /** When false, the first network failure or timeout surfaces instead of being retried. */
+  retryOnNetworkError?: boolean;
+}
+
 /** Default initial fetch timeout in milliseconds for each individual request attempt. */
 const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 
@@ -335,10 +343,12 @@ export class CardsClient {
    * aborts so cancellation is not delayed by the remaining sleep.
    *
    * @param ms - Delay duration in milliseconds.
+   * @param callSignal - Optional per-call signal that also ends the delay early.
    * @returns True when the delay elapsed fully; false when cancelled.
    */
-  private backoffSleep(ms: number): Promise<boolean> {
-    const signal = this._signal;
+  private backoffSleep(ms: number, callSignal?: AbortSignal): Promise<boolean> {
+    const signals = [this._signal, callSignal].filter((item): item is AbortSignal => item !== undefined);
+    const signal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
     return new Promise((resolve) => {
       if (signal?.aborted) {
         resolve(false);
@@ -514,18 +524,20 @@ export class CardsClient {
    * @param fn - Async request function to execute.
    * @param idempotent - When false, ambiguous network failures surface as
    *   {@link NetworkError} instead of being retried. Defaults to true.
+   * @param call - Per-call cancellation and retry policy layered over the client's.
    * @returns The resolved value from the request function.
    * @throws ApiError when the server responds with a non-2xx status.
    * @throws NetworkError when a non-idempotent request fails to reach the server.
    * @throws RetryExhaustedError when an idempotent request exhausts its attempt budget.
-   * @throws RequestCancelledError when the configured abort signal fires.
+   * @throws RequestCancelledError when the configured or per-call abort signal fires.
    */
-  private async request<T>(fn: () => Promise<T>, idempotent = true): Promise<T> {
+  private async request<T>(fn: () => Promise<T>, idempotent = true, call: RequestCallOptions = {}): Promise<T> {
     let retryDelayMs = INITIAL_RETRY_DELAY_MS;
     let attempts = 0;
+    const cancelled = (): boolean => this._signal?.aborted === true || call.signal?.aborted === true;
 
     while (true) {
-      if (this._signal?.aborted) {
+      if (cancelled()) {
         throw new RequestCancelledError('Request cancelled');
       }
       try {
@@ -574,7 +586,7 @@ export class CardsClient {
 
         // Cancellation wins over retry bookkeeping: an aborted signal must not
         // spend more attempts or wait out a backoff sleep.
-        if (this._signal?.aborted) {
+        if (cancelled()) {
           throw new RequestCancelledError('Request cancelled', error instanceof Error ? error : undefined);
         }
 
@@ -582,7 +594,7 @@ export class CardsClient {
         // the request may already have committed server-side — so retrying it
         // would duplicate the effect (main-186). Surface it instead of retrying.
         // The same applies when the caller has opted out of network retries.
-        if (!idempotent || this.options.retryOnNetworkError === false) {
+        if (!idempotent || this.options.retryOnNetworkError === false || call.retryOnNetworkError === false) {
           throw new NetworkError(
             error instanceof Error ? error.message : String(error),
             error instanceof Error ? error : undefined
@@ -597,7 +609,7 @@ export class CardsClient {
           );
         }
 
-        const completed = await this.backoffSleep(retryDelayMs);
+        const completed = await this.backoffSleep(retryDelayMs, call.signal);
         if (!completed) {
           throw new RequestCancelledError('Request cancelled', error instanceof Error ? error : undefined);
         }
@@ -1353,17 +1365,37 @@ export class CardsClient {
    * @param relPath - Stream's source-relative path (forward slashes, may contain
    *   multiple segments, e.g. `"session-abc/subagents/foo.jsonl"`).
    * @param tail - When set to a positive integer, return only the last `tail` lines.
+   * @param options - Per-read cancellation and retry policy. Aborting `signal` cancels the
+   *   in-flight fetch and any pending retry; `retryOnNetworkError: false` surfaces the first
+   *   network failure or timeout as {@link NetworkError} so the caller owns retry.
    * @returns Coherent source snapshot with version, binding, and line coordinates.
    * @throws ApiError on 404 (unknown card or stream) or other server errors.
    * @throws NetworkError when the request fails to reach the server.
+   * @throws RequestCancelledError when `options.signal` or the client signal aborts.
    */
-  async getStream(cardId: string, streamType: string, relPath: string, tail?: number): Promise<StreamSourceSnapshot> {
+  async getStream(
+    cardId: string,
+    streamType: string,
+    relPath: string,
+    tail?: number,
+    options: RequestCallOptions = {}
+  ): Promise<StreamSourceSnapshot> {
     const encodedRelPath = relPath.split('/').map(encodeURIComponent).join('/');
     const url = this.buildUrl(
       `/cards/${encodeURIComponent(cardId)}/streams/${encodeURIComponent(streamType)}/${encodedRelPath}`,
       tail !== undefined ? { tail } : undefined
     );
-    return this.request(() => this.getHttpClient().get<StreamSourceSnapshot>(url));
+    const signal = options.signal;
+    return this.request(
+      () =>
+        this.getHttpClient().get<StreamSourceSnapshot>(
+          url,
+          // A caller signal would replace the attempt timeout, so both are combined.
+          signal ? { signal: AbortSignal.any([signal, AbortSignal.timeout(this._currentTimeoutMs)]) } : undefined
+        ),
+      true,
+      options
+    );
   }
 
   // --- Compare Operations ---

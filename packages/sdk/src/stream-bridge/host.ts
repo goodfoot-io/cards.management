@@ -61,6 +61,8 @@ export interface StreamBridgeDiagnostic {
   requestId?: string;
   /** Kebab-case rejection reason, if any. */
   reason?: string;
+  /** Occurrences this line coalesces, when more than one. */
+  count?: number;
 }
 
 /** Dependencies and lifetime identity for one renderer load. */
@@ -272,7 +274,8 @@ export function createStreamHostBridge(options: StreamHostBridgeOptions): Stream
       options.diagnostic?.({
         code: event.code,
         ...(event.source ? { source: event.source } : {}),
-        ...(event.requestId ? { requestId: event.requestId } : {})
+        ...(event.requestId ? { requestId: event.requestId } : {}),
+        ...(event.count ? { count: event.count } : {})
       })
   });
 

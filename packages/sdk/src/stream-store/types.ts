@@ -32,12 +32,6 @@ export const TAIL_HISTORY_LINES = 50;
 /** Maximum native lines one `source:append` message may carry. */
 export const MAX_APPEND_LINES = 1000;
 
-/** Maximum pending live events buffered per session while sources reconcile. */
-export const MAX_PENDING_EVENTS = 1000;
-
-/** Maximum pending live bytes (UTF-8 of native lines) buffered per session while sources reconcile. */
-export const MAX_PENDING_BYTES = 1_048_576;
-
 /** Maximum identifier length for generations, request IDs, and layout tokens. */
 export const MAX_TOKEN_LENGTH = 256;
 
@@ -428,7 +422,7 @@ export interface StreamStoreState {
 
 /** Identifier-only renderer diagnostics. */
 export interface StreamStoreDiagnostic {
-  code: 'rejected-message' | 'stale-response' | 'source-reset' | 'resync-overflow' | 'inconsistent-source';
+  code: 'rejected-message' | 'stale-response' | 'source-reset' | 'inconsistent-source';
   source?: StreamSourceRef;
   requestId?: string;
   reason?: string;

@@ -3,7 +3,10 @@
  *
  * The client reads the actual file at request time (the server's snapshot
  * point) and completes when the test releases it, modelling a large source
- * whose transfer is slower than the appends being written behind it.
+ * whose transfer is slower than the appends being written behind it. Every
+ * case runs twice: with a client that rejects a read once its signal aborts,
+ * and with one that ignores the signal and completes late, so convergence
+ * never depends on the client honouring cancellation.
  * @summary Session controller overflow recovery convergence
  */
 import { appendFileSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -50,9 +53,10 @@ afterEach(() => {
 /**
  * Builds a controller over a real JSONL file that the test appends to.
  * @param initialLines - Lines written before the controller starts.
+ * @param aware - Whether a read rejects as soon as its signal aborts.
  * @returns Controller and controls over the file, held reads, live events, and backoffs.
  */
-function transcript(initialLines: number) {
+function transcript(initialLines: number, aware: boolean) {
   const directory = mkdtempSync(path.join(tmpdir(), 'session-overflow-'));
   directories.push(directory);
   const file = path.join(directory, 'main.jsonl');
@@ -96,9 +100,10 @@ function transcript(initialLines: number) {
           firstLineNumber: first,
           totalLineCount: all.length
         };
-        return new Promise((resolve) =>
-          reads.push({ mode, snapshot, aborted: () => signal.aborted, release: () => resolve(snapshot) })
-        );
+        return new Promise((resolve, reject) => {
+          if (aware) signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+          reads.push({ mode, snapshot, aborted: () => signal.aborted, release: () => resolve(snapshot) });
+        });
       }
     },
     events: {
@@ -179,10 +184,11 @@ function transcript(initialLines: number) {
 /**
  * Starts the controller and subscribes the main source with full coverage.
  * @param initialLines - Lines on disk before start.
+ * @param aware - Whether a read rejects as soon as its signal aborts.
  * @returns Harness with the first full read in flight.
  */
-async function subscribed(initialLines: number): Promise<ReturnType<typeof transcript>> {
-  const test = transcript(initialLines);
+async function subscribed(initialLines: number, aware: boolean): Promise<ReturnType<typeof transcript>> {
+  const test = transcript(initialLines, aware);
   test.controller.start();
   await flush();
   test.controller.subscribe({ source, mode: 'full', requestId: 'r1', generation: 'view-1' });
@@ -190,9 +196,12 @@ async function subscribed(initialLines: number): Promise<ReturnType<typeof trans
   return test;
 }
 
-describe('session controller live-buffer overflow recovery', () => {
+describe.each([
+  ['a signal-aware client', true],
+  ['a non-signal-aware client', false]
+])('session controller live-buffer overflow recovery with %s', (_name, aware) => {
   it('converges on the file after appends overflow the buffer during two consecutive reads', async () => {
-    const test = await subscribed(3000);
+    const test = await subscribed(3000, aware);
     // Appends outrun the first large read: more than 1,000 live events wait behind it.
     test.write(1200);
     const first = await test.deliver();
@@ -226,7 +235,7 @@ describe('session controller live-buffer overflow recovery', () => {
   });
 
   it('catches up through a tail window when the discarded span is short', async () => {
-    const test = await subscribed(200);
+    const test = await subscribed(200, aware);
     // Three large records overflow the 1 MiB byte bound while only three lines are discarded.
     test.write(3, 400_000);
     await test.deliver();
@@ -241,7 +250,7 @@ describe('session controller live-buffer overflow recovery', () => {
   });
 
   it('retains shown content while resynchronizing and pauses retryably only after the bounded budget', async () => {
-    const test = await subscribed(100);
+    const test = await subscribed(100, aware);
     const shown = test.reads[0]?.snapshot.lines ?? [];
     // Every read is outrun by more than the buffer bound, indefinitely.
     for (let round = 0; round < 30 && test.state().status !== 'paused'; round++) {

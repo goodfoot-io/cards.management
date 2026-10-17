@@ -9,13 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { createStreamStore } from '../../src/stream-store/store.js';
-import {
-  MAX_PENDING_BYTES,
-  MAX_PENDING_EVENTS,
-  MAX_VIEW_STATE_ENTRIES,
-  type StreamViewState,
-  TAIL_HISTORY_LINES
-} from '../../src/stream-store/types.js';
+import { MAX_VIEW_STATE_ENTRIES, type StreamViewState, TAIL_HISTORY_LINES } from '../../src/stream-store/types.js';
 import {
   append,
   child,
@@ -229,15 +223,17 @@ describe('live merge within one source version', () => {
     expect(view(h).authority?.version).toEqual(v1);
   });
 
-  it('fills a forward gap through exactly one in-flight refetch and applies the buffered suffix', () => {
+  it('fills a forward gap through exactly one in-flight refetch whose answer carries the suffix', () => {
     const h = ready(3);
     const before = h.subscribes().length;
     h.deliver(append(6, ['l6']));
     h.deliver(append(7, ['l7']));
     expect(h.subscribes()).toHaveLength(before + 1);
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'resynchronizing' });
-    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3', 'l4', 'l5'] }));
+    // The host answers from content that includes everything it forwarded before the request.
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'] }));
     expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4', 'l5', 'l6', 'l7'], status: 'ready' });
+    expect(h.subscribes()).toHaveLength(before + 1);
   });
 
   it('treats same-version conflicting bytes as an inconsistency and refetches', () => {
@@ -509,36 +505,37 @@ describe('connection and resynchronization', () => {
     expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1', 'l2', 'l3'] });
   });
 
-  it('buffers live events during loading, applies the established version, and refetches for an unseen one', () => {
+  it('drops live events while awaiting an answer, applies later ones, and refetches for an unseen version', () => {
     const h = harness({ mode: 'expanded' });
+    // Posted before the host saw the request: the answer already covers them.
     h.deliver(append(3, ['l3']));
     h.deliver(append(1, ['zz'], { version: v2 }));
     const before = h.subscribes().length;
-    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2'] }));
-    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'resynchronizing' });
+    h.deliver(snapshot({ requestId: h.lastRequestId(), lines: ['l1', 'l2', 'l3'] }));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3'], status: 'ready' });
+    expect(h.subscribes()).toHaveLength(before);
+    h.deliver(append(4, ['l4']));
+    expect(view(h)).toMatchObject({ lines: ['l1', 'l2', 'l3', 'l4'], status: 'ready' });
+    h.deliver(append(1, ['zz'], { version: v2 }));
+    expect(view(h).status).toBe('resynchronizing');
     expect(h.subscribes()).toHaveLength(before + 1);
     h.deliver(snapshot({ requestId: h.lastRequestId(), version: v2, lines: ['zz'] }));
     expect(view(h)).toMatchObject({ lines: ['zz'], status: 'ready' });
   });
 
-  it('discards only the transient buffer on event-count overflow and refetches', () => {
+  it('never pauses, refetches or diagnoses however many events or bytes reach an awaiting source', () => {
     const h = harness({ mode: 'expanded' });
-    for (let index = 0; index <= MAX_PENDING_EVENTS; index++) h.deliver(append(index + 2, [`l${index + 2}`]));
-    expect(h.diagnostics.map((event) => event.code)).toContain('resync-overflow');
     const request = h.lastRequestId();
+    // Two full former event windows, then lines whose bytes exceed the former byte bound twice over.
+    for (let index = 0; index < 2002; index++) h.deliver(append(index + 2, [`l${index + 2}`]));
+    const large = 'x'.repeat(1_048_576 + 1);
+    for (let index = 0; index < 3; index++) h.deliver(append(index + 2004, [large]));
+    expect(view(h)).toMatchObject({ status: 'loading', error: null, requestId: request });
+    expect(h.subscribes()).toHaveLength(1);
+    expect(h.diagnostics).toEqual([]);
     h.deliver(snapshot({ requestId: request, lines: ['l1'] }));
-    expect(view(h).lines).toEqual(['l1']);
-    expect(view(h).status).toBe('resynchronizing');
-    expect(h.lastRequestId()).not.toBe(request);
-  });
-
-  it('bounds buffered bytes per session', () => {
-    const h = harness({ mode: 'expanded' });
-    const large = 'x'.repeat(Math.ceil(MAX_PENDING_BYTES / 2));
-    h.deliver(append(2, [large]));
-    h.deliver(append(3, [large]));
-    h.deliver(append(4, [large]));
-    expect(h.diagnostics.map((event) => event.code)).toContain('resync-overflow');
+    expect(view(h)).toMatchObject({ status: 'ready', lines: ['l1'] });
+    expect(h.subscribes()).toHaveLength(1);
   });
 
   it('explicit retry resumes paused sources and asks the host to resynchronize membership', () => {
