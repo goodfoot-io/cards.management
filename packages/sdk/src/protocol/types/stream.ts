@@ -289,3 +289,20 @@ export interface SessionDescriptor {
   /** Explicit missing or conflicting main anomaly. */
   validity: 'ready' | 'missing-main' | 'conflicting-main';
 }
+
+// --- Generated stream titles ---
+
+/**
+ * Whether a sidecar title is the card-scoped placeholder transcript sync once stamped on every
+ * subagent sidecar (`Subagent transcript for <cardId>`). It names the card, never the agent, so a
+ * renderer must not present it as a subagent's identity: identical on every subagent of a card, it
+ * would label each section the same. Sidecars already committed to card repositories still carry
+ * it, so readers recognise it here, beside the {@link StreamMetaFile} contract, rather than by
+ * matching text of their own; the reconciler no longer writes a subagent title at all.
+ * @param title - Sidecar or membership title.
+ * @param cardId - Card that owns the stream.
+ * @returns True when the title is the generated subagent placeholder for that card.
+ */
+export function isGeneratedSubagentTitle(title: string, cardId: string): boolean {
+  return title === `Subagent transcript for ${cardId}`;
+}

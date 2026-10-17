@@ -28,6 +28,10 @@ export interface HostMember {
   readonly relPath: string;
   readonly role: SessionMember['role'];
   readonly agentId?: string;
+  /** Sidecar title, carried on both the membership entry and the metadata as the host groups it. */
+  readonly title?: string;
+  /** Sidecar task text (first prompt) the host extracted. */
+  readonly taskContent?: string;
 }
 
 /** Options for a session host. */
@@ -93,16 +97,19 @@ export function createSessionHost(options: SessionHostOptions): SessionHost {
     streamType: options.streamType,
     runtime: options.runtime,
     ...binding(relPath),
+    ...(member(relPath).title === undefined ? {} : { title: member(relPath).title }),
+    ...(member(relPath).taskContent === undefined ? {} : { taskContent: member(relPath).taskContent }),
     sourcePath: `/native/${relPath}`,
     startedAt: '2026-01-01T00:00:00.000Z',
     lineCount,
     createdAt: '2026-01-01T00:00:00.000Z',
     isActive
   });
-  const members: SessionMember[] = options.members.map(({ relPath, role, agentId }) => ({
+  const members: SessionMember[] = options.members.map(({ relPath, role, agentId, title }) => ({
     source: ref(relPath),
     role,
-    ...(agentId === undefined ? {} : { agentId })
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(title === undefined ? {} : { title })
   }));
   const mains = members.filter((candidate) => candidate.role === 'main');
   const descriptor: SessionDescriptor = {

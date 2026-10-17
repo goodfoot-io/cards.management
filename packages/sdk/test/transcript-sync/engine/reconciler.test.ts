@@ -8,7 +8,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { StreamMetaFile } from '../../../src/protocol/types/stream.js';
+import { isGeneratedSubagentTitle, type StreamMetaFile } from '../../../src/protocol/types/stream.js';
 import { Reconciler } from '../../../src/transcript-sync/engine/reconciler.js';
 import type { SessionSyncManifest } from '../../../src/transcript-sync/manifest.js';
 
@@ -106,6 +106,7 @@ describe('Reconciler', () => {
     expect(meta.agentId).toBe('child-1');
     expect(meta.runtime).toBe('opencode');
     expect(meta.streamType).toBe('opencode-session');
+    expect(meta.title).toBeUndefined();
   });
 
   it('writes the sidecar once, with the full StreamMetaFile shape, and never overwrites it', async () => {
@@ -147,7 +148,33 @@ describe('Reconciler', () => {
     const meta = JSON.parse(readFileSync(sidecarPath, 'utf-8')) as StreamMetaFile;
     expect(meta.agentId).toBe('worker-7');
     expect(meta.role).toBe('subagent');
-    expect(meta.title).toBe('Subagent transcript for card-1');
+  });
+
+  it('writes no card-scoped title on subagent sidecars, so each keeps only its distinct native identity', async () => {
+    mkdirSync(join(watchRoot, 'sess-1', 'subagents'), { recursive: true });
+    for (const agent of ['agent-aconnection-fix-2-51fbfcd79224af0c', 'agent-a37e08eab6309e87f'])
+      writeFileSync(join(watchRoot, 'sess-1', 'subagents', `${agent}.jsonl`), 'x\n');
+
+    await new Reconciler(manifest).reconcileOnce(warnFn, errorFn);
+
+    const metas = ['agent-aconnection-fix-2-51fbfcd79224af0c', 'agent-a37e08eab6309e87f'].map(
+      (agent) =>
+        JSON.parse(
+          readFileSync(join(destRoot(), 'sess-1', 'subagents', `${agent}.jsonl.meta.json`), 'utf-8')
+        ) as StreamMetaFile
+    );
+    for (const meta of metas) {
+      expect(meta).not.toHaveProperty('title');
+      expect(JSON.stringify(meta)).not.toContain('Subagent transcript for');
+    }
+    expect(metas.map((meta) => meta.agentId)).toEqual([
+      'agent-aconnection-fix-2-51fbfcd79224af0c',
+      'agent-a37e08eab6309e87f'
+    ]);
+    // The placeholder recogniser readers use for already-committed sidecars matches what was once generated.
+    expect(isGeneratedSubagentTitle('Subagent transcript for card-1', 'card-1')).toBe(true);
+    expect(isGeneratedSubagentTitle('Subagent transcript for card-1', 'card-2')).toBe(false);
+    expect(isGeneratedSubagentTitle('Fix the connection snapshot', 'card-1')).toBe(false);
   });
 
   it('is a cheap no-op on a second pass with nothing new (offset-based)', async () => {
