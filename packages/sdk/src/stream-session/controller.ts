@@ -131,6 +131,8 @@ export interface SessionDiagnostic {
     | 'read-retry'
     | 'source-reset'
     | 'resync-overflow'
+    | 'recovery-exhausted'
+    | 'source-behind'
     | 'stale-response'
     | 'inconsistent-source';
   /** Trusted session identity. */

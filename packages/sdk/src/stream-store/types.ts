@@ -165,7 +165,10 @@ export interface SourceSnapshotMessage extends StreamSourceAuthorityStamp {
   totalLineCount: number;
 }
 
-/** Typed failure answering the renderer's current subscription. */
+/**
+ * Typed failure answering the renderer's current subscription, which pauses the source. When the
+ * host recovers on its own it answers the same request with a `source:snapshot`, ending the pause.
+ */
 export interface SourceErrorMessage {
   type: 'source:error';
   generation: string;

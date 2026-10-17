@@ -66,6 +66,12 @@ interface SourceWork {
   cancelRetry?: () => void;
   /** Paused by a retryable failure (read or overflow recovery), liftable by a live event or refresh. */
   retryable: boolean;
+  /** Server line count from the latest membership listing. */
+  listed: number;
+  /** Highest listed line count an issued read already covers; only a higher listing claims unseen lines. */
+  claimed: number;
+  /** The next read catches up through a tail window because the listing claims lines this source lacks. */
+  catchUp: boolean;
 }
 
 /** Request-start identity and coordinates deliberately exclude native history and metadata. */
@@ -278,6 +284,7 @@ export function createController(options: SessionControllerOptions): SessionCont
     work.state.status = 'unavailable';
     work.reset = true;
     work.lost = 0;
+    work.catchUp = false;
     if (rejectVersion && work.state.authority) {
       work.rejectedVersion = work.state.authority.version;
       retire(work, work.state.authority.version);
@@ -286,15 +293,15 @@ export function createController(options: SessionControllerOptions): SessionCont
   }
 
   /**
-   * Chooses the coverage of the next read. A source behind an overflow loss first
-   * catches up through a tail window merged onto its accepted prefix; only a gap
-   * the window cannot bridge escalates to a full read.
+   * Chooses the coverage of the next read. A source behind an overflow loss or a
+   * listing that claims lines it lacks first catches up through a tail window merged
+   * onto its accepted prefix; only a gap the window cannot bridge escalates to a full read.
    * @param work - Source about to be read.
    * @returns Requested history coverage.
    */
   function coverage(work: SourceWork): SessionHistoryMode {
     if (work.reset) return 'full';
-    return work.lost > 0 && work.state.authority ? 'tail' : work.state.mode;
+    return (work.lost > 0 || work.catchUp) && work.state.authority ? 'tail' : work.state.mode;
   }
 
   /**
@@ -344,6 +351,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       work.abort = abort;
       work.serial = operation;
       work.activeMode = mode;
+      work.claimed = Math.max(work.claimed, work.listed);
       work.state.status = work.state.authority ? 'resynchronizing' : 'loading';
       active++;
       const baseline: SourceRequestBaseline = {
@@ -505,6 +513,7 @@ export function createController(options: SessionControllerOptions): SessionCont
     work.state.status = 'ready';
     work.state.error = null;
     work.reset = false;
+    work.catchUp = false;
     work.conflict = false;
     work.rejectedVersion = undefined;
     work.attempts = 0;
@@ -794,6 +803,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       work.state.error = 'resync-overflow';
       work.retryable = true;
       clearBuffer(work);
+      diagnose('recovery-exhausted', work);
       return;
     }
     work.overflows++;
@@ -876,6 +886,12 @@ export function createController(options: SessionControllerOptions): SessionCont
         state.revision++;
         for (const member of descriptor.members) {
           const key = streamSourceKey(member.source);
+          const metadata = records.find(
+            (record) =>
+              record.streamType === member.source.streamType &&
+              record.relPath === member.source.relPath &&
+              record.sessionId === session.sessionId
+          );
           let work = works.get(key);
           if (!work) {
             work = {
@@ -904,19 +920,32 @@ export function createController(options: SessionControllerOptions): SessionCont
               lost: 0,
               buffer: [],
               attempts: 0,
-              retryable: false
+              retryable: false,
+              listed: 0,
+              claimed: 0,
+              catchUp: false
             };
             works.set(key, work);
-          } else if (work.state.available && work.state.meta) {
-            const metadata = records.find(
-              (record) =>
-                record.streamType === member.source.streamType &&
-                record.relPath === member.source.relPath &&
-                record.sessionId === session.sessionId
-            );
-            if (metadata) work.state.meta = { ...structuredClone(metadata), lineCount: work.state.totalLineCount };
-          }
-          if (work.state.subscribed && (!work.state.available || work.state.status === 'resynchronizing'))
+          } else if (metadata && work.state.available && work.state.meta)
+            // Displayed metadata describes displayed content; the server's own count is kept in `listed`.
+            work.state.meta = { ...structuredClone(metadata), lineCount: work.state.totalLineCount };
+          if (metadata && count(metadata.lineCount)) work.listed = metadata.lineCount;
+          // A successful listing resolves the membership failure that paused the source.
+          if (work.state.error === 'membership-error') resume(work);
+          // The server lists lines no issued read covered: a lost live update or a missed append.
+          // A ready source re-reads them; a retryably paused one is lifted to do so. Each listed
+          // count is chased once, so a server whose reads lag its listing cannot cause a read storm.
+          if (
+            work.state.subscribed &&
+            work.listed > work.state.totalLineCount &&
+            work.listed > work.claimed &&
+            (work.state.status === 'ready' || resume(work))
+          ) {
+            work.catchUp = true;
+            work.state.status = work.state.authority ? 'resynchronizing' : 'loading';
+            diagnose('source-behind', work);
+            request(work);
+          } else if (work.state.subscribed && (!work.state.available || work.state.status === 'resynchronizing'))
             request(work);
         }
         publish();
@@ -925,9 +954,10 @@ export function createController(options: SessionControllerOptions): SessionCont
         if (!disposed && !abort.signal.aborted && operation === listSerial) {
           diagnose('load-error');
           for (const work of works.values())
-            if (work.state.subscribed) {
+            if (work.state.subscribed && work.state.status !== 'paused') {
               work.state.status = 'paused';
               work.state.error = 'membership-error';
+              work.retryable = true;
             }
           publish();
         }
@@ -1059,6 +1089,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       work.attempts = 0;
       work.overflows = 0;
       work.lost = 0;
+      work.catchUp = false;
       work.retryable = false;
       work.abort?.abort();
       work.abort = undefined;
