@@ -147,6 +147,7 @@
       "public/packages/sdk/tsconfig.json"
     ],
     "public/packages/sdk/test/slot-lock.test.ts": [],
+    "public/packages/sdk/test/stream-bridge/abort.test.ts": [],
     "public/packages/sdk/test/stream-bridge/cards.test.ts": [],
     "public/packages/sdk/test/stream-bridge/host.test.ts": [],
     "public/packages/sdk/test/stream-bridge/layout.test.ts": [],
