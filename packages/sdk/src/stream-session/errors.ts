@@ -9,8 +9,9 @@ export type SessionSourceFailure = 'not-found' | 'rejected-scope' | 'inconsisten
 
 /**
  * Backoff before each automatic re-read of a source whose read failed with a
- * retryable code (`inconsistent-source`, `load-error`); its length is the
- * consecutive-attempt budget before the source pauses visibly.
+ * retryable code (`inconsistent-source`, `load-error`), and before each
+ * recovery read of a source whose live buffer overflowed; its length is the
+ * consecutive-attempt budget before the source pauses visibly and retryably.
  */
 export const SESSION_READ_RETRY_DELAYS_MS: readonly number[] = [250, 1000, 2000];
 

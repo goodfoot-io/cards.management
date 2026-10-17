@@ -152,6 +152,7 @@
     "public/packages/sdk/test/stream-bridge/layout.test.ts": [],
     "public/packages/sdk/test/stream-session/controller.test.ts": [],
     "public/packages/sdk/test/stream-session/grouping.test.ts": [],
+    "public/packages/sdk/test/stream-session/overflow-recovery.test.ts": [],
     "public/packages/sdk/test/stream-store/store.test.ts": [],
     "public/packages/sdk/test/stream-store/validate.test.ts": [],
     "public/packages/sdk/test/stream-store/window.test.ts": [],

@@ -435,6 +435,57 @@ describe('failures, retry, and connection', () => {
     expect(r.view()).toMatchObject({ status: 'ready', lines: ['a'], error: null });
   });
 
+  it('surfaces exhausted overflow recovery as a retryable resync-overflow pause', async () => {
+    const r = rig();
+    r.lists.shift()?.([meta(main, mainBinding, 1)]);
+    await flush();
+    r.open();
+    await r.pump();
+    const lines = ['l1'];
+    /** Answers the oldest read from the server's current content in its requested window. */
+    const answer = (): void => {
+      const read = r.reads.shift();
+      const first = read?.tail === undefined ? 1 : Math.max(1, lines.length - read.tail + 1);
+      read?.resolve(serverSnapshot(main, lines.slice(first - 1), { first }));
+    };
+    // Every read is outrun by more live appends than the controller may buffer.
+    for (let round = 0; round < 20 && r.view()?.status !== 'paused'; round++) {
+      if (r.reads.length === 0) r.fire();
+      await r.pump();
+      if (r.reads.length === 0) continue;
+      const pending = r.reads[0];
+      const snapshotLines = [...lines];
+      for (let index = 0; index < 1001; index++) {
+        lines.push(`l${lines.length + 1}`);
+        r.emit({
+          type: 'append',
+          source: main,
+          version: v1,
+          binding: mainBinding,
+          lineNumber: lines.length,
+          line: lines[lines.length - 1] ?? ''
+        });
+      }
+      const first = pending?.tail === undefined ? 1 : Math.max(1, snapshotLines.length - pending.tail + 1);
+      r.reads.shift()?.resolve(serverSnapshot(main, snapshotLines.slice(first - 1), { first }));
+      await r.pump();
+    }
+    expect(r.view()).toMatchObject({ status: 'paused', error: 'resync-overflow' });
+    expect(r.posted.filter((message) => message.type === 'source:error')).toHaveLength(1);
+    r.store().retry();
+    await r.pump();
+    r.lists.shift()?.([meta(main, mainBinding, lines.length)]);
+    await r.pump();
+    for (let round = 0; round < 5 && r.reads.length > 0; round++) {
+      answer();
+      await r.pump();
+    }
+    expect(r.view()).toMatchObject({ status: 'ready', error: null, totalLineCount: lines.length });
+    const shown = r.view()?.lines ?? [];
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown).toEqual(lines.slice(lines.length - shown.length));
+  });
+
   it('retries transient server read failures without surfacing an error to the renderer', async () => {
     const r = rig();
     r.lists.shift()?.([meta(main, mainBinding, 1)]);

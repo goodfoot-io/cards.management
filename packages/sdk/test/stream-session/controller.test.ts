@@ -468,7 +468,7 @@ describe('session controller contract', () => {
     });
   });
 
-  it('pauses repeated overflow without unbounded historical retries and preserves acknowledged content', async () => {
+  it('keeps the in-flight read through repeated overflow and preserves acknowledged content', async () => {
     const test = await opened();
     test.reads.shift()?.resolve(snapshot(['one']));
     await flush();
@@ -477,14 +477,20 @@ describe('session controller contract', () => {
       for (let index = 0; index < 1001; index++) test.emit(append(4 + index, 'pending'));
     expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({
       lines: ['one'],
-      status: 'paused',
-      error: 'resync-overflow'
+      status: 'resynchronizing',
+      error: null
     });
-    expect(test.reads.length).toBeLessThanOrEqual(3);
-    test.controller.refresh();
-    test.lists.shift()?.([meta]);
+    expect(test.reads).toHaveLength(1);
+    expect(test.reads[0]?.signal.aborted).toBe(false);
+    const lines = ['one', 'two', 'gap', ...Array.from({ length: 1001 }, () => 'pending')];
+    test.reads.shift()?.resolve(snapshot(lines));
     await flush();
-    expect(test.reads.at(-1)?.signal.aborted).toBe(false);
+    expect(test.controller.getState().sources.get(streamSourceKey(source))).toMatchObject({
+      lines,
+      status: 'ready',
+      error: null
+    });
+    expect(test.backoffs).toHaveLength(0);
   });
 
   it('rejects an old full response after removal and same-path readdition', async () => {

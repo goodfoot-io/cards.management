@@ -54,16 +54,18 @@ interface SourceWork {
   gapRepairs: number;
   /** Conflicting same-version bytes require explicit server revalidation. */
   conflict: boolean;
-  /** Consecutive overflows without successful reconciliation. */
+  /** Overflow recovery reads scheduled since the source last converged. */
   overflows: number;
+  /** Highest live coordinate an overflow discarded that accepted content does not yet cover; 0 when none. */
+  lost: number;
   /** Transient native publications awaiting a snapshot. */
   buffer: SessionSourceEvent[];
   /** Consecutive automatic read retries since the last success or budget reset. */
   attempts: number;
   /** Cancels the pending backoff timer, if any. */
   cancelRetry?: () => void;
-  /** Paused by a classified read failure, liftable by a live event or refresh. */
-  readFailure: boolean;
+  /** Paused by a retryable failure (read or overflow recovery), liftable by a live event or refresh. */
+  retryable: boolean;
 }
 
 /** Request-start identity and coordinates deliberately exclude native history and metadata. */
@@ -275,6 +277,7 @@ export function createController(options: SessionControllerOptions): SessionCont
     work.state.available = false;
     work.state.status = 'unavailable';
     work.reset = true;
+    work.lost = 0;
     if (rejectVersion && work.state.authority) {
       work.rejectedVersion = work.state.authority.version;
       retire(work, work.state.authority.version);
@@ -283,12 +286,29 @@ export function createController(options: SessionControllerOptions): SessionCont
   }
 
   /**
+   * Chooses the coverage of the next read. A source behind an overflow loss first
+   * catches up through a tail window merged onto its accepted prefix; only a gap
+   * the window cannot bridge escalates to a full read.
+   * @param work - Source about to be read.
+   * @returns Requested history coverage.
+   */
+  function coverage(work: SourceWork): SessionHistoryMode {
+    if (work.reset) return 'full';
+    return work.lost > 0 && work.state.authority ? 'tail' : work.state.mode;
+  }
+
+  /**
    * Enqueues source history while coalescing requests and respecting full upgrades.
    * @param work - Subscribed source.
    */
   function request(work: SourceWork): void {
     if (disposed || !work.state.subscribed || !state.connected || work.state.status === 'paused') return;
-    if (work.abort && (work.activeMode === 'full' || (!work.reset && work.state.mode === 'tail'))) return;
+    if (
+      work.abort &&
+      (work.activeMode === 'full' ||
+        (!work.reset && (work.state.mode === 'tail' || work.activeMode === coverage(work))))
+    )
+      return;
     if (work.abort) {
       work.abort.abort();
       work.abort = undefined;
@@ -320,7 +340,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       const abort = new AbortController();
       const operation = ++serial;
       const epoch = work.state.reconciliationEpoch;
-      const mode = work.reset ? 'full' : work.state.mode;
+      const mode = coverage(work);
       work.abort = abort;
       work.serial = operation;
       work.activeMode = mode;
@@ -452,7 +472,13 @@ export function createController(options: SessionControllerOptions): SessionCont
         if (value === undefined) {
           work.abort = undefined;
           work.serial = ++serial;
-          repairGap(work);
+          if (work.lost > 0) {
+            // More was discarded than the catch-up window spans: the same recovery reads in full.
+            work.reset = true;
+            work.state.status = 'resynchronizing';
+            request(work);
+            publish();
+          } else repairGap(work);
           return;
         }
         merged.push(value);
@@ -482,8 +508,16 @@ export function createController(options: SessionControllerOptions): SessionCont
     work.conflict = false;
     work.rejectedVersion = undefined;
     work.attempts = 0;
-    work.readFailure = false;
+    work.retryable = false;
     work.abort = undefined;
+    if (work.lost > work.state.totalLineCount) {
+      // Accepted content advanced but still ends before discarded live lines; post-overflow
+      // events stay buffered for replay once a recovery read covers the loss.
+      recover(work);
+      publish();
+      return;
+    }
+    work.lost = 0;
     const buffered = work.buffer;
     clearBuffer(work);
     for (const event of buffered) acceptEvent(event);
@@ -519,19 +553,21 @@ export function createController(options: SessionControllerOptions): SessionCont
     const bytes = new TextEncoder().encode(JSON.stringify(event)).length;
     if (bufferedEvents + 1 > 1000 || bufferedBytes + bytes > 1_048_576) {
       const affected = [...works.values()].filter((item) => item.buffer.length > 0 || item === work);
+      for (const item of affected)
+        for (const discarded of item === work ? [...item.buffer, event] : item.buffer)
+          if (discarded.type === 'append') item.lost = Math.max(item.lost, discarded.lineNumber);
+      // Unknown-source events are discarded too; their sources' first reads start after them.
       clearBuffer();
       for (const item of affected) {
-        item.overflows++;
-        item.abort?.abort();
-        item.abort = undefined;
-        item.serial = ++serial;
-        item.state.reconciliationEpoch++;
-        item.state.status = item.overflows > 1 ? 'paused' : 'resynchronizing';
-        item.state.error = item.overflows > 1 ? 'resync-overflow' : null;
+        // An in-flight read stays authoritative and is kept: restarting it would race the same
+        // appends again. Accepted content is retained, marked stale until a read covers the loss.
+        item.state.status = item.state.authority ? 'resynchronizing' : 'loading';
+        item.state.error = null;
         diagnose('resync-overflow', item);
-        request(item);
+        if (!item.abort && !item.queued && !item.cancelRetry && !listing) recover(item);
       }
-      if (!affected.length) diagnose('resync-overflow');
+      if (affected.length) publish();
+      else diagnose('resync-overflow');
       return;
     }
     bufferedEvents++;
@@ -641,7 +677,7 @@ export function createController(options: SessionControllerOptions): SessionCont
       publish();
       return;
     }
-    if (!authority || work.abort || listing || work.reset) {
+    if (!authority || work.abort || listing || work.reset || work.lost > 0) {
       buffer(event, work);
       return;
     }
@@ -706,7 +742,7 @@ export function createController(options: SessionControllerOptions): SessionCont
     }
     work.state.status = 'paused';
     work.state.error = code;
-    work.readFailure = true;
+    work.retryable = true;
     diagnose('load-error', work);
     publish();
   }
@@ -717,11 +753,12 @@ export function createController(options: SessionControllerOptions): SessionCont
    * @returns Whether the pause was lifted.
    */
   function resume(work: SourceWork): boolean {
-    if (!work.state.subscribed || work.state.status !== 'paused' || !work.readFailure) return false;
+    if (!work.state.subscribed || work.state.status !== 'paused' || !work.retryable) return false;
     work.state.status = 'resynchronizing';
     work.state.error = null;
     work.attempts = 0;
-    work.readFailure = false;
+    work.overflows = 0;
+    work.retryable = false;
     return true;
   }
 
@@ -744,6 +781,38 @@ export function createController(options: SessionControllerOptions): SessionCont
     publish();
   }
 
+  /**
+   * Schedules one bounded recovery read for a source behind an overflow loss, or pauses
+   * it retryably once {@link SESSION_READ_RETRY_DELAYS_MS} is exhausted.
+   * @param work - Source whose accepted content does not cover discarded live lines.
+   */
+  function recover(work: SourceWork): void {
+    stopRetry(work);
+    const delay = SESSION_READ_RETRY_DELAYS_MS[work.overflows];
+    if (delay === undefined) {
+      work.state.status = 'paused';
+      work.state.error = 'resync-overflow';
+      work.retryable = true;
+      clearBuffer(work);
+      return;
+    }
+    work.overflows++;
+    work.state.status = work.state.authority ? 'resynchronizing' : 'loading';
+    work.state.error = null;
+    const epoch = work.state.reconciliationEpoch;
+    work.cancelRetry = options.scheduler.after(delay, () => {
+      work.cancelRetry = undefined;
+      if (
+        disposed ||
+        !work.state.subscribed ||
+        work.state.status === 'paused' ||
+        work.state.reconciliationEpoch !== epoch
+      )
+        return;
+      request(work);
+    });
+  }
+
   /** Explicit retries reset bounded repair budgets, then revalidate membership. */
   function retry(): void {
     for (const work of works.values())
@@ -753,7 +822,7 @@ export function createController(options: SessionControllerOptions): SessionCont
         work.overflows = 0;
         work.gapRepairs = 0;
         work.attempts = 0;
-        work.readFailure = false;
+        work.retryable = false;
       }
     refresh();
   }
@@ -832,9 +901,10 @@ export function createController(options: SessionControllerOptions): SessionCont
               reset: false,
               conflict: false,
               overflows: 0,
+              lost: 0,
               buffer: [],
               attempts: 0,
-              readFailure: false
+              retryable: false
             };
             works.set(key, work);
           } else if (work.state.available && work.state.meta) {
@@ -918,7 +988,7 @@ export function createController(options: SessionControllerOptions): SessionCont
             work.state.error = null;
             work.overflows = 0;
             work.attempts = 0;
-            work.readFailure = false;
+            work.retryable = false;
           }
         refresh();
       } else {
@@ -975,7 +1045,7 @@ export function createController(options: SessionControllerOptions): SessionCont
         work.state.error = null;
         work.overflows = 0;
         work.attempts = 0;
-        work.readFailure = false;
+        work.retryable = false;
       }
       if (!wasSubscribed || upgrade || work.state.status !== 'ready') request(work);
       publish();
@@ -987,7 +1057,9 @@ export function createController(options: SessionControllerOptions): SessionCont
       work.state.requestId = null;
       stopRetry(work);
       work.attempts = 0;
-      work.readFailure = false;
+      work.overflows = 0;
+      work.lost = 0;
+      work.retryable = false;
       work.abort?.abort();
       work.abort = undefined;
       work.serial = ++serial;

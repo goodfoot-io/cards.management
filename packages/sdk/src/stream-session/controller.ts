@@ -179,7 +179,10 @@ export interface SessionController {
  * Creates a bounded, version-fenced native source session controller.
  *
  * Live buffering is bounded to 1,000 events or 1 MiB and history concurrency to
- * four reads. New incarnations require authoritative full snapshots. Each
+ * four reads. An overflow discards the buffer but keeps the in-flight read;
+ * content stays shown as resynchronizing while bounded, backed-off recovery
+ * reads catch up, and only an exhausted budget pauses the source retryably.
+ * New incarnations require authoritative full snapshots. Each
  * operation is fenced by session, generation, source reconciliation epoch,
  * request identity, and request-start baseline.
  * @param _options - Trusted lifetime scope and injected host dependencies.
