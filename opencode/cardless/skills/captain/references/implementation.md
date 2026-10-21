@@ -32,7 +32,7 @@ When all units are complete, pass the `<completion-gate>` before proceeding to S
 
 Every commit in this flow follows the `<workspace-commit-style>` and `<markdown-guidelines>` conventions.
 
-When the task introduces new behavior whose contract is worth validating ahead of implementation — a new public function, API, data type, schema, or algorithm — consult the `<tdd-bootstrap>` instructions from the `$tdd-bootstrap` skill. Skip the bootstrap for refactors, spikes, UI or visual work, glue code, one-shot scripts, framework-determined shapes, and small in-place edits.
+When the task introduces new behavior whose contract is worth validating ahead of implementation — a new public function, API, data type, schema, or algorithm — consult the `<tdd-bootstrap>` instructions from the `@tdd-bootstrap` skill. Skip the bootstrap for refactors, spikes, UI or visual work, glue code, one-shot scripts, framework-determined shapes, and small in-place edits.
 
 ## 3. Evaluate Quality
 
@@ -104,7 +104,7 @@ Follow `./worktrees.md` to create a disposable detached worktree at `implement/$
 - **Baseline setup fails** — ownership is inconclusive. Diagnose and repair provisioning, tools, dependencies, or services; retry with new evidence.
 - **Reproduces on baseline** — repair local drift (base-branch sync, dependencies, artifacts), then the root cause; re-run the failing command.
 - **Does not reproduce on baseline** — the failure is in scope of this task's work; fix it and re-run.
-- **Independent progress is impossible** — save the evidence, load `$blocker-contract`, and block only if every criterion holds. Otherwise repair, isolate, delegate, or re-plan.
+- **Independent progress is impossible** — save the evidence, load `@blocker-contract`, and block only if every criterion holds. Otherwise repair, isolate, delegate, or re-plan.
 
 </pre-existing-diagnosis>
 

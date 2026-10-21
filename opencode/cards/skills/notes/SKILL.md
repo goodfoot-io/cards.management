@@ -21,7 +21,7 @@ While working on this card, write a note whenever you encounter any of the follo
 
 ## Note Format
 
-Write two files per note. Load the `$markdown` skill if not already loaded — both the note content and its sidecar summary follow the `<markdown-guidelines>`.
+Write two files per note. Load the `@markdown` skill if not already loaded — both the note content and its sidecar summary follow the `<markdown-guidelines>`.
 
 Use a kebab-case slug that matches the trigger category (e.g. `entry-points`, `key-types`).
 

@@ -9,7 +9,7 @@ Inspect tracked and staged changes with `git diff` and `git diff --cached`; list
 - **Unrelated user work:** preserve exactly; use explicit-path staging or a clean isolated worktree.
 - **Pre-existing off-card generated or provisioned artifacts:** leave untouched; exclude them from staging and work detection.
 - **Card-required generated deliverables:** regenerate from their source, validate, and stage only their explicit paths.
-- **Overlapping state:** reconcile intent from source/history or use an isolated worktree. Load `$blocker-contract` only if neither method can preserve ownership and advance the card.
+- **Overlapping state:** reconcile intent from source/history or use an isolated worktree. Load `@blocker-contract` only if neither method can preserve ownership and advance the card.
 
 Return to the caller after recording the off-card set. Never infer ownership from a card-dedicated worktree or stage the whole tree.
 

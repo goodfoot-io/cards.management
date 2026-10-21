@@ -67,7 +67,7 @@ You own [absolute paths under WORKER_WORKTREE]. Do not touch files outside this 
 [Peer packages or outside work this task consumes that has not merged yet, or "None". Build against the stated contract; report what remains BLOCKED on it — never fetch, rebase onto, or reconstruct the missing side.]
 
 ## Workflow
-When this task adds new behavior worth validating ahead of implementation, follow `$tdd-bootstrap`: Phase 1 contract + stubs → checkpoint below (if required) → Phase 2 skipped checks → Phase 3 implement and unskip. Bug fixes skip the bootstrap — reproduce first. Commit each validated logical unit on `[WORKER_BRANCH]` per `<workspace-commit-style>` and `<markdown-guidelines>`. [Task-specific additions]
+When this task adds new behavior worth validating ahead of implementation, follow `@tdd-bootstrap`: Phase 1 contract + stubs → checkpoint below (if required) → Phase 2 skipped checks → Phase 3 implement and unskip. Bug fixes skip the bootstrap — reproduce first. Commit each validated logical unit on `[WORKER_BRANCH]` per `<workspace-commit-style>` and `<markdown-guidelines>`. [Task-specific additions]
 
 ## Checkpoint
 [Required | Not required]. When required: after Phase 1, report `CHECKPOINT: contract-ready` to me and hold — no tests, no implementation — until I send `PROCEED`. Silence is a stall, not a green light. If you discover a cross-package coupling this brief didn't flag, report `CHECKPOINT: unanticipated-contract` and hold the same way, even when marked "Not required."

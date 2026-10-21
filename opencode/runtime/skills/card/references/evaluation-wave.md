@@ -78,7 +78,7 @@ A mixed set — one evaluator approves while another requests changes — is CHA
 
 - **All APPROVED** (every spawned evaluator): Proceed to Step 6: Finalize. This is the only path to Finalize.
 - **Any CHANGES_REQUESTED**: Proceed to Step 3: Dispatch Developer Team with the recorded findings. You do not fix evaluator findings — the developer team does.
-- **BLOCKED**: Treat the evaluator verdict as scheduling evidence. Repair, reassign, or re-plan first; create card-level blocked state only after loading `$blocker-contract` and proving every criterion.
+- **BLOCKED**: Treat the evaluator verdict as scheduling evidence. Repair, reassign, or re-plan first; create card-level blocked state only after loading `@blocker-contract` and proving every criterion.
 
 ## 3. Dispatch Developer Team
 

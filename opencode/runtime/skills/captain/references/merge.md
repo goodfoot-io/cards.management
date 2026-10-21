@@ -20,6 +20,6 @@ Locate the worktree holding `$BASE_BRANCH` with `git worktree list --porcelain`.
 - **Disjoint unrelated work:** preserve it exactly. Validate the integration in a clean isolated worktree, then fast-forward only when Git confirms those paths remain intact. Use explicit path-scoped staging or stashing where needed; never stash the whole tree.
 - **Overlap:** reconcile intent or use an isolated integration worktree. Restore any preserved user paths and verify them afterward.
 
-Diagnose a failed fast-forward, conflict, or restore; resolve, rebase, or re-plan and validate again. Block only after loading `$blocker-contract` and proving every criterion. On success, stop without changing card status or adding a completion comment.
+Diagnose a failed fast-forward, conflict, or restore; resolve, rebase, or re-plan and validate again. Block only after loading `@blocker-contract` and proving every criterion. On success, stop without changing card status or adding a completion comment.
 
 </instructions>

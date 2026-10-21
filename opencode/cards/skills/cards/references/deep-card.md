@@ -4,13 +4,13 @@ A deep card structures one card as a self-contained documentation corpus — a r
 
 Everything in the skill body still applies: run the matched card type's interview, open `CARD.md` with a commander's intent per `commanders-intent.md`, and keep `plans/` empty at creation time. This reference replaces the writing guide's CARD.md body structure; §3 maps where each writing-guide section goes instead.
 
-**Intra-card references are backtick paths, never markdown links.** Card markdown links resolve against the *workspace* root, not the card repository — `[…](explanation/foundations.md)` opens a nonexistent workspace path when clicked. Write `` `explanation/foundations.md` `` for card-internal references; markdown fragment links are only for workspace code paths per the `$markdown` skill.
+**Intra-card references are backtick paths, never markdown links.** Card markdown links resolve against the *workspace* root, not the card repository — `[…](explanation/foundations.md)` opens a nonexistent workspace path when clicked. Write `` `explanation/foundations.md` `` for card-internal references; markdown fragment links are only for workspace code paths per the `@markdown` skill.
 
 ## 1. Research Before Authorship
 
 Surveys run after the interview establishes scope (on the no-interview path, after the request is read) and before any file is authored. Dispatch parallel read-only surveys — one per plane the card touches (docs/wiki corpus, each service or package plane, public surfaces) — each returning `file:line` citations and an explicit exists/does-not-exist verdict for every concept the source material presumes; where subagents are unavailable, run the same surveys serially.
 
-Condense each survey the same session into the card's `notes/` tier. Deep cards extend the `$notes` skill: subdirectories replace flat slugs, the tier is committed once (§5) instead of note-by-note, and sidecars gain a `title` (§5) — the note content format is otherwise `$notes`'s.
+Condense each survey the same session into the card's `notes/` tier. Deep cards extend the `@notes` skill: subdirectories replace flat slugs, the tier is committed once (§5) instead of note-by-note, and sidecars gain a `title` (§5) — the note content format is otherwise `@notes`'s.
 
 - `notes/codebase/` — same-day surveys of the current system, one file per plane.
 - `notes/evidence/` — findings about the source documentation package itself: what is normative, what is stale, what must not be copied. Omit this directory when there is no source package — never fake it.
@@ -54,7 +54,7 @@ Each file is single-topic and independently loadable; siblings cross-reference i
 
 ## 4. Author the Hero Page
 
-When the model has shape worth rendering — lifecycle, trust boundary, phase authority — author one static HTML page per skill-body step 2 (`$html-files` owns the mechanics and sidecar schema, `$design` the styling) and commit it **before** `CARD.md` so it opens the card. The page restates content the tiers own — a visual index, no new facts, no author scripts (`"scripts": false`).
+When the model has shape worth rendering — lifecycle, trust boundary, phase authority — author one static HTML page per skill-body step 2 (`@html-files` owns the mechanics and sidecar schema, `@design` the styling) and commit it **before** `CARD.md` so it opens the card. The page restates content the tiers own — a visual index, no new facts, no author scripts (`"scripts": false`).
 
 ## 5. Assemble in Narrative Order
 
@@ -66,7 +66,7 @@ Commit order is reading order, and every committed `.md` becomes a row in the ca
 4. `explanation/`, then `how-to/`, then `reference/`, then `notes/` surveys — one commit each.
 5. Final commit: `notes/README.md` plus hub alignment — verify every routing-table row names an existing file and every file is named from `CARD.md` or `notes/README.md`.
 
-Every committed `.md` carries a same-basename `.md.meta.json` sidecar in the same commit: `{"title": …, "summary": …}` — `title` is the short label shown in the card timeline; `summary` is a link-dense digest per the `$markdown` guidelines.
+Every committed `.md` carries a same-basename `.md.meta.json` sidecar in the same commit: `{"title": …, "summary": …}` — `title` is the short label shown in the card timeline; `summary` is a link-dense digest per the `@markdown` guidelines.
 
 ## 6. Validate the Depth
 

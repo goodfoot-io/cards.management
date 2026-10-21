@@ -5,7 +5,7 @@ description: Evaluate card state and orchestrate the matched workflow with judgm
 
 **Use as few tokens as possible in this session by using subagents.**
 
-Before deferring work to a prerequisite card or recording/retaining card-level blocked state, load `$blocker-contract`; its `<blocker-contract>` is authoritative. When every criterion holds, commit the actionable blocker comment and `blocked` tag together without changing gates.
+Before deferring work to a prerequisite card or recording/retaining card-level blocked state, load `@blocker-contract`; its `<blocker-contract>` is authoritative. When every criterion holds, commit the actionable blocker comment and `blocked` tag together without changing gates.
 
 Fix each evaluator's `Out of scope:` item when feasible; otherwise create a `related` card for it.
 

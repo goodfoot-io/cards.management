@@ -1,15 +1,15 @@
 # Interview References
 
-Per-type reference files for the `$interview` skill. Two files per card type:
+Per-type reference files for the `@interview` skill. Two files per card type:
 - `interview-<type>.md` — **interview guide**: how to conduct the post-creation interview and shape the card.
-- `<type>.md` — **writing guide**: target CARD.md structure (symlinks to `$cards` references — edit there).
+- `<type>.md` — **writing guide**: target CARD.md structure (symlinks to `@cards` references — edit there).
 
 Plus one shared reference:
-- `commanders-intent.md` — first-principles for the opening paragraph of CARD.md (symlink to `$cards` references).
+- `commanders-intent.md` — first-principles for the opening paragraph of CARD.md (symlink to `@cards` references).
 
 ## Consumer
 
-**`$interview` skill** — loads `commanders-intent.md`, `<type>.md`, and `interview-<type>.md` in Step 3 after routing. The interview guide drives the post-creation interview; the writing guide shapes CARD.md structure.
+**`@interview` skill** — loads `commanders-intent.md`, `<type>.md`, and `interview-<type>.md` in Step 3 after routing. The interview guide drives the post-creation interview; the writing guide shapes CARD.md structure.
 
 ## Type Mapping
 
@@ -24,7 +24,7 @@ Plus one shared reference:
 
 ## Symlinks
 
-Writing guides and `commanders-intent.md` are symlinked from `$cards` references — edit those files there; the symlinks ensure both skills see the same content.
+Writing guides and `commanders-intent.md` are symlinked from `@cards` references — edit those files there; the symlinks ensure both skills see the same content.
 
 ```
 interview/references/bug-report.md        -> ../../../../cards/skills/cards/references/bug-report.md

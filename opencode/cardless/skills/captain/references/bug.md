@@ -128,7 +128,7 @@ Run every reproduction test. Then lint and typecheck per the project's AGENTS.md
 Based on the combined result:
 - **All reproduction tests pass and all validations pass**: Commit the fix and proceed to Step 3: Validate.
 - **Reproduction test still fails, or validation fails on implementation grounds**: Save the evidence, revert only this attempt's verified source changes, preserve the reproducer, and retry a new hypothesis or return to planning.
-- **Cannot advance independently**: Load `$blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
+- **Cannot advance independently**: Load `@blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
 
 Commit on success:
 
@@ -177,7 +177,7 @@ Validation is binary — there is no "probably fine" state.
 Based on the result:
 - **All validations pass**: Proceed to Step 4: Finalize.
 - **Resolvable error**: Fix it and re-run validation.
-- **No independent repair remains**: Save the exact output and load `$blocker-contract`. Block only if every criterion holds; otherwise re-plan with the evidence.
+- **No independent repair remains**: Save the exact output and load `@blocker-contract`. Block only if every criterion holds; otherwise re-plan with the evidence.
 
 ## 4. Finalize
 

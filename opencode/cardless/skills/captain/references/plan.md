@@ -31,7 +31,7 @@ Write the plan per `<markdown-guidelines>` in `session.md`: verify file, symbol,
 
 #### Consider Bootstrap Sequencing
 
-For new behavior whose contract is worth validating ahead of implementation, consult `$tdd-bootstrap` and structure implementation along its three phases. Skip bootstrap for refactors, spikes, visual work, glue code, one-shot scripts, framework-determined shapes and small in-place edits.
+For new behavior whose contract is worth validating ahead of implementation, consult `@tdd-bootstrap` and structure implementation along its three phases. Skip bootstrap for refactors, spikes, visual work, glue code, one-shot scripts, framework-determined shapes and small in-place edits.
 
 #### Write and Store Plan
 
@@ -41,7 +41,7 @@ Save `[PLAN_FILE]` with intent, acceptance criteria, scope, investigated approac
 
 Scan for explicit and implicit assumptions, including task-brief claims about third-party behavior. Any assumption affecting implementation warrants investigation. Load-bearing assumptions are work items, not choices to send back to the user.
 
-For each testable uncertainty load `$spike`. Independent spikes can run concurrently in separate directories. Revise the plan using the results. A disproven load-bearing assumption invalidates the plan from intent through approach: rewrite it rather than patching around the false premise.
+For each testable uncertainty load `@spike`. Independent spikes can run concurrently in separate directories. Revise the plan using the results. A disproven load-bearing assumption invalidates the plan from intent through approach: rewrite it rather than patching around the false premise.
 
 ## 3. Evaluate the Plan
 

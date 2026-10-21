@@ -93,7 +93,7 @@ HOLD: stop starting new work, finish and commit the current safe validated step,
 The lead is the only coordination contact. [Name peer packages whose contracts matter.] Deliver checkpoints/reports and contract questions through the report transport above, never directly to peers. On messaging hosts, user-facing prose alone does not send a message; on call-return hosts, the task result is the transport.
 ```
 
-Name `$developer` and `$tdd-bootstrap` explicitly in the dispatch. Include the literal task state/scratch paths and the commit/Markdown conventions from `session.md` in the brief; workers must not assume inherited context or mutate the lead's session record.
+Name `@developer` and `@tdd-bootstrap` explicitly in the dispatch. Include the literal task state/scratch paths and the commit/Markdown conventions from `session.md` in the brief; workers must not assume inherited context or mutate the lead's session record.
 
 Start every package whose first task consumes no peer contract concurrently, within host limits. Dispatch a consumer after accepting its producer's contract-ready checkpoint; gate it only when required peer implementation is integrated. Send `TASK:` only after that worker's preceding green report is merged. Restate `## Task`, `## Contract`, `## Dependencies`, `## Checkpoint` and any changed package/workflow sections; other rules persist.
 

@@ -1,6 +1,6 @@
 # Reconcile Blocked Work
 
-Load `$blocker-contract`. For `phase: blocked`, read the saved report; otherwise read the triggering evidence and current phase. Identify the concrete predicate, then read the brief, progress, source, external state, and every later user instruction.
+Load `@blocker-contract`. For `phase: blocked`, read the saved report; otherwise read the triggering evidence and current phase. Identify the concrete predicate, then read the brief, progress, source, external state, and every later user instruction.
 
 Re-run safe diagnostics. Repair, isolate, retry with new evidence, re-plan, or delegate when any can advance the outcome. A relation, dirty checkout, failed approach, exhausted retry count, or unfamiliar failure does not establish a blocker.
 

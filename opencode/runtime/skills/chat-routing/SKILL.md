@@ -26,8 +26,8 @@ Read the user's conversational message(s) to classify intent.
 
 Select the **first** matching condition:
 
-- **1. REQUESTING_INTERVIEW**: `$interview`
-- **2. REQUESTING_DEVELOPMENT**: `$card`
+- **1. REQUESTING_INTERVIEW**: `@interview`
+- **2. REQUESTING_DEVELOPMENT**: `@card`
 - **3. Otherwise**: non-routed — agent handles directly
 
 **Fallback**: When conditions conflict, default to non-routed. Do not force a structured flow the user did not request.

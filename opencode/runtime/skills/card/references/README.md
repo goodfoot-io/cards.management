@@ -1,6 +1,6 @@
 # Card References
 
-Per-condition reference files for the `$card` skill. The router in `../SKILL.md` evaluates card state, selects one condition, and reads the matched file.
+Per-condition reference files for the `@card` skill. The router in `../SKILL.md` evaluates card state, selects one condition, and reads the matched file.
 
 ## Consumer
 

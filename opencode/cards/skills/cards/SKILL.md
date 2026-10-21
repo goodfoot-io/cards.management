@@ -21,7 +21,7 @@ The user is notified when you create a card or add a comment.
 
 ## Card Type References
 
-Before creating a card, load the `$markdown` skill, `./references/commanders-intent.md`, and both references for the matched card type. Two references load together:
+Before creating a card, load the `@markdown` skill, `./references/commanders-intent.md`, and both references for the matched card type. Two references load together:
 - An **interview** guide describing how to reach enough signal for the card.
 - A **writing** guide describing the target CARD.md structure.
 
@@ -41,7 +41,7 @@ Match the first applicable row:
 
 **Deep cards.** When the source material is a document set — three or more documents, or one document the card cannot cover without omission — or the user says "deep card", additionally load `./references/deep-card.md`. It layers a multi-file documentation corpus (routing-hub CARD.md, `explanation/`/`how-to/`/`reference/`/`notes/` tiers) over the matched type's interview and intent guidance, replacing the writing guide's CARD.md body structure. A deep card is ~20 files and 6+ commits: do not load it for a single-topic request, however detailed — "comprehensive" alone is not the trigger.
 
-Interview unless the user requests quick capture or a workflow supplies the evidence. Compose CARD.md against the writing guide in the initial commit. Before creating a prerequisite card to defer active work, load `$blocker-contract` and prove every criterion; filing a card never authorizes stopping.
+Interview unless the user requests quick capture or a workflow supplies the evidence. Compose CARD.md against the writing guide in the initial commit. Before creating a prerequisite card to defer active work, load `@blocker-contract` and prove every criterion; filing a card never authorizes stopping.
 
 ### FMEA review
 
@@ -71,8 +71,8 @@ EOF
 
 Then, in order:
 
-1. Load the `$markdown` skill before writing CARD.md.
-2. When the card has something worth rendering — a mockup, diagram, data model, flow, or comparison of options — author an HTML page and commit each page's `.html`/`.meta.json` pair in a commit of its own; load `$html-files` for mechanics and `$design` for styling. When a page's subject is the card's own work rather than the product being built, first load the three `work-diagram-*` references (see Work-Diagram Pages below). Timeline position follows commit order: commit before CARD.md to open the card with a hero the reader takes in first, after CARD.md to elaborate what the description lays out.
+1. Load the `@markdown` skill before writing CARD.md.
+2. When the card has something worth rendering — a mockup, diagram, data model, flow, or comparison of options — author an HTML page and commit each page's `.html`/`.meta.json` pair in a commit of its own; load `@html-files` for mechanics and `@design` for styling. When a page's subject is the card's own work rather than the product being built, first load the three `work-diagram-*` references (see Work-Diagram Pages below). Timeline position follows commit order: commit before CARD.md to open the card with a hero the reader takes in first, after CARD.md to elaborate what the description lays out.
 
 ```bash
 cards html check "$REPO/proposed-panel.html"
@@ -88,7 +88,7 @@ CARD_EOF
 cd "$REPO" && git add CARD.md && git commit -m "Added description [single sentence summarizing the current and desired behavior covered]."
 ```
 
-4. Load the `$notes` skill and record research discoveries — including any approach that emerged — as notes in the card repository. Planning happens in a later step; do not write `plans/` files at creation time.
+4. Load the `@notes` skill and record research discoveries — including any approach that emerged — as notes in the card repository. Planning happens in a later step; do not write `plans/` files at creation time.
 
 Include `relations` when the new card relates to an existing one. Each entry has a `type` (only `"related"` is valid) and a `cardId`. The CLI sets relations only at creation; edit `CARD.meta.json` afterward.
 
@@ -147,7 +147,7 @@ Actions run interactively by default. `--background` is rejected with a 400 erro
 
 `--variable-group` is ordered and repeatable. When supplied, the action receives exactly those group IDs for that dispatch only; it does not change the variable-group toggles persisted in the webview. When the flag is omitted, dispatch retains the normal persisted variable-group selection.
 
-**Signal shutdown** — Inside a running action, when `EXIT_WHEN_DONE` is true and work reaches a terminal state, finish or roll back in-progress commits. Use `blocked` only after proving `$blocker-contract` and committing its record:
+**Signal shutdown** — Inside a running action, when `EXIT_WHEN_DONE` is true and work reaches a terminal state, finish or roll back in-progress commits. Use `blocked` only after proving `@blocker-contract` and committing its record:
 ```
 cards "$CARD_ID" shutdown --outcome success|blocked|error [--message "..."]
 ```
@@ -227,7 +227,7 @@ Source of truth: `COMMITS_DIR`, `BRANCHES_DIR`, and `WorkspaceBranch` in `public
 
 ### Work-Diagram Pages
 
-HTML pages may be committed at any point in a card's life (`$html-files`). When a page's subject is the card's own work — its proposed decomposition and task dependencies at creation; execution history, attempts, or the decision trail afterward — rather than the product being built, first load `./references/work-diagram-concepts.md` (what to represent), `./references/work-diagram-notations.md` (which notation), and `./references/work-diagram-style.md` (visual language).
+HTML pages may be committed at any point in a card's life (`@html-files`). When a page's subject is the card's own work — its proposed decomposition and task dependencies at creation; execution history, attempts, or the decision trail afterward — rather than the product being built, first load `./references/work-diagram-concepts.md` (what to represent), `./references/work-diagram-notations.md` (which notation), and `./references/work-diagram-style.md` (visual language).
 
 ### Adding a Comment
 

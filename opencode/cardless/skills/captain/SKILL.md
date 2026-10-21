@@ -16,7 +16,7 @@ Use the host's dedicated task checkout and assigned branch. Inspect unfamiliar s
 
 The task brief and locally derived Git state are the inputs. First read `./references/session.md`; it defines every `TASK_*` value, the local session record, and the commit/Markdown conventions used below. These are local values derived and saved by this workflow, not injected environment dependencies.
 
-Before recording or retaining blocked state, load `$blocker-contract` and prove every criterion. When all hold, read `./references/blocked.md` to persist the first or retained blocker.
+Before recording or retaining blocked state, load `@blocker-contract` and prove every criterion. When all hold, read `./references/blocked.md` to persist the first or retained blocker.
 </execution-environment>
 
 <routing-constraints>

@@ -151,4 +151,4 @@ Sessions end through two equivalent paths: a natural exit, or an agent-initiated
 - Worktree binding → `diagnose-worktree.md`
 - Server health → `diagnose-server-health.md`
 - Agent internal session data → Claude Code / Codex documentation
-- Card repository structure (plans, comments, attachments) → `$cards` skill
+- Card repository structure (plans, comments, attachments) → `@cards` skill

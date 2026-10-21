@@ -101,7 +101,7 @@ Domain-specific decisions live here; generic engineering rules live in `principl
 - **Status colors trace to one source.** `statusColors.ts` in code, `--cards-status-*` in pages, both documented in `foundation/colors.md`.
 - **Respect host-injected context.** Webviews inherit body padding, font, and scrollbar width from the host; don't re-declare them. Card HTML gets none of that and must self-paint (see `contexts.md`).
 - **Theme changes are live.** Never cache a resolved color in JS without re-reading on `data-vscode-theme-kind` / theme-class change.
-- **Card-HTML authoring mechanics** (sidecar meta, `cards html check`, two-file pairing) belong to the `$html-files` skill — this skill owns design only.
+- **Card-HTML authoring mechanics** (sidecar meta, `cards html check`, two-file pairing) belong to the `@html-files` skill — this skill owns design only.
 
 ## 5. Named exceptions
 

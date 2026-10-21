@@ -66,7 +66,7 @@ If validation passes after any cheap remedy, report COMPLETED with the remedy as
 
 **Re-validate.** During the fix-then-recheck loop, scope test runs to the failing test or suite per the project's AGENTS.md validation conventions. The final certification before reporting COMPLETED runs the orchestrator's full validation command end-to-end; do not report COMPLETED until it exits 0.
 
-Before returning BLOCKED, exhaust reasonable authorized remedies; report results and why remaining plausible remedies are unavailable. The orchestrator applies `$blocker-contract` before any card-level state change.
+Before returning BLOCKED, exhaust reasonable authorized remedies; report results and why remaining plausible remedies are unavailable. The orchestrator applies `@blocker-contract` before any card-level state change.
 ## Output Contract
 
 Return exactly one status reflecting actual validated state.

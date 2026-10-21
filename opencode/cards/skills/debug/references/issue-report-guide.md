@@ -44,6 +44,6 @@ EOF
 
 ## Out of Scope
 
-- Card creation workflows → `$cards` skill
+- Card creation workflows → `@cards` skill
 - Interview process for gathering signal → `interview-issue-report.md`
 - `cards-extension` CLI reference → `inspect-cli-tools.md`

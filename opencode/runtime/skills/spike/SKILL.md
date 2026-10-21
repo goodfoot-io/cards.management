@@ -41,7 +41,7 @@ Write the smallest script or test that answers `[SPIKE_QUESTION]`. Run it. Captu
 
 ## 4. Record the Result as a Note
 
-Load the `$notes` skill and follow its `<take-notes>` instructions to record the result. The note is the durable output — the spike directory is scratch.
+Load the `@notes` skill and follow its `<take-notes>` instructions to record the result. The note is the durable output — the spike directory is scratch.
 
 The note should include:
 

@@ -15,7 +15,7 @@ cards "$CARD_ID" shutdown --outcome blocked --message "[committed blocker predic
 cards "$CARD_ID" shutdown --outcome error --message "what failed"
 ```
 
-Use `success` for completion and normal review or approval boundaries. Use `blocked` only after loading `$blocker-contract` and committing a compliant blocker record. Use `error` when execution must end without a valid success or blocker record. `--outcome` defaults to `success`; exit 0 confirms request acceptance, not cleanup.
+Use `success` for completion and normal review or approval boundaries. Use `blocked` only after loading `@blocker-contract` and committing a compliant blocker record. Use `error` when execution must end without a valid success or blocker record. `--outcome` defaults to `success`; exit 0 confirms request acceptance, not cleanup.
 
 3. End the session cleanly. The execution wrapper owns termination in response to the accepted decision — no separate kill commands are needed.
 

@@ -25,7 +25,7 @@ Source code and compiled bundles are out of scope per `SKILL.md` — never grep/
 
 ## 2. Interview and Accumulate Findings
 
-`./issue-report-guide.md` defines the issue body structure this interview drives toward. Do NOT load the `$cards` variants; those target card creation.
+`./issue-report-guide.md` defines the issue body structure this interview drives toward. Do NOT load the `@cards` variants; those target card creation.
 
 Interview the user conversationally; the commander's intent is built through the conversation, not drafted as a document.
 
@@ -87,7 +87,7 @@ If `gh issue create` fails (permissions, issues disabled), fall back to `cards-e
 
 ## Out of Scope
 
-- Card creation workflows → `$cards` skill
+- Card creation workflows → `@cards` skill
 - Report structure reference → `issue-report-guide.md`
 - `cards-extension` CLI reference → `inspect-cli-tools.md`
 - Decisions about whether a bug is in the Cards extension vs. another component — the debug skill's routing tables answer this before reaching the interview

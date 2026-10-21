@@ -1,6 +1,6 @@
 <instructions>
 
-Load `$blocker-contract`. The tag requests reconciliation; it does not prove a live blocker.
+Load `@blocker-contract`. The tag requests reconciliation; it does not prove a live blocker.
 
 1. Find the comment that caused the tag and state its concrete predicate. Read all later user-authored comments plus current source, metadata, dependencies, and relevant external state.
 2. Re-run safe diagnostics. Repair, isolate, re-plan, delegate, or route work to its owner where that can advance the card.

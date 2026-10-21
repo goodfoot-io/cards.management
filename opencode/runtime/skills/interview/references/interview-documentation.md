@@ -31,7 +31,7 @@ Do not block on research. Proceed to Section 2 while subagents run.
 
 ## 2. Load Card Skills
 
-Load `$notes`.
+Load `@notes`.
 
 ## 3. Interview and Shape the Card
 

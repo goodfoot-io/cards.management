@@ -1,10 +1,10 @@
 # Captain References
 
-Per-condition reference files for the `$captain` skill. The router in `../SKILL.md` evaluates card state, selects one condition, and reads the matched file.
+Per-condition reference files for the `@captain` skill. The router in `../SKILL.md` evaluates card state, selects one condition, and reads the matched file.
 
 ## Consumer
 
-**`$captain` skill** — loads exactly one of these references per session, per Step 3 of `../SKILL.md`.
+**`@captain` skill** — loads exactly one of these references per session, per Step 3 of `../SKILL.md`.
 
 ## Routing Map
 

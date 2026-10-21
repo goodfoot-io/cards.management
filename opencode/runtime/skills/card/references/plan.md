@@ -48,7 +48,7 @@ Review all relevant resources: files, web searches, tools. Identify every consum
 
 When correctness depends on the shape of real-world data the plan will process (live payloads, environment-injected values, file formats), capture a real sample **now** and commit it as a fixture in the card repo's `notes/`.
 
-Follow the `<take-notes>` instructions from `$notes` skill — write a note to the card repository for each architectural discovery made during research.
+Follow the `<take-notes>` instructions from `@notes` skill — write a note to the card repository for each architectural discovery made during research.
 
 #### Apply Markdown Guidelines
 
@@ -58,7 +58,7 @@ The plan file is stored in the card repository (`$CARD_REPO_PATH`), but the card
 
 #### Consider Bootstrap Sequencing
 
-When the card introduces new behavior whose contract is worth validating ahead of implementation — a new public function, API, data type, schema, or algorithm — **you must consult the `<tdd-bootstrap>` instructions** from the `$tdd-bootstrap` skill and structure the plan's implementation steps along the three phases. Skip the bootstrap for refactors, spikes, UI or visual work, glue code, one-shot scripts, framework-determined shapes, and small in-place edits.
+When the card introduces new behavior whose contract is worth validating ahead of implementation — a new public function, API, data type, schema, or algorithm — **you must consult the `<tdd-bootstrap>` instructions** from the `@tdd-bootstrap` skill and structure the plan's implementation steps along the three phases. Skip the bootstrap for refactors, spikes, UI or visual work, glue code, one-shot scripts, framework-determined shapes, and small in-place edits.
 
 #### Write and Store Plan
 
@@ -76,7 +76,7 @@ git commit -m "[single sentence summarizing the approach and key decisions]"
 
 Scan the plan for assumptions — both explicit and implicit (statements presented as facts not read from source — including CARD.md claims about third-party behavior). Any assumption that affects a planned implementation step warrants investigation; spike it per the procedure below. Load-bearing assumptions are work items for this step, not questions to surface to the user as a choice — converting a spike into an (a)/(b) prompt is a protocol violation. Skip only when no load-bearing assumptions exist.
 
-For each testable uncertainty, load the `$spike` skill and follow its instructions. With several independent uncertainties, they can run as concurrent subagents rather than in sequence.
+For each testable uncertainty, load the `@spike` skill and follow its instructions. With several independent uncertainties, they can run as concurrent subagents rather than in sequence.
 
 After spikes return, revise `[PLAN_FILE]` to incorporate their results — a spike that disproves a load-bearing assumption invalidates the plan from intent through approach, so rewrite rather than patch.
 

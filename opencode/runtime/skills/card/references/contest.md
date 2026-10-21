@@ -112,7 +112,7 @@ After the `WINNER:` report, before Step 5: `send_message` each losing live plann
 
 ### Other Outcomes from Step 3
 
-- **All planners locally blocked.** This proves only that the attempted planning set found no plan. Consolidate its evidence, run focused research or restart with corrected assumptions. Return `REPLAN`; return `BLOCKED` only after loading `$blocker-contract`, proving one external predicate, and committing its record and tag.
+- **All planners locally blocked.** This proves only that the attempted planning set found no plan. Consolidate its evidence, run focused research or restart with corrected assumptions. Return `REPLAN`; return `BLOCKED` only after loading `@blocker-contract`, proving one external predicate, and committing its record and tag.
 - **Contest in progress.** A live planner is mid-revision or under an outstanding `CHANGES_REQUESTED`. Continue mediating. Do not intervene.
 - **Stalled planner.** A live planner stuck under `CHANGES_REQUESTED` without revising holds the contest open. The reviewer holds the disqualification authority and may BLOCK them per §5.1 of `$card-plan-failure-mode`; you do not BLOCK planners yourself. You may ask the planner its intent if its state is genuinely unclear to you.
 

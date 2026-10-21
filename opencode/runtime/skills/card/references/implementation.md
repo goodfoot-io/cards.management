@@ -31,7 +31,7 @@ When all units are complete, pass the `<completion-gate>` before proceeding to S
 
 Every commit in this flow follows the `<workspace-commit-style>` and `<markdown-guidelines>` conventions.
 
-When the card introduces new behavior whose contract is worth validating ahead of implementation — a new public function, API, data type, schema, or algorithm — consult the `<tdd-bootstrap>` instructions from the `$tdd-bootstrap` skill. Skip the bootstrap for refactors, spikes, UI or visual work, glue code, one-shot scripts, framework-determined shapes, and small in-place edits.
+When the card introduces new behavior whose contract is worth validating ahead of implementation — a new public function, API, data type, schema, or algorithm — consult the `<tdd-bootstrap>` instructions from the `@tdd-bootstrap` skill. Skip the bootstrap for refactors, spikes, UI or visual work, glue code, one-shot scripts, framework-determined shapes, and small in-place edits.
 
 ## 3. Evaluate Quality
 
@@ -69,7 +69,7 @@ git tag -l "implement/$CARD_ID/*" | xargs -r git tag -d
 
 <implementation-discipline>
 
-**Scope is the card's scope.** Implement only what the card (or plan) specifies; do not introduce unrelated cleanup, refactoring, or abstractions. File a card (load `$cards`) for discoveries in code the change does not interact with before finalizing.
+**Scope is the card's scope.** Implement only what the card (or plan) specifies; do not introduce unrelated cleanup, refactoring, or abstractions. File a card (load `@cards`) for discoveries in code the change does not interact with before finalizing.
 
 **Zero errors in affected packages.** Fix priority: pre-existing errors, then direct implementation, then test infrastructure, then environment.
 
@@ -132,7 +132,7 @@ Run the failing command in that worktree, then delete the worktree and branch.
 - **Baseline setup fails** — ownership is inconclusive. Diagnose and repair provisioning, tools, dependencies, or services; retry with new evidence.
 - **Reproduces on baseline** — repair local drift (base-branch sync, dependencies, artifacts), then the root cause; re-run the failing command.
 - **Does not reproduce on baseline** — the failure is in scope of this card's work; fix it and re-run.
-- **Independent progress is impossible** — load `$blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
+- **Independent progress is impossible** — load `@blocker-contract`. Block only if every criterion holds; otherwise repair, isolate, delegate, or re-plan.
 
 </pre-existing-diagnosis>
 
