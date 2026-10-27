@@ -149,6 +149,80 @@ export interface ObservationResourceOptions {
   readonly onProbeEvent?: (event: ObservationProbeEvent) => void;
 }
 
+interface ObservationWaiter {
+  readonly signal: AbortSignal;
+  readonly deadlineAt: number | undefined;
+  readonly grant: (release: (() => void) | null) => void;
+  readonly cancel: () => void;
+  readonly timer: NodeJS.Timeout | undefined;
+}
+
+function observationExpired(signal: AbortSignal, deadlineAt: number | undefined): boolean {
+  return (
+    signal.aborted || (deadlineAt !== undefined && (!Number.isFinite(deadlineAt) || performance.now() >= deadlineAt))
+  );
+}
+
+function createObservationSemaphore(limit: number): {
+  acquire(signal: AbortSignal, deadlineAt?: number): Promise<(() => void) | null>;
+} {
+  let active = 0;
+  const waiting: ObservationWaiter[] = [];
+  const forget = (waiter: ObservationWaiter): void => {
+    waiter.signal.removeEventListener('abort', waiter.cancel);
+    if (waiter.timer !== undefined) clearTimeout(waiter.timer);
+  };
+  const release = (): void => {
+    while (waiting.length > 0) {
+      const waiter = waiting.shift();
+      if (waiter === undefined) break;
+      forget(waiter);
+      if (observationExpired(waiter.signal, waiter.deadlineAt)) {
+        waiter.grant(null);
+        continue;
+      }
+      waiter.grant(onceRelease());
+      return;
+    }
+    active--;
+  };
+  const onceRelease = (): (() => void) => {
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      release();
+    };
+  };
+  return {
+    acquire(signal, deadlineAt) {
+      if (observationExpired(signal, deadlineAt)) return Promise.resolve(null);
+      if (active < limit && waiting.length === 0) {
+        active++;
+        return Promise.resolve(onceRelease());
+      }
+      return new Promise((resolve) => {
+        let waiter: ObservationWaiter;
+        const cancel = (): void => {
+          const index = waiting.indexOf(waiter);
+          if (index < 0) return;
+          waiting.splice(index, 1);
+          forget(waiter);
+          resolve(null);
+        };
+        const timer =
+          deadlineAt === undefined
+            ? undefined
+            : setTimeout(cancel, Math.max(1, Math.ceil(deadlineAt - performance.now())));
+        waiter = { signal, deadlineAt, grant: resolve, cancel, timer };
+        waiting.push(waiter);
+        signal.addEventListener('abort', cancel, { once: true });
+        if (observationExpired(signal, deadlineAt)) cancel();
+      });
+    }
+  };
+}
+
 /**
  * Creates a worker-local pool of preassigned read and probe credits.
  * @param options - Read bound and probe lifecycle sink.
@@ -156,8 +230,153 @@ export interface ObservationResourceOptions {
  * @throws When the read bound is invalid or probe bounds are invalid or total zero.
  */
 export function createObservationResources(options: ObservationResourceOptions = {}): ObservationResources {
-  void options;
-  throw new Error('Not Implemented');
+  const maxReads = options.maxReads ?? 4;
+  const maxRoutineProbes = options.maxRoutineProbes ?? 1;
+  const maxEmergencyProbes = options.maxEmergencyProbes ?? 1;
+  if (
+    !Number.isSafeInteger(maxReads) ||
+    maxReads <= 0 ||
+    !Number.isSafeInteger(maxRoutineProbes) ||
+    maxRoutineProbes < 0 ||
+    !Number.isSafeInteger(maxEmergencyProbes) ||
+    maxEmergencyProbes < 0 ||
+    !Number.isSafeInteger(maxRoutineProbes + maxEmergencyProbes) ||
+    maxRoutineProbes + maxEmergencyProbes === 0
+  )
+    throw new RangeError('Observation credit limits are invalid');
+  const reads = createObservationSemaphore(maxReads);
+  const probes = {
+    routine: createObservationSemaphore(maxRoutineProbes),
+    emergency: createObservationSemaphore(maxEmergencyProbes)
+  };
+  let nextLeaseId = 0;
+  const reportProbe = (event: ObservationProbeEvent): void => {
+    try {
+      options.onProbeEvent?.(event);
+    } catch (error) {
+      process.stderr.write(`[process-identity] probe lifecycle sink failed: ${String(error)}\n`);
+    }
+  };
+  return {
+    createScope(scopeOptions) {
+      if (scopeOptions.mode !== 'routine' && scopeOptions.mode !== 'emergency')
+        throw new RangeError('Observation probe mode is invalid');
+      const controller = new AbortController();
+      let outstanding = 0;
+      const settlers = new Set<() => void>();
+      const finish = (): void => {
+        outstanding--;
+        if (outstanding !== 0) return;
+        for (const resolve of settlers) resolve();
+        settlers.clear();
+      };
+      const close = (): void => {
+        if (controller.signal.aborted) return;
+        controller.abort();
+        scopeOptions.signal?.removeEventListener('abort', close);
+      };
+      scopeOptions.signal?.addEventListener('abort', close, { once: true });
+      if (scopeOptions.signal?.aborted === true) close();
+      const scope: ObservationScope = {
+        get closed() {
+          return controller.signal.aborted;
+        },
+        get settled() {
+          return outstanding === 0;
+        },
+        close,
+        whenSettled() {
+          if (outstanding === 0) return Promise.resolve();
+          return new Promise((resolve) => settlers.add(resolve));
+        },
+        track(start) {
+          if (controller.signal.aborted) return Promise.reject(new Error('Observation scope is closed'));
+          outstanding++;
+          try {
+            return Promise.resolve(start()).finally(finish);
+          } catch (error) {
+            finish();
+            return Promise.reject(error);
+          }
+        },
+        read(signal, start, deadlineAt) {
+          return scope.track(async () => {
+            const admissionSignal = AbortSignal.any([controller.signal, signal]);
+            const release = await reads.acquire(admissionSignal, deadlineAt);
+            if (release === null) throw new Error('Observation read admission expired or was cancelled');
+            try {
+              if (observationExpired(admissionSignal, deadlineAt))
+                throw new Error('Observation read admission expired or was cancelled');
+              return await start();
+            } finally {
+              release();
+            }
+          });
+        },
+        acquireProbe(signal, deadlineAt) {
+          if (controller.signal.aborted) return Promise.resolve(null);
+          return scope.track(async () => {
+            const admissionSignal = AbortSignal.any([controller.signal, signal]);
+            const release = await probes[scopeOptions.mode].acquire(admissionSignal, deadlineAt);
+            if (release === null) return null;
+            if (observationExpired(admissionSignal, deadlineAt)) {
+              release();
+              return null;
+            }
+            const leaseId = ++nextLeaseId;
+            let completed = false;
+            let child: ChildProcess | { readonly pid?: number } | undefined;
+            const complete = (phase: 'exited' | 'not-started'): void => {
+              if (completed) return;
+              completed = true;
+              try {
+                reportProbe({
+                  leaseId,
+                  mode: scopeOptions.mode,
+                  phase,
+                  ...(child?.pid === undefined ? {} : { pid: child.pid })
+                });
+              } finally {
+                release();
+                finish();
+              }
+            };
+            outstanding++;
+            return {
+              started(spawned) {
+                if (completed || child !== undefined) throw new Error('Probe credit has already been assigned');
+                child = spawned;
+                if ('once' in spawned && typeof spawned.once === 'function') {
+                  spawned.once('exit', () => complete('exited'));
+                  spawned.once('close', () => complete(spawned.pid === undefined ? 'not-started' : 'exited'));
+                  spawned.once('error', () => {
+                    if (spawned.pid === undefined) complete('not-started');
+                  });
+                }
+                reportProbe({
+                  leaseId,
+                  mode: scopeOptions.mode,
+                  phase: 'started',
+                  ...(spawned.pid === undefined ? {} : { pid: spawned.pid })
+                });
+              },
+              identified(identity) {
+                if (completed || child?.pid === undefined || identity.pid !== child.pid)
+                  throw new Error('Probe identity does not match the assigned child');
+                reportProbe({ leaseId, mode: scopeOptions.mode, phase: 'identified', pid: child.pid, identity });
+              },
+              notStarted() {
+                if (completed) return;
+                if (child?.pid !== undefined) throw new Error('Cannot discard a probe that has a PID');
+                complete('not-started');
+              }
+            };
+          });
+        }
+      };
+      return scope;
+    }
+  };
 }
 
 /** Thin filesystem adapter for the Linux session-observation boundary. */
@@ -248,69 +467,105 @@ export interface NodeSessionPlatformOptions {
  * @param timeoutMs - Ceiling on the whole invocation.
  * @returns Its output, or a failure when it did not answer in time.
  * @param helpers - Registry excluding transient probe processes from action ownership.
+ * @param accounting - Optional observation scope and admission fence.
+ * @param accounting.scope - Assignment resource scope.
+ * @param accounting.signal - Per-observation cancellation signal.
  */
 export async function runIdentityProbe(
   exec: SessionExecFile,
   command: string,
   args: readonly string[],
   timeoutMs: number,
-  helpers?: ControlHelperRegistry
+  helpers?: ControlHelperRegistry,
+  accounting: { readonly scope?: ObservationScope; readonly signal?: AbortSignal } = {}
 ): Promise<IdentityProbeOutput> {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return { stdout: '', failed: true };
-  return new Promise((resolve) => {
-    let settled = false;
-    let timer: NodeJS.Timeout | undefined;
-    let child: ReturnType<SessionExecFile>;
-    const finish = (value: Omit<IdentityProbeOutput, 'helperPid'>): void => {
-      if (settled) return;
-      settled = true;
-      if (timer !== undefined) clearTimeout(timer);
-      resolve({ ...value, ...(child?.pid === undefined ? {} : { helperPid: child.pid }) });
-    };
-    try {
-      child = exec(
-        command,
-        args,
-        {
-          maxBuffer: 8 * 1024 * 1024,
-          timeout: timeoutMs,
-          killSignal: 'SIGKILL',
-          env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }
-        },
-        (error, stdout, stderr) => {
-          // Also handles synchronous test/custom exec callbacks: the child must
-          // be registered before its completion releases that registration.
-          queueMicrotask(() => {
-            if (error === null && child?.pid !== undefined) helpers?.release(child.pid);
-            const code = (error as { code?: unknown } | null)?.code;
-            finish({
-              stdout: String(stdout),
-              failed: error !== null,
-              ...(stderr === undefined ? {} : { stderr: String(stderr) }),
-              ...(error === null ? { exitCode: 0 } : typeof code === 'number' ? { exitCode: code } : {})
-            });
-          });
-        }
-      );
-      if (child?.pid !== undefined) helpers?.register(child.pid);
-      timer = setTimeout(
-        () => {
-          try {
-            child?.kill('SIGKILL');
-          } catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
-              process.stderr.write(`[wrapper] could not kill wedged ${command}: ${String(error)}\n`);
-          }
-          finish({ stdout: '', failed: true });
-        },
-        Math.max(0, timeoutMs)
-      );
-      // This is the only live handle in an injected stalled probe. Keep the
-      // deadline referenced so the caller actually receives its unknown result.
-    } catch {
-      finish({ stdout: '', failed: true });
+  const deadlineAt = performance.now() + timeoutMs;
+  const signal = accounting.signal ?? new AbortController().signal;
+  const perform = async (): Promise<IdentityProbeOutput> => {
+    const lease = accounting.scope === undefined ? undefined : await accounting.scope.acquireProbe(signal, deadlineAt);
+    if (lease === null) return { stdout: '', failed: true };
+    if (accounting.scope?.closed === true || observationExpired(signal, deadlineAt)) {
+      lease?.notStarted();
+      return { stdout: '', failed: true };
     }
-  });
+    return new Promise((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      let child: ReturnType<SessionExecFile>;
+      let leaseBound = false;
+      let callbackSettled = (): void => undefined;
+      if (accounting.scope !== undefined) {
+        const callback = new Promise<void>((done) => {
+          callbackSettled = done;
+        });
+        void accounting.scope
+          .track(() => callback)
+          .catch((error) => {
+            process.stderr.write(`[process-identity] could not track probe callback: ${String(error)}\n`);
+          });
+      }
+      const finish = (value: Omit<IdentityProbeOutput, 'helperPid'>): void => {
+        if (settled) return;
+        settled = true;
+        if (timer !== undefined) clearTimeout(timer);
+        if (observationExpired(signal, deadlineAt)) value = { stdout: '', failed: true };
+        resolve({ ...value, ...(child?.pid === undefined ? {} : { helperPid: child.pid }) });
+      };
+      try {
+        child = exec(
+          command,
+          args,
+          {
+            maxBuffer: 8 * 1024 * 1024,
+            timeout: Math.ceil(timeoutMs),
+            killSignal: 'SIGKILL',
+            env: { ...process.env, LC_ALL: 'C', TZ: 'UTC' }
+          },
+          (error, stdout, stderr) => {
+            // Also handles synchronous test/custom exec callbacks: the child must
+            // be registered before its completion releases that registration.
+            queueMicrotask(() => {
+              if (error === null && child?.pid !== undefined) helpers?.release(child.pid);
+              const code = (error as { code?: unknown } | null)?.code;
+              finish({
+                stdout: String(stdout),
+                failed: error !== null,
+                ...(stderr === undefined ? {} : { stderr: String(stderr) }),
+                ...(error === null ? { exitCode: 0 } : typeof code === 'number' ? { exitCode: code } : {})
+              });
+              callbackSettled();
+            });
+          }
+        );
+        lease?.started(child ?? {});
+        leaseBound = lease !== undefined;
+        if (child?.pid !== undefined) helpers?.register(child.pid);
+        timer = setTimeout(
+          () => {
+            try {
+              child?.kill('SIGKILL');
+            } catch (error) {
+              if ((error as NodeJS.ErrnoException).code !== 'ESRCH')
+                process.stderr.write(`[wrapper] could not kill wedged ${command}: ${String(error)}\n`);
+            }
+            finish({ stdout: '', failed: true });
+          },
+          Math.max(1, Math.ceil(deadlineAt - performance.now()))
+        );
+        // This is the only live handle in an injected stalled probe. Keep the
+        // deadline referenced so the caller actually receives its unknown result.
+      } catch {
+        // A custom exec seam may have started a child before throwing, so a
+        // missing handle is uncertainty rather than proof of non-start.
+        if (!leaseBound) lease?.started(child ?? {});
+        finish({ stdout: '', failed: true });
+      }
+    });
+  };
+  if (accounting.scope === undefined) return perform();
+  if (accounting.scope.closed) return { stdout: '', failed: true };
+  return accounting.scope.track(perform);
 }
 
 /** One identity helper's output and how it ended. */
@@ -338,15 +593,20 @@ export async function runNodeIdentityProbe(
   command: string,
   args: readonly string[],
   timeoutMs: number,
-  options: Pick<NodeSessionPlatformOptions, 'execFile' | 'helpers'> = {}
+  options: Pick<NodeSessionPlatformOptions, 'execFile' | 'helpers' | 'scope'> & { readonly signal?: AbortSignal } = {}
 ): Promise<IdentityProbeOutput> {
   if (options.execFile !== undefined)
-    return runIdentityProbe(options.execFile, command, args, timeoutMs, options.helpers);
+    return runIdentityProbe(options.execFile, command, args, timeoutMs, options.helpers, {
+      scope: options.scope,
+      signal: options.signal
+    });
   try {
     const result = await runBoundedCommand(command, args, {
       timeoutMs,
       maxOutputBytes: 8 * 1024 * 1024,
-      helpers: options.helpers
+      helpers: options.helpers,
+      scope: options.scope,
+      signal: options.signal
     });
     const exited = !result.timedOut && result.outputComplete && result.exitCode !== null;
     return {
@@ -479,7 +739,7 @@ function killReportsAbsent(pid: number): boolean {
  * @returns Whether the kernel reported a missing process rather than a read failure.
  */
 function isAbsent(error: unknown): boolean {
-  const code = (error as NodeJS.ErrnoException).code;
+  const code = error !== null && typeof error === 'object' ? (error as NodeJS.ErrnoException).code : undefined;
   return code === 'ENOENT' || code === 'ESRCH';
 }
 
@@ -499,30 +759,44 @@ function isAbsent(error: unknown): boolean {
 export function createNodeSessionPlatform(options: NodeSessionPlatformOptions = {}): SessionPlatform {
   const timeoutMs = options.probeTimeoutMs ?? DEFAULT_SESSION_PROBE_TIMEOUT_MS;
   const platform = options.platform ?? process.platform;
-  const linuxBootId = async (budget: number): Promise<string | null> => {
+  const scope = options.scope ?? createObservationResources().createScope({ mode: 'routine' });
+  const linuxText = (file: string, signal: AbortSignal, deadlineAt: number): Promise<string> =>
+    scope.read(
+      signal,
+      () => (options.linuxFiles === undefined ? readFile(file, 'utf8') : options.linuxFiles.readText(file)),
+      deadlineAt
+    );
+  const linuxBootId = async (signal: AbortSignal, deadlineAt: number): Promise<string | null> => {
     try {
-      return (
-        await readFile('/proc/sys/kernel/random/boot_id', {
-          encoding: 'utf8',
-          signal: AbortSignal.timeout(Math.max(1, Math.ceil(budget)))
-        })
-      ).trim();
+      return (await linuxText('/proc/sys/kernel/random/boot_id', signal, deadlineAt)).trim();
     } catch {
       return null;
     }
   };
+  const probe = (
+    command: string,
+    args: readonly string[],
+    signal: AbortSignal,
+    deadlineAt: number
+  ): Promise<IdentityProbeOutput> => {
+    const remaining = deadlineAt - performance.now();
+    if (scope.closed || observationExpired(signal, deadlineAt) || remaining <= 0)
+      return Promise.resolve({ stdout: '', failed: true });
+    return runNodeIdentityProbe(command, args, remaining, { ...options, signal });
+  };
   const windowsRoster = async (
     pid: number | undefined,
-    budget: number
+    signal: AbortSignal,
+    deadlineAt: number
   ): Promise<readonly WrapperProcessIdentity[] | 'unknown'> => {
     const script = `$ErrorActionPreference = 'Stop'; Get-CimInstance Win32_Process ${pid === undefined ? '' : `-Filter "ProcessId=${pid}"`} -ErrorAction Stop | Where-Object { $_.ProcessId -gt 1 } | ForEach-Object { [PSCustomObject]@{ pid=[int]$_.ProcessId; parentPid=[int]$_.ParentProcessId; startIdentity=$_.CreationDate.ToUniversalTime().Ticks.ToString() } } | ConvertTo-Json -Compress`;
-    const result = await runNodeIdentityProbe(
+    const result = await probe(
       'powershell.exe',
       ['-NoProfile', '-NonInteractive', '-Command', script],
-      budget,
-      options
+      signal,
+      deadlineAt
     );
-    if (result.failed) return 'unknown';
+    if (result.failed || scope.closed || observationExpired(signal, deadlineAt)) return 'unknown';
     try {
       const parsed: unknown = result.stdout.trim() === '' ? [] : JSON.parse(result.stdout);
       const rows: unknown[] = Array.isArray(parsed) ? parsed : [parsed];
@@ -554,68 +828,82 @@ export function createNodeSessionPlatform(options: NodeSessionPlatformOptions = 
       return 'unknown';
     }
   };
-  const identify = async (pid: number, budget: number): Promise<WrapperProcessIdentity | null | 'unknown'> => {
+  const identify = async (
+    pid: number,
+    signal: AbortSignal,
+    deadlineAt: number
+  ): Promise<WrapperProcessIdentity | null | 'unknown'> => {
     if (!isSafeProcessId(pid)) return null;
     if (platform === 'win32') {
-      const live = await windowsRoster(pid, budget);
+      const live = await windowsRoster(pid, signal, deadlineAt);
       return live === 'unknown' ? 'unknown' : (live.find((member) => member.pid === pid) ?? null);
     }
     if (platform === 'linux') {
-      const bootId = await linuxBootId(budget);
+      const bootId = await linuxBootId(signal, deadlineAt);
       if (bootId === null) return 'unknown';
       try {
-        return (
-          parseLinuxStat(
-            pid,
-            await readFile(`/proc/${pid}/stat`, {
-              encoding: 'utf8',
-              signal: AbortSignal.timeout(Math.max(1, Math.ceil(budget)))
-            }),
-            bootId
-          ) ?? 'unknown'
-        );
+        const value = await linuxText(`/proc/${pid}/stat`, signal, deadlineAt);
+        if (scope.closed || observationExpired(signal, deadlineAt)) return 'unknown';
+        return parseLinuxStat(pid, value, bootId) ?? 'unknown';
       } catch (error) {
         return isAbsent(error) ? null : 'unknown';
       }
     }
-    const result = await runNodeIdentityProbe('ps', ['-o', DARWIN_FORMAT, '-p', String(pid)], budget, options);
+    const result = await probe('ps', ['-o', DARWIN_FORMAT, '-p', String(pid)], signal, deadlineAt);
+    if (scope.closed || observationExpired(signal, deadlineAt)) return 'unknown';
     if (result.failed) return darwinPsConfirmsAbsence(result, () => killReportsAbsent(pid)) ? null : 'unknown';
     const row = result.stdout.split('\n').find((line) => line.trim() !== '');
     return row === undefined ? null : (parseDarwinRow(row) ?? 'unknown');
   };
-  const enumerate = async (budget: number): Promise<readonly WrapperProcessIdentity[] | 'unknown'> => {
-    if (platform === 'win32') return windowsRoster(undefined, budget);
+  const enumerate = async (
+    signal: AbortSignal,
+    deadlineAt: number
+  ): Promise<readonly WrapperProcessIdentity[] | 'unknown'> => {
+    if (platform === 'win32') return windowsRoster(undefined, signal, deadlineAt);
     if (platform === 'linux') {
-      const bootId = await linuxBootId(budget);
+      const bootId = await linuxBootId(signal, deadlineAt);
       if (bootId === null) return 'unknown';
       let names: string[];
       try {
-        names = (await readdir('/proc')).filter((name) => /^\d+$/.test(name));
+        names = (
+          await scope.read(
+            signal,
+            () => (options.linuxFiles === undefined ? readdir('/proc') : options.linuxFiles.readDirectory('/proc')),
+            deadlineAt
+          )
+        ).filter((name) => /^\d+$/.test(name));
       } catch {
         return 'unknown';
       }
-      const signal = AbortSignal.timeout(Math.max(1, Math.ceil(budget)));
-      const identities = await Promise.all(
-        names.map(async (name) => {
+      const identities: (WrapperProcessIdentity | null | 'unknown')[] = [];
+      let cursor = 0;
+      const lane = async (): Promise<void> => {
+        while (!scope.closed && !observationExpired(signal, deadlineAt) && cursor < names.length) {
+          const index = cursor++;
+          const name = names[index];
+          if (name === undefined) break;
           try {
-            return (
-              parseLinuxStat(
-                Number(name),
-                await readFile(`/proc/${name}/stat`, { encoding: 'utf8', signal }),
-                bootId
-              ) ?? 'unknown'
-            );
+            identities[index] =
+              parseLinuxStat(Number(name), await linuxText(`/proc/${name}/stat`, signal, deadlineAt), bootId) ??
+              'unknown';
           } catch (error) {
             // Permission, I/O and malformed reads are not evidence of death.
-            return isAbsent(error) ? null : 'unknown';
+            identities[index] = isAbsent(error) ? null : 'unknown';
           }
-        })
-      );
-      if (identities.includes('unknown')) return 'unknown';
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(4, names.length) }, () => lane()));
+      if (
+        scope.closed ||
+        observationExpired(signal, deadlineAt) ||
+        cursor < names.length ||
+        identities.includes('unknown')
+      )
+        return 'unknown';
       return identities.filter((entry): entry is WrapperProcessIdentity => entry !== null && entry !== 'unknown');
     }
-    const result = await runNodeIdentityProbe('ps', ['-Ao', DARWIN_FORMAT], budget, options);
-    if (result.failed) return 'unknown';
+    const result = await probe('ps', ['-Ao', DARWIN_FORMAT], signal, deadlineAt);
+    if (result.failed || scope.closed || observationExpired(signal, deadlineAt)) return 'unknown';
     const rows = result.stdout.split('\n').filter((line) => line.trim() !== '');
     const identities = rows.map(parseDarwinRow);
     if (identities.length === 0 || identities.some((entry) => entry === null)) return 'unknown';
@@ -627,11 +915,15 @@ export function createNodeSessionPlatform(options: NodeSessionPlatformOptions = 
   return {
     identify(pid, requestedTimeoutMs) {
       const budget = Math.max(1, Math.min(timeoutMs, requestedTimeoutMs ?? timeoutMs));
-      return withinObservationDeadline(() => identify(pid, budget), budget, 'unknown');
+      const deadlineAt = performance.now() + budget;
+      const signal = AbortSignal.timeout(Math.max(1, Math.ceil(budget)));
+      return withinObservationDeadline(() => scope.track(() => identify(pid, signal, deadlineAt)), budget, 'unknown');
     },
     enumerate(requestedTimeoutMs) {
       const budget = Math.max(1, Math.min(timeoutMs, requestedTimeoutMs ?? timeoutMs));
-      return withinObservationDeadline(() => enumerate(budget), budget, 'unknown');
+      const deadlineAt = performance.now() + budget;
+      const signal = AbortSignal.timeout(Math.max(1, Math.ceil(budget)));
+      return withinObservationDeadline(() => scope.track(() => enumerate(signal, deadlineAt)), budget, 'unknown');
     }
   };
 }
@@ -743,70 +1035,101 @@ export async function runBoundedCommand(
   if ([file, ...args].some((value) => value.includes('\0'))) throw new Error('OS-command argv must not contain NUL');
   const maximum = options.maxOutputBytes ?? 8 * 1024 * 1024;
   if (!Number.isSafeInteger(maximum) || maximum <= 0) throw new RangeError('OS-command output budget must be positive');
-  return new Promise((resolve) => {
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    let bytes = 0;
-    let child: ChildProcess | undefined;
-    let exitCode: number | null = null;
-    let exited = false;
-    let settled = false;
-    const finish = (timedOut: boolean, outputComplete: boolean, error?: string): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (!exited) {
-        try {
-          child?.kill('SIGKILL');
-        } catch (killError) {
-          error ??= `OS-command termination request failed: ${String(killError)}`;
-        }
-      }
-      child?.stdin?.destroy();
-      child?.stdout?.destroy();
-      child?.stderr?.destroy();
-      child?.unref();
-      if (child?.pid !== undefined && exited) options.helpers?.release(child.pid);
-      resolve({
-        stdout: Buffer.concat(stdout).toString('utf8'),
-        stderr: Buffer.concat(stderr).toString('utf8'),
-        exitCode,
-        timedOut,
-        outputComplete,
-        ...(child?.pid === undefined ? {} : { pid: child.pid }),
-        ...(error === undefined ? {} : { error })
-      });
-    };
-    const timer = setTimeout(() => finish(true, false, 'OS-command deadline expired'), options.timeoutMs);
-    try {
-      const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: 'C', TZ: 'UTC' };
-      delete env['NODE_CHANNEL_FD'];
-      delete env['NODE_CHANNEL_SERIALIZATION_MODE'];
-      child = spawn(file, [...args], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-      if (child.pid !== undefined) options.helpers?.register(child.pid);
-      for (const [stream, destination] of [
-        [child.stdout, stdout],
-        [child.stderr, stderr]
-      ] as const)
-        stream?.on('data', (chunk: Buffer) => {
-          if (settled) return;
-          bytes += chunk.length;
-          if (bytes > maximum) finish(false, false, 'OS-command output budget exceeded');
-          else destination.push(chunk);
-        });
-      child.once('error', (error) =>
-        finish(false, false, (error as NodeJS.ErrnoException).code ?? 'OS-command spawn failed')
-      );
-      child.once('exit', (code) => {
-        exited = true;
-        exitCode = code;
-        if (child?.pid !== undefined) options.helpers?.release(child.pid);
-      });
-      child.once('close', () => finish(false, true));
-    } catch (error) {
-      finish(false, false, (error as NodeJS.ErrnoException).code ?? 'OS-command spawn failed');
-    }
+  const deadlineAt = performance.now() + options.timeoutMs;
+  const signal = options.signal ?? new AbortController().signal;
+  const admissionFailure = (): BoundedCommandResult => ({
+    stdout: '',
+    stderr: '',
+    exitCode: null,
+    timedOut: performance.now() >= deadlineAt,
+    outputComplete: false,
+    error: 'OS-command probe admission expired or was cancelled'
   });
+  const perform = async (): Promise<BoundedCommandResult> => {
+    const lease = options.scope === undefined ? undefined : await options.scope.acquireProbe(signal, deadlineAt);
+    if (lease === null) return admissionFailure();
+    if (options.scope?.closed === true || observationExpired(signal, deadlineAt)) {
+      lease?.notStarted();
+      return admissionFailure();
+    }
+    return new Promise((resolve) => {
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      let bytes = 0;
+      let child: ChildProcess | undefined;
+      let exitCode: number | null = null;
+      let exited = false;
+      let settled = false;
+      const finish = (timedOut: boolean, outputComplete: boolean, error?: string): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (observationExpired(signal, deadlineAt)) {
+          timedOut ||= performance.now() >= deadlineAt;
+          outputComplete = false;
+          error ??= timedOut ? 'OS-command deadline expired' : 'OS-command was cancelled';
+        }
+        if (!exited) {
+          try {
+            child?.kill('SIGKILL');
+          } catch (killError) {
+            error ??= `OS-command termination request failed: ${String(killError)}`;
+          }
+        }
+        child?.stdin?.destroy();
+        child?.stdout?.destroy();
+        child?.stderr?.destroy();
+        child?.unref();
+        if (child?.pid !== undefined && exited) options.helpers?.release(child.pid);
+        resolve({
+          stdout: Buffer.concat(stdout).toString('utf8'),
+          stderr: Buffer.concat(stderr).toString('utf8'),
+          exitCode,
+          timedOut,
+          outputComplete,
+          ...(child?.pid === undefined ? {} : { pid: child.pid }),
+          ...(error === undefined ? {} : { error })
+        });
+      };
+      const timer = setTimeout(
+        () => finish(true, false, 'OS-command deadline expired'),
+        Math.max(1, Math.ceil(deadlineAt - performance.now()))
+      );
+      try {
+        const env: NodeJS.ProcessEnv = { ...process.env, LC_ALL: 'C', TZ: 'UTC' };
+        delete env['NODE_CHANNEL_FD'];
+        delete env['NODE_CHANNEL_SERIALIZATION_MODE'];
+        child = spawn(file, [...args], { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+        lease?.started(child);
+        if (child.pid !== undefined) options.helpers?.register(child.pid);
+        for (const [stream, destination] of [
+          [child.stdout, stdout],
+          [child.stderr, stderr]
+        ] as const)
+          stream?.on('data', (chunk: Buffer) => {
+            if (settled) return;
+            bytes += chunk.length;
+            if (bytes > maximum) finish(false, false, 'OS-command output budget exceeded');
+            else destination.push(chunk);
+          });
+        child.once('error', (error) =>
+          finish(false, false, (error as NodeJS.ErrnoException).code ?? 'OS-command spawn failed')
+        );
+        child.once('exit', (code) => {
+          exited = true;
+          exitCode = code;
+          if (child?.pid !== undefined) options.helpers?.release(child.pid);
+        });
+        child.once('close', () => finish(false, true));
+      } catch (error) {
+        if (child === undefined) lease?.notStarted();
+        finish(false, false, (error as NodeJS.ErrnoException).code ?? 'OS-command spawn failed');
+      }
+    });
+  };
+  if (options.scope === undefined) return perform();
+  if (options.scope.closed) return admissionFailure();
+  return options.scope.track(perform);
 }
 
 // ============================================================================
