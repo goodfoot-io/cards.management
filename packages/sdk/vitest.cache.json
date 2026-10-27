@@ -119,6 +119,7 @@
     "public/packages/sdk/test/gitConfigWithRetry.test.ts": [],
     "public/packages/sdk/test/process-identity-session.test.ts": [],
     "public/packages/sdk/test/process-identity.test.ts": [],
+    "public/packages/sdk/test/process-observation-resources.test.ts": [],
     "public/packages/sdk/test/process-tree.test.ts": [],
     "public/packages/sdk/test/process-utils.mocked.test.ts": [],
     "public/packages/sdk/test/protocol/apiHandoff.test.ts": [],
@@ -297,6 +298,9 @@
       ],
       "public/packages/sdk/test/process-identity.test.ts": [
         "ps"
+      ],
+      "public/packages/sdk/test/process-observation-resources.test.ts": [
+        "node"
       ],
       "public/packages/sdk/test/slot-checkout.test.ts": [
         "git"

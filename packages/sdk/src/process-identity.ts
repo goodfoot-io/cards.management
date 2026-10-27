@@ -91,6 +91,83 @@ export interface ControlHelperRegistry {
   has(pid: number): boolean;
 }
 
+/** A preassigned probe credit used for routine or final cleanup observation. */
+export type ObservationProbeMode = 'routine' | 'emergency';
+
+/** One locally observed transition of an owned OS probe credit. */
+export interface ObservationProbeEvent {
+  readonly leaseId: number;
+  readonly mode: ObservationProbeMode;
+  readonly phase: 'started' | 'identified' | 'exited' | 'not-started';
+  readonly pid?: number;
+  readonly identity?: WrapperProcessIdentity;
+}
+
+/** A probe credit that remains owned until actual exit or proven non-start. */
+export interface ObservationProbeLease {
+  /** Bind the spawned child; only native exit or close releases its credit. */
+  started(child: ChildProcess | { readonly pid?: number }): void;
+  /** Report an independently established exact process-start identity. */
+  identified(identity: WrapperProcessIdentity): void;
+  /** Release only when a process was positively known not to have started. */
+  notStarted(): void;
+}
+
+/** An independently fenced group of observations sharing a resource partition. */
+export interface ObservationScope {
+  /** True once this scope will admit no further underlying operations. */
+  readonly closed: boolean;
+  /** True only when every operation and native probe lifetime has settled. */
+  readonly settled: boolean;
+  /** Cancel queued admissions and fence new starts without releasing active credits. */
+  close(): void;
+  /** After close, wait for every underlying operation registered before the fence. */
+  whenSettled(): Promise<void>;
+  /** Track an observation's underlying promise independently of its deadline. */
+  track<T>(start: () => Promise<T>): Promise<T>;
+  /** Admit one non-abortable operation before its optional monotonic deadline. */
+  read<T>(signal: AbortSignal, start: () => Promise<T>, deadlineAt?: number): Promise<T>;
+  /** Reserve a probe credit before an optional monotonic admission deadline. */
+  acquireProbe(signal: AbortSignal, deadlineAt?: number): Promise<ObservationProbeLease | null>;
+}
+
+/** One worker or parent-fallback partition of preassigned observation credits. */
+export interface ObservationResources {
+  /** Create a scope whose operations use the specified preassigned probe credit. */
+  createScope(options: { readonly mode: ObservationProbeMode; readonly signal?: AbortSignal }): ObservationScope;
+}
+
+/** Limits and lifecycle reporting for a local observation partition. */
+export interface ObservationResourceOptions {
+  /** Simultaneous underlying filesystem operations; defaults to four. */
+  readonly maxReads?: number;
+  /** Preassigned routine probe credits; defaults to one. */
+  readonly maxRoutineProbes?: number;
+  /** Preassigned emergency probe credits; defaults to one. */
+  readonly maxEmergencyProbes?: number;
+  /** Receives probe lifecycle evidence for correlation by the parent. */
+  readonly onProbeEvent?: (event: ObservationProbeEvent) => void;
+}
+
+/**
+ * Creates a worker-local pool of preassigned read and probe credits.
+ * @param options - Read bound and probe lifecycle sink.
+ * @returns A partition for independently fenced observations.
+ * @throws When the read bound is invalid or probe bounds are invalid or total zero.
+ */
+export function createObservationResources(options: ObservationResourceOptions = {}): ObservationResources {
+  void options;
+  throw new Error('Not Implemented');
+}
+
+/** Thin filesystem adapter for the Linux session-observation boundary. */
+export interface SessionLinuxFiles {
+  /** Read one complete UTF-8 file without a prematurely settling abort signal. */
+  readText(path: string): Promise<string>;
+  /** Read one directory's names without a prematurely settling abort signal. */
+  readDirectory(path: string): Promise<readonly string[]>;
+}
+
 function isSafeProcessId(value: number): boolean {
   return Number.isSafeInteger(value) && value > 1;
 }
@@ -150,6 +227,10 @@ export interface NodeSessionPlatformOptions {
   readonly execFile?: SessionExecFile;
   /** Operating system whose reading rules apply; defaults to the host's. */
   readonly platform?: NodeJS.Platform;
+  /** Assignment-scoped resource accounting for observations and OS probes. */
+  readonly scope?: ObservationScope;
+  /** Filesystem adapter, primarily useful for real delayed observation tests. */
+  readonly linuxFiles?: SessionLinuxFiles;
 }
 
 /**
@@ -627,6 +708,10 @@ export interface BoundedCommandOptions {
   readonly timeoutMs: number;
   readonly maxOutputBytes?: number;
   readonly helpers?: ControlHelperRegistry;
+  /** Assignment-scoped pre-spawn probe accounting. */
+  readonly scope?: ObservationScope;
+  /** Fence an individual admission without closing its assignment scope. */
+  readonly signal?: AbortSignal;
 }
 
 /** Local command observation; success is never a process-tree certificate. */
@@ -673,8 +758,8 @@ export async function runBoundedCommand(
       if (!exited) {
         try {
           child?.kill('SIGKILL');
-        } catch {
-          /* The bounded attempt still ends. */
+        } catch (killError) {
+          error ??= `OS-command termination request failed: ${String(killError)}`;
         }
       }
       child?.stdin?.destroy();
