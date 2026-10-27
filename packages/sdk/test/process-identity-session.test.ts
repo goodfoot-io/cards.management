@@ -201,14 +201,20 @@ describe('the session identity probe ceiling', () => {
 
   it('narrows the ceiling to a shorter per-call budget but never widens it', async () => {
     const timeouts: number[] = [];
+    let exited: Promise<unknown> = Promise.resolve();
     const exec: SessionExecFile = (_command, _args, options, callback) => {
       timeouts.push(options.timeout);
+      const child = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
+      children.push(child);
+      exited = once(child, 'exit');
       callback(null, '');
-      return undefined;
+      return child;
     };
     const platform = createNodeSessionPlatform({ platform: 'darwin', execFile: exec, probeTimeoutMs: 500 });
     await platform.enumerate(PROBE_MS);
+    await exited;
     await platform.enumerate(10_000);
+    await exited;
     expect(timeouts).toEqual([PROBE_MS, 500]);
   });
 
@@ -387,6 +393,7 @@ describe('identity helper lifetime protection', () => {
         await chmod(executable, 0o755);
         process.env['PATH'] = `${fixture}${path.delimiter}${originalPath ?? ''}`;
         probe = createNodeSessionPlatform({ platform: 'darwin', helpers, probeTimeoutMs: 100 }).enumerate();
+        await vi.waitFor(() => expect(registered).toHaveBeenCalled());
         const helperPid = registered.mock.calls[0]?.[0];
         if (helperPid === undefined) throw new Error('Probe helper was not registered');
         expect(helperPid).toBeGreaterThan(1);

@@ -782,7 +782,7 @@ export function createNodeSessionPlatform(options: NodeSessionPlatformOptions = 
     const remaining = deadlineAt - performance.now();
     if (scope.closed || observationExpired(signal, deadlineAt) || remaining <= 0)
       return Promise.resolve({ stdout: '', failed: true });
-    return runNodeIdentityProbe(command, args, remaining, { ...options, signal });
+    return runNodeIdentityProbe(command, args, remaining, { ...options, scope, signal });
   };
   const windowsRoster = async (
     pid: number | undefined,

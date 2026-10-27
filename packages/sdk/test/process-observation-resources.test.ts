@@ -3,6 +3,7 @@
  * @summary Observation credit lifetime and admission tests
  */
 import { spawn } from 'node:child_process';
+import { once } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { describe, expect, it } from 'vitest';
 import {
@@ -177,6 +178,38 @@ describe('bounded observation resources', () => {
     scope.close();
     await scope.whenSettled();
     expect(events.map((event) => event.phase)).toEqual(['started', 'exited']);
+  });
+
+  it('applies the implicit platform scope to native probe lifetimes', async () => {
+    const children: ReturnType<typeof spawn>[] = [];
+    const exec: SessionExecFile = (_command, _args, _options, callback) => {
+      const child = spawn(
+        process.execPath,
+        [
+          '-e',
+          "process.stdout.write('4200 4100 4100 0xabc S Mon Jan 5 10:00:00 2026\\n'); setInterval(() => {}, 1000)"
+        ],
+        { stdio: ['ignore', 'pipe', 'ignore'] }
+      );
+      children.push(child);
+      child.stdout?.once('data', (chunk: Buffer) => callback(null, chunk.toString()));
+      return child;
+    };
+    const platform = createNodeSessionPlatform({ platform: 'darwin', execFile: exec });
+    try {
+      expect(await platform.enumerate()).not.toBe('unknown');
+      expect(await platform.enumerate(50)).toBe('unknown');
+      expect(children).toHaveLength(1);
+    } finally {
+      await Promise.all(
+        children.map(async (child) => {
+          if (child.exitCode !== null || child.signalCode !== null) return;
+          const exited = once(child, 'exit');
+          child.kill('SIGKILL');
+          await exited;
+        })
+      );
+    }
   });
 
   it('keeps an injected real probe callback tracked after its bounded result', async () => {
